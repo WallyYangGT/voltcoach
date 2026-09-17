@@ -28,6 +28,11 @@ ios/
 
 # ---- 个人真实训练数据（仅本地测试素材，严禁入库/外发）----
 docs/sample-fit-files/
+# PoC 4 用训练库由样例 FIT 派生（含个人训练数据），仅本地存在
+assets/poc/*.db
+assets/poc-output/
+reference/output/
+reference/output-poc/
 
 # ---- reference/（旧实现只读快照）的运行产物 ----
 reference/node_modules/

@@ -1,14 +1,16 @@
 /**
  * M0 技术验证页（临时开发页，M0 结束后移除）。
  * 四项 PoC 各一张卡片：运行 → 状态徽章 + 明细（等宽小字）。
+ * PoC 2 运行后内嵌渲染实测图表；PoC 3 支持自定义接口配置（默认本地 mock）。
  */
 import { Stack } from 'expo-router';
-import { Button, Card, Chip, Text } from 'react-native-paper';
+import { Button, Card, Chip, TextInput, Text } from 'react-native-paper';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { pocRunners } from '@/poc/registry';
+import { SvgPerfChart } from '@/poc/svgPerf';
 import type { DictKey } from '@/i18n';
 import type { PocResult } from '@/poc/types';
 
@@ -36,12 +38,16 @@ export default function PocScreen() {
     3: initial,
     4: initial,
   });
+  // PoC 3 接口配置（默认本地 mock：宿主机 scripts/mock-sse-server.mjs + adb reverse）
+  const [baseUrl, setBaseUrl] = useState('http://127.0.0.1:8787/v1');
+  const [model, setModel] = useState('mock-model');
+  const [apiKey, setApiKey] = useState('');
 
   async function run(id: 1 | 2 | 3 | 4) {
     setStates((s) => ({ ...s, [id]: { status: 'running', detail: '' } }));
     let result: PocResult;
     try {
-      result = await pocRunners[id]();
+      result = await pocRunners[id]({ baseUrl, model, apiKey });
     } catch (err) {
       result = { pass: false, detail: `异常: ${String(err)}` };
     }
@@ -50,7 +56,14 @@ export default function PocScreen() {
 
   return (
     <ScrollView style={styles.page} contentContainerStyle={{ padding: 16, gap: 12, paddingBottom: 40 }}>
-      <Stack.Screen options={{ headerShown: true, title: t('poc.title'), headerStyle: { backgroundColor: palette.bgSoft }, headerTintColor: palette.text }} />
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title: t('poc.title'),
+          headerStyle: { backgroundColor: palette.bgSoft },
+          headerTintColor: palette.text,
+        }}
+      />
       <Text variant="bodySmall" style={styles.subtitle}>
         {t('poc.subtitle')}
       </Text>
@@ -78,11 +91,36 @@ export default function PocScreen() {
               <Text variant="bodySmall" style={styles.desc}>
                 {t(descKey)}
               </Text>
+
+              {id === 3 && (
+                <View style={styles.config}>
+                  <TextInput
+                    label="base_url"
+                    value={baseUrl}
+                    onChangeText={setBaseUrl}
+                    dense
+                    style={styles.input}
+                  />
+                  <TextInput label="model" value={model} onChangeText={setModel} dense style={styles.input} />
+                  <TextInput
+                    label="api_key（本地 mock 留空）"
+                    value={apiKey}
+                    onChangeText={setApiKey}
+                    dense
+                    secureTextEntry
+                    style={styles.input}
+                  />
+                </View>
+              )}
+
               {state.detail ? (
                 <Text variant="bodySmall" style={styles.detail} selectable>
                   {state.detail}
                 </Text>
               ) : null}
+
+              {id === 2 && state.status !== 'pending' && <SvgPerfChart />}
+
               <Button
                 mode="contained"
                 compact
@@ -131,6 +169,13 @@ const styles = StyleSheet.create({
   desc: {
     color: palette.muted,
     marginTop: 4,
+  },
+  config: {
+    gap: 8,
+    marginTop: 8,
+  },
+  input: {
+    backgroundColor: palette.panel2,
   },
   detail: {
     color: palette.text,
