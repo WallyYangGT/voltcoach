@@ -1,6 +1,39 @@
+# ---- Expo / React Native ----
 node_modules/
-input/
-output/
-db/
-.zcode
+.expo/
+.expo-shared/
+dist/
+web-build/
+expo-env.d.ts
+*.log
+
+# prebuild 生成的原生工程（CI / 本地构建时重新生成）
+android/
+ios/
+
+# 签名与密钥文件
+*.jks
+*.keystore
+*.p8
+*.p12
+*.key
 .env
+.env.*
+
+# ---- 本地工具 ----
+.zcode/
+.vscode/
+.idea/
+.DS_Store
+
+# ---- 个人真实训练数据（仅本地测试素材，严禁入库/外发）----
+docs/sample-fit-files/
+
+# ---- reference/（旧实现只读快照）的运行产物 ----
+reference/node_modules/
+reference/output/
+reference/db/
+reference/input/
+
+# ---- 测试 / 覆盖率 ----
+coverage/

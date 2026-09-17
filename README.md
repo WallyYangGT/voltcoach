@@ -1,68 +1,30 @@
-# fit-reader
+# fit-reader-app
 
-一个解析码表/运动手表 `.fit` 文件的本地训练分析工具，输出逐秒时序 CSV 与汇总指标 JSON，并提供 Web 仪表盘与 AI 训练报告。
+fit-reader 的安卓 App 版：纯本地的运动训练分析工具（骑行为主）。导入码表/手表导出的 `.fit` 文件，本地计算逐秒指标与训练负荷（NP/TSS/CTL/ATL/TSB、功率/心率分区、峰功率曲线），并支持自带 Key 的 AI 训练解读。无服务器、无账号，数据全部留在手机上。
 
-**English documentation — [click here to read the English README](README.en.md).**
+由 Docker/Web 版 [fit-reader](../fit-reader)（旧仓库，另行维护）移植而来，技术栈 React Native + Expo + TypeScript，UI 按 Material 3 暗色规范重构（volt 荧光黄品牌色）。
 
-## 能做什么
+> **状态**：M0 开发中（骨架 + 风险验证），里程碑路线见 [MIGRATION_PLAN.md](./MIGRATION_PLAN.md)。
 
-- **FIT 文件解析**：把 `.fit` 文件重采样为严格 1 秒网格的时序 CSV（功率、心率、踏频、海拔、速度、温度），并生成汇总 JSON（NP、IF、TSS、功率/心率分区、峰功率曲线、心率漂移、间歇/爬坡段、数据质量等）
-- **运动指标计算**：标准化功率（NP）、强度因子（IF）、训练负荷（TSS）、CTL/ATL/TSB 负荷趋势、FTP 自动估算（20min 峰功率 × 0.95）、科学 FTP 估算（CP 模型 + Coggan 双法互校 + 心率交叉验证）
-- **多运动类型**：骑行（指标最全）、跑步（配速/步频）、游泳（length 消息：趟数/泳池长度/划水/SWOLF）
-- **Web 仪表盘**：本地浏览器查看负荷趋势、月度汇总、训练详情时序曲线、分区分布、上传分析
-- **AI 训练分析**：一键生成单次复盘、周期规划、赛前减量、两次对比报告；AI 通过 agentic 工具调用（function calling）按需自主查询训练库——历史训练清单、单次详情、逐秒时序、负荷走势、月汇总、FTP 估算，并能做实时计算：未来 CTL/ATL/TSB 负荷推演（含风险标注）与按目标/时长生成单次课表，不限于提示词预装数据
-- **AI 对话**：报告追问（快问快答，200 字以内，结合本次训练具体数据）与「对话」页自由问答均入库持久化，异步生成、提交后可关闭页面事后回看，支持整条删除
-- **AI 记忆**：AI 在交互中了解到伤病、日程约束、目标变化等个人事实时主动保存（带时间戳，新事实可取代旧事实），后续所有 AI 调用自动注入；「记忆」页可查看与删除
-- **技能知识库**：`skills/` 目录下的 Markdown 训练科学文档（Coggan 功率体系、TrainingPeaks 负荷模型、心率区间、报告撰写规范）全文注入 AI 报告与对话提示词，保证切换任意模型报告口径一致；往目录放 `.md` 文件即可扩充（详见 `skills/_README.md`）
-- **中英双语**：界面、图表与 AI 报告支持英文——首次打开按浏览器系统语言自动选择（非中文一律英文），设置页可随时切换；命令行提示词命令加 `--lang en` 生成英文提示词
-- 训练备注（体感/路况）与身份/训练目标会纳入 AI 分析考量
-- **训练数据库**：SQLite 本地训练库，自动记录每次分析并计算长期负荷趋势
-
-## 快速开始
+## 本地开发
 
 ```bash
 npm install
-
-# 分析单个文件
-node index.js 你的骑行.fit
-
-# 批量处理目录下所有 .fit
-node index.js ./input ./output
-
-# 启动 Web 界面（默认 http://localhost:3000）
-npm run web
-
-# 运行回归测试
-npm test
+npx expo start            # Metro 开发服务，用 Expo Go 或 dev client 连接
+npx expo start --android  # 直接拉起安卓模拟器/已连接设备
 ```
 
-## Docker 部署（快速开始）
+要求：Node.js LTS、Android Studio（模拟器）或开启 USB 调试的安卓真机。
 
-已发布镜像到 GitHub Packages，可直接拉取运行：
+## 目录导览
 
-```bash
-docker pull ghcr.io/sicheng886/fit-reader:latest
-docker run -d \
-  --name fit-reader \
-  -p 3000:3000 \
-  -v "$(pwd)/input:/input" \
-  -v "$(pwd)/output:/output" \
-  -v "$(pwd)/db:/app/db" \
-  ghcr.io/sicheng886/fit-reader:latest
-```
+- `app/` — Expo Router 页面路由（底部四 tab：首页/训练/AI/我的）
+- `src/` — 业务代码（i18n 词典已就位；算法层 M1 起从旧版移植）
+- `reference/` — 旧 Docker/Web 版实现的只读快照（移植对照用，全部里程碑完成后移除）
+- `docs/sample-fit-files/` — 本地测试用真实 FIT 素材（不入库）
+- `MIGRATION_PLAN.md` — 移植路线图与技术决策记录
 
-启动后访问 http://localhost:3000 即可使用。
+## 相关文档
 
-完整构建说明（含本地构建、版本号标签、持久化挂载、权限配置）见 **[DEPLOY.md](./DEPLOY.md)**。
-
-## 技术栈
-
-- Node.js（ESM，零构建、零转译）
-- `fit-file-parser`：解析 `.fit` 文件
-- `marked`：AI 报告 Markdown 转 HTML
-- `dayjs`：AI 提示词当前日期/星期/时区格式化
-- Node 内置 `node:sqlite`：本地训练库
-
-## 开发约定
-
-详见 `AGENTS.md`：算法阈值集中在 `src/settings.js`，骑手参数走训练库 settings 表，修改指标算法后需跑 `npm test` 并同步更新文档。
+- [MIGRATION_PLAN.md](./MIGRATION_PLAN.md) — 移植计划（技术选型、里程碑 M0–M5、决策记录）
+- [AGENTS.md](./AGENTS.md) — 项目结构与开发约定（供 AI 编码代理与人阅读）
