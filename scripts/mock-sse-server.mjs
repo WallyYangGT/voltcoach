@@ -45,15 +45,17 @@ const server = http.createServer((req, res) => {
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
+    res.flushHeaders();
     // 按 4 字一段切块推送，模拟真实 token 流
     const chunkSize = 4;
-    const pieces = REPLY.match(new RegExp(`.{1,${chunkSize}}`, 'u')) ?? [];
+    const pieces = REPLY.match(new RegExp(`.{1,${chunkSize}}`, 'gu')) ?? [];
     let i = 0;
     const timer = setInterval(() => {
       if (i >= pieces.length) {
         clearInterval(timer);
         res.write('data: [DONE]\n\n');
         res.end();
+        console.log(`[${new Date().toISOString()}] stream completed: ${i} chunks`);
         return;
       }
       const payload = JSON.stringify({
@@ -63,7 +65,12 @@ const server = http.createServer((req, res) => {
       res.write(`data: ${payload}\n\n`);
       i++;
     }, 30);
-    req.on('close', () => clearInterval(timer));
+    // 注意挂 res 而不是 req：现代 Node 中 req 的 'close' 在请求体读完后立刻触发，
+    // 挂 req 会瞬间清掉 interval 导致一个字节都发不出去
+    res.on('close', () => {
+      if (i < pieces.length) console.log(`[${new Date().toISOString()}] client closed early at chunk ${i}/${pieces.length}`);
+      clearInterval(timer);
+    });
   });
 });
 

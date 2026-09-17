@@ -8,9 +8,12 @@
     "scheme": "fitreader",
     "userInterfaceStyle": "dark",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.fitreader.app"
     },
     "android": {
+      "package": "com.fitreader.app",
+      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "backgroundColor": "#0A0D11",
         "foregroundImage": "./assets/images/android-icon-foreground.png",

@@ -21,9 +21,8 @@ export async function runSsePoc(opts?: PocOptions): Promise<PocResult> {
   let chunkCount = 0;
   let content = '';
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60_000);
-
+  // 注：传 AbortSignal 时流式读取在本机会提前触发 cancel（expo/fetch 与 signal 的
+  // 组合问题，二分定位中）——M0 先不传 signal 验证流式链路本身，M3 接 AI 层时再定论。
   try {
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
@@ -36,7 +35,6 @@ export async function runSsePoc(opts?: PocOptions): Promise<PocResult> {
         stream: true,
         messages: [{ role: 'user', content: '用一句话介绍 NP（标准化功率）' }],
       }),
-      signal: ctrl.signal,
     });
 
     if (!res.ok || !res.body) {
@@ -90,7 +88,5 @@ export async function runSsePoc(opts?: PocOptions): Promise<PocResult> {
       pass: false,
       detail: `✗ ${String(err)}\nURL: ${baseUrl}/chat/completions\n（默认打本地 mock：先在宿主机 node scripts/mock-sse-server.mjs，再 adb reverse tcp:8787 tcp:8787）`,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }

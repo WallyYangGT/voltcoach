@@ -35,7 +35,8 @@ export async function runSqlitePoc(): Promise<PocResult> {
   if (!asset.localUri) {
     return { pass: false, detail: '✗ 资产下载失败（localUri 为空）' };
   }
-  const src = new File(asset.localUri.replace(/^file:\/\//, ''));
+  // File 构造器要求带 scheme 的绝对 URI（file:///...），asset.localUri 原样传入
+  const src = new File(asset.localUri);
   const dest = new File(Paths.document, 'poc-fitness.db');
   if (dest.exists) dest.delete();
   dest.write(await src.bytes());

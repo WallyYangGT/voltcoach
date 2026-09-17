@@ -34,8 +34,8 @@ export async function runFitParserPoc(): Promise<PocResult> {
   }
 
   const t0 = Date.now();
-  // File 接受绝对路径，document-picker 返回 file:// URI（缓存目录）
-  const file = new File(asset.uri.replace(/^file:\/\//, ''));
+  // File 构造器要求带 scheme 的绝对 URI；copyToCacheDirectory 后 picker 返回 file:// URI
+  const file = new File(asset.uri);
   const bytes = await file.bytes();
   const tRead = Date.now() - t0;
 
