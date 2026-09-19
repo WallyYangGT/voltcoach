@@ -3,7 +3,8 @@
  *
  * 移植自 Web 版 web/js/i18n.js 的机制，平台层替换：
  *  - 语言检测：navigator.language → expo-localization getLocales()（非中文一律 en）
- *  - 持久化：localStorage → AsyncStorage（key 沿用 fit-reader.lang）
+ *  - 持久化：localStorage → AsyncStorage（key：voltcoach.lang；2026-09-19 随应用更名
+ *    从 fit-reader.lang 迁移，当时未发布过版本，无升级兼容负担）
  *  - 训练库 settings 表 lang 键的同步在 M1 接入 db 后回填（口径与 Web 版一致：
  *    前端持久化为先，库值供 AI 提示词缺省使用）
  */

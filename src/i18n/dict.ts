@@ -9,7 +9,7 @@
  */
 export type Lang = 'zh' | 'en';
 
-export const LANG_STORAGE_KEY = 'fit-reader.lang';
+export const LANG_STORAGE_KEY = 'voltcoach.lang';
 
 export const DICT = {
   zh: {
