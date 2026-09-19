@@ -36,8 +36,20 @@
           "imageWidth": 76
         }
       ],
-      "expo-sqlite",
-      "expo-localization"
+      [
+        "expo-sqlite",
+        {
+          "useSQLCipher": true
+        }
+      ],
+      "expo-localization",
+      "expo-secure-store",
+      [
+        "expo-share-intent",
+        {
+          "androidIntentFilters": ["*/*"]
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

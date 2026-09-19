@@ -11,6 +11,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getLocales } from 'expo-localization';
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import { setLang as setDbLang } from '@/db';
 import { DICT, LANG_STORAGE_KEY, type DictKey, type Lang } from './dict';
 
 export { DICT, LANG_STORAGE_KEY };
@@ -63,6 +64,9 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     const normalized: Lang = next === 'en' ? 'en' : 'zh';
     setLangState(normalized);
     AsyncStorage.setItem(LANG_STORAGE_KEY, normalized).catch(() => {});
+    // 同步训练库 settings 表 lang 键（AI 提示词语言缺省取此值；口径与 Web 版一致：
+    // 前端持久化为先，库值供 M3 AI 层使用，失败静默——库不可用时语言功能不受影响）
+    setDbLang(normalized).catch(() => {});
   }, []);
 
   const t = useCallback(

@@ -1,6 +1,128 @@
-/** 训练列表占位 — M1 落地（FAB 导入 + 分享面板接收） */
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+/**
+ * 训练列表（M1）：按日期倒序的训练清单 + FAB「＋」导入 FIT（MD3）。
+ * 行数据来自训练库 listActivities（入库键 file_name 即详情页路由参数）。
+ */
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
+import { FAB } from 'react-native-paper';
+import { ActivityListItem, listActivities } from '@/db';
+import { useI18n } from '@/i18n';
+import { palette } from '@/theme';
 
 export default function ActivitiesScreen() {
-  return <PlaceholderScreen titleKey="activities.title" bodyKey="activities.placeholder" />;
+  const { t } = useI18n();
+  const router = useRouter();
+  const [items, setItems] = useState<ActivityListItem[] | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setItems(await listActivities());
+    } catch (e) {
+      console.warn('listActivities 失败:', e);
+      setItems([]);
+    }
+  }, []);
+
+  // 每次进入该 tab 刷新（导入返回后立即看到新记录）
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
+
+  const fmtDur = (sec: number | null) => {
+    if (sec == null) return '—';
+    const h = Math.floor(sec / 3600),
+      m = Math.round((sec % 3600) / 60);
+    return h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m}m`;
+  };
+
+  return (
+    <View style={styles.page}>
+      <FlatList
+        data={items ?? []}
+        keyExtractor={(r) => r.file_name}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            tintColor={palette.muted}
+            onRefresh={async () => {
+              setRefreshing(true);
+              await load();
+              setRefreshing(false);
+            }}
+          />
+        }
+        ListHeaderComponent={<Text style={styles.title}>{t('activities.title')}</Text>}
+        ListEmptyComponent={
+          items == null ? null : ( // null = 首次加载中，不闪空态
+            <Text style={styles.empty}>{t('activities.empty')}</Text>
+          )
+        }
+        renderItem={({ item }) => (
+          <Pressable
+            style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
+            onPress={() =>
+              router.push({
+                pathname: '/activity/[id]',
+                params: { id: encodeURIComponent(item.file_name) },
+              })
+            }>
+            <View style={styles.cardTop}>
+              <Text style={styles.date}>{item.date}</Text>
+              <Text style={styles.sport}>{t(`sport.${item.sport}` as never)}</Text>
+            </View>
+            <View style={styles.metrics}>
+              <Metric label={t('act.duration')} value={fmtDur(item.duration_sec)} />
+              <Metric label="km" value={item.distance_km != null ? item.distance_km.toFixed(2) : '—'} />
+              <Metric label="TSS" value={item.tss != null ? String(item.tss) : '—'} />
+              <Metric label="NP" value={item.np != null ? `${item.np}W` : '—'} />
+            </View>
+          </Pressable>
+        )}
+        contentContainerStyle={items?.length ? styles.list : { flexGrow: 1, justifyContent: 'center', paddingBottom: 96 }}
+      />
+      <FAB
+        icon="plus"
+        label={t('activities.import_fab')}
+        color={palette.bg}
+        style={styles.fab}
+        onPress={() => router.push('/import')}
+      />
+    </View>
+  );
 }
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={styles.metric}>
+      <Text style={styles.metricVal}>{value}</Text>
+      <Text style={styles.metricLabel}>{label}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16, paddingTop: 12 },
+  title: { color: palette.text, fontSize: 22, fontWeight: '700', marginBottom: 10 },
+  list: { paddingBottom: 96, gap: 10 },
+  card: {
+    backgroundColor: palette.panel,
+    borderColor: palette.lineSoft,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 14,
+    gap: 10,
+  },
+  cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  date: { color: palette.text, fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  sport: { color: palette.muted, fontSize: 12 },
+  metrics: { flexDirection: 'row', gap: 18 },
+  metric: { gap: 2 },
+  metricVal: { color: palette.text, fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  metricLabel: { color: palette.faint, fontSize: 11 },
+  empty: { color: palette.muted, textAlign: 'center', lineHeight: 24 },
+  fab: { position: 'absolute', right: 16, bottom: 16, backgroundColor: palette.volt },
+});
