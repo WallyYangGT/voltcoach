@@ -45,6 +45,14 @@
       "expo-localization",
       "expo-secure-store",
       [
+        "expo-font",
+        {
+          "fonts": [
+            "node_modules/react-native-vector-icons/Fonts/MaterialCommunityIcons.ttf"
+          ]
+        }
+      ],
+      [
         "expo-share-intent",
         {
           "androidIntentFilters": ["*/*"]
