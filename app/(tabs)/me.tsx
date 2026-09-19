@@ -1,8 +1,7 @@
 /**
  * 「我的」占位 — M2 落地设置主体。
- * M0 阶段提供：界面语言切换（验证 i18n 双语链路）+ 未来入口列表 + PoC 验证页入口。
+ * 当前提供：界面语言切换（验证 i18n 双语链路）+ 未来入口列表。
  */
-import { Link } from 'expo-router';
 import { Card, Divider, Icon, List, SegmentedButtons, Text } from 'react-native-paper';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -64,17 +63,6 @@ export default function MeScreen() {
           titleStyle={{ color: palette.text }}
         />
       </Card>
-
-      {/* M0 临时入口：技术验证页（M0 结束后移除） */}
-      <Link href="/poc" asChild>
-        <Card style={styles.pocCard}>
-          <Card.Content>
-            <Text variant="labelLarge" style={{ color: palette.volt }}>
-              {t('poc.title')} →
-            </Text>
-          </Card.Content>
-        </Card>
-      </Link>
     </View>
   );
 }
@@ -93,11 +81,6 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: palette.panel,
     borderColor: palette.lineSoft,
-    borderWidth: 1,
-  },
-  pocCard: {
-    backgroundColor: palette.panel,
-    borderColor: palette.voltDim,
     borderWidth: 1,
   },
   muted: {
