@@ -64,11 +64,11 @@ export const md3Dark: MD3Theme = {
   },
 };
 
-/** 原生底部导航（NativeTabs）的配色：未选中灰、选中 volt，与 Paper 主题同源 */
+/** 原生底部导航（NativeTabs）的配色：未选中灰、选中 volt；激活图标反色为背景色——volt 药丸高亮内呈镂空 */
 export const nativeTabsStyle = {
   backgroundColor: palette.bgSoft,
   indicatorColor: palette.volt,
-  iconColor: { default: palette.muted, selected: palette.volt } as const,
+  iconColor: { default: palette.muted, selected: palette.bg } as const,
   labelStyle: {
     default: { color: palette.muted },
     selected: { color: palette.volt },
