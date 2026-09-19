@@ -97,7 +97,7 @@ export default function ActivityDetailScreen() {
   if (!summary) {
     return (
       <View style={styles.page}>
-        <Appbar.Header style={styles.header} statusBarHeight={0}>
+        <Appbar.Header style={styles.header}>
           <Appbar.BackAction color={palette.text} onPress={() => router.back()} />
           <Appbar.Content title={t('detail.title')} titleStyle={{ color: palette.text }} />
         </Appbar.Header>
@@ -127,7 +127,7 @@ export default function ActivityDetailScreen() {
 
   return (
     <View style={styles.page}>
-      <Appbar.Header style={styles.header} statusBarHeight={0}>
+      <Appbar.Header style={styles.header}>
         <Appbar.BackAction color={palette.text} onPress={() => router.back()} />
         <Appbar.Content
           title={`${a.date} · ${t(`sport.${a.sport}` as never)}`}

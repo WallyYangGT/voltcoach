@@ -6,6 +6,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { FAB } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ActivityListItem, listActivities } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
@@ -13,6 +14,7 @@ import { palette } from '@/theme';
 export default function ActivitiesScreen() {
   const { t } = useI18n();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [items, setItems] = useState<ActivityListItem[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -40,7 +42,7 @@ export default function ActivitiesScreen() {
   };
 
   return (
-    <View style={styles.page}>
+    <View style={[styles.page, { paddingTop: insets.top + 12 }]}>
       <FlatList
         data={items ?? []}
         keyExtractor={(r) => r.file_name}
@@ -105,7 +107,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16, paddingTop: 12 },
+  page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
   title: { color: palette.text, fontSize: 22, fontWeight: '700', marginBottom: 10 },
   list: { paddingBottom: 96, gap: 10 },
   card: {

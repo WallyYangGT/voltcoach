@@ -5,13 +5,15 @@
 import { Link } from 'expo-router';
 import { Card, Divider, Icon, List, SegmentedButtons, Text } from 'react-native-paper';
 import { StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
 export default function MeScreen() {
   const { lang, setLang, t } = useI18n();
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.page}>
+    <View style={[styles.page, { paddingTop: insets.top + 16 }]}>
       <Text variant="headlineMedium" style={styles.title}>
         {t('me.title')}
       </Text>
@@ -81,7 +83,7 @@ const styles = StyleSheet.create({
   page: {
     flex: 1,
     backgroundColor: palette.bg,
-    padding: 16,
+    paddingHorizontal: 16,
     gap: 12,
   },
   title: {

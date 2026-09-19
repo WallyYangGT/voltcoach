@@ -84,7 +84,7 @@ export default function ImportScreen() {
 
   return (
     <View style={styles.page}>
-      <Appbar.Header style={styles.header} statusBarHeight={0}>
+      <Appbar.Header style={styles.header}>
         <Appbar.BackAction color={palette.text} onPress={() => router.back()} />
         <Appbar.Content title={t('import.title')} titleStyle={{ color: palette.text }} />
       </Appbar.Header>
