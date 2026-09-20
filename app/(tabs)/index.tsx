@@ -29,6 +29,7 @@ import {
   recentFormDaily,
 } from '@/db';
 import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
+import { GlossaryModal } from '@/components/GlossaryModal';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -48,6 +49,7 @@ export default function HomeScreen() {
   const [data, setData] = useState<HomeData | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [ftpOpen, setFtpOpen] = useState(false); // FTP 科学估算面板展开态（dash.ftp_btn）
+  const [glossOpen, setGlossOpen] = useState(false); // 指标说明弹窗（标题旁「?」）
 
   const load = useCallback(async () => {
     try {
@@ -88,7 +90,12 @@ export default function HomeScreen() {
           }}
         />
       }>
-      <Text style={styles.title}>{t('dash.title')}</Text>
+      <View style={styles.titleRow}>
+        <Text style={styles.title}>{t('dash.title')}</Text>
+        <Pressable hitSlop={10} style={styles.glossBtn} onPress={() => setGlossOpen(true)}>
+          <Text style={styles.glossBtnText}>?</Text>
+        </Pressable>
+      </View>
       <Text style={styles.sub}>{t('dash.sub')}</Text>
 
       {/* hero 瓦片：CTL 蓝 / ATL 红 / TSB 绿（附 form 简评）/ FTP volt */}
@@ -185,6 +192,9 @@ export default function HomeScreen() {
           <Text style={styles.emptyText}>{data ? t('dash.no_acts') : ''}</Text>
         )}
       </View>
+
+      {/* 指标说明弹窗（Web 版 glossaryHtml 同源词条） */}
+      <GlossaryModal visible={glossOpen} onClose={() => setGlossOpen(false)} />
     </ScrollView>
   );
 }
@@ -260,7 +270,18 @@ const fmtDur = (sec: number | null) => {
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: palette.text, fontSize: 22, fontWeight: '700' },
+  glossBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1,
+    borderColor: palette.line,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  glossBtnText: { color: palette.muted, fontSize: 13, fontWeight: '700' },
   sub: { color: palette.muted, fontSize: 12, marginBottom: 2 },
   heroGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   tile: {
