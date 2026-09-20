@@ -36,7 +36,8 @@ export default function MeScreen() {
   const [identity, setIdentity] = useState('');
   const [goal, setGoal] = useState('');
   const [savedFlash, setSavedFlash] = useState<'athlete' | 'profile' | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [savingAthlete, setSavingAthlete] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -70,7 +71,7 @@ export default function MeScreen() {
   };
 
   const saveAthlete = async () => {
-    setSaving(true);
+    setSavingAthlete(true);
     try {
       await setAthlete({ ftp_watts: Number(ftp), max_hr: Number(maxhr), weight_kg: Number(weight) }, lang);
       await load();
@@ -78,19 +79,19 @@ export default function MeScreen() {
     } catch (e) {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
     } finally {
-      setSaving(false);
+      setSavingAthlete(false);
     }
   };
 
   const saveProfile = async () => {
-    setSaving(true);
+    setSavingProfile(true);
     try {
       setProfileState(await setProfile({ identity, goal }, lang));
       flashSaved('profile');
     } catch (e) {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
     } finally {
-      setSaving(false);
+      setSavingProfile(false);
     }
   };
 
@@ -179,7 +180,7 @@ export default function MeScreen() {
             mode="contained"
             buttonColor={palette.volt}
             textColor={palette.bg}
-            disabled={saving}
+            disabled={savingAthlete}
             onPress={saveAthlete}>
             {t('set.save')}
           </Button>
@@ -215,7 +216,7 @@ export default function MeScreen() {
             mode="contained"
             buttonColor={palette.volt}
             textColor={palette.bg}
-            disabled={saving}
+            disabled={savingProfile}
             onPress={saveProfile}>
             {t('set.save')}
           </Button>
