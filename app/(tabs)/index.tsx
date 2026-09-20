@@ -166,7 +166,12 @@ export default function HomeScreen() {
               }>
               <View style={styles.recentTop}>
                 <Text style={styles.recentDate}>{item.date}</Text>
-                <Text style={styles.recentSport}>{t(`sport.${item.sport}` as never)}</Text>
+                <View style={styles.badges}>
+                  <Text style={[styles.recentSport, item.category === 'race' && { color: palette.volt }]}>
+                    {t(`cat.${item.category}` as never)}
+                  </Text>
+                  <Text style={styles.recentSport}>{t(`sport.${item.sport}` as never)}</Text>
+                </View>
               </View>
               <View style={styles.recentMetrics}>
                 <Metric label={t('act.duration')} value={fmtDur(item.duration_sec)} />
@@ -309,6 +314,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   recentTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  badges: { flexDirection: 'row', gap: 8 },
   recentDate: { color: palette.text, fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
   recentSport: { color: palette.muted, fontSize: 12 },
   recentMetrics: { flexDirection: 'row', gap: 18 },

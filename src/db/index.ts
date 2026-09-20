@@ -370,6 +370,9 @@ export async function getActivitySummary(fileName: string): Promise<Summary | nu
 
 const VALID_CATEGORIES = new Set(['training', 'race', 'recovery', 'leisure']);
 
+/** 分类枚举（有序，供详情页分类 chips 等界面遍历；与 VALID_CATEGORIES 同源） */
+export const CATEGORY_KEYS = [...VALID_CATEGORIES] as const;
+
 /** 校验训练分类是否合法 */
 export function isValidCategory(category: unknown): boolean {
   return VALID_CATEGORIES.has(category as string);

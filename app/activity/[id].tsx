@@ -6,8 +6,8 @@
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Appbar, Chip } from 'react-native-paper';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Appbar, Button, Chip, TextInput } from 'react-native-paper';
 import { HR_ZONE_COLORS, POWER_ZONE_COLORS, ZoneBars } from '@/charts/ZoneBars';
 import { PeakCurve } from '@/charts/PeakCurve';
 import { TimeSeriesChart, type SeriesSpec } from '@/charts/TimeSeriesChart';
@@ -15,7 +15,7 @@ import type { Summary } from '@/core/analyze';
 import { formatAnomaly } from '@/core/i18n';
 import { thinRecords } from '@/core/records';
 import { HR_ZONES, POWER_ZONES, type Zone } from '@/core/settings';
-import { getActivitySummary } from '@/db';
+import { CATEGORY_KEYS, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
 import { useI18n } from '@/i18n';
 import { loadStoredRecords } from '@/records-store';
 import { palette } from '@/theme';
@@ -59,6 +59,9 @@ export default function ActivityDetailScreen() {
   const [summary, setSummary] = useState<Summary | null | undefined>(undefined); // undefined=加载中
   const [thinned, setThinned] = useState<Awaited<ReturnType<typeof thinRecords>> | null>(null);
   const [visible, setVisible] = useState<Set<string>>(new Set(DEFAULT_VISIBLE));
+  // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
+  const [note, setNote] = useState('');
+  const [savedFlash, setSavedFlash] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -67,6 +70,7 @@ export default function ActivityDetailScreen() {
         const s = await getActivitySummary(fileName);
         if (!alive) return;
         setSummary(s);
+        setNote(s?.activity.note ?? '');
         if (s) {
           const stored = await loadStoredRecords(fileName);
           if (alive) setThinned(stored ? thinRecords(stored) : null);
@@ -80,6 +84,31 @@ export default function ActivityDetailScreen() {
       alive = false;
     };
   }, [fileName]);
+
+  const flashSaved = () => {
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 2000);
+  };
+
+  const changeCategory = async (cat: string) => {
+    try {
+      await setActivityCategory(fileName, cat, lang);
+      setSummary((prev) => (prev ? { ...prev, activity: { ...prev.activity, category: cat } } : prev));
+      flashSaved();
+    } catch (e) {
+      Alert.alert(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const saveNote = async () => {
+    try {
+      await setActivityNote(fileName, note, lang);
+      setSummary((prev) => (prev ? { ...prev, activity: { ...prev.activity, note } } : prev));
+      flashSaved();
+    } catch (e) {
+      Alert.alert(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const series = useMemo<SeriesSpec[]>(() => {
     if (!thinned) return [];
@@ -145,6 +174,42 @@ export default function ActivityDetailScreen() {
           {p?.normalized_power != null && <Big label="NP" value={`${p.normalized_power}W`} />}
           {p?.tss != null && <Big label="TSS" value={String(p.tss)} />}
           {p?.intensity_factor != null && <Big label="IF" value={p.intensity_factor.toFixed(2)} />}
+        </View>
+
+        {/* 分类与备注（M2：写库即时生效，AI 复盘时纳入考量） */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>{t('detail.cat_note')}</Text>
+          <View style={styles.chipRow}>
+            {CATEGORY_KEYS.map((c) => {
+              const active = (a.category ?? 'training') === c;
+              return (
+                <Chip
+                  key={c}
+                  mode="outlined"
+                  selected={active}
+                  onPress={() => changeCategory(c)}
+                  textStyle={{ color: active ? palette.bg : palette.muted, fontSize: 11 }}
+                  style={[styles.chip, active && { backgroundColor: palette.volt, borderColor: palette.volt }]}>
+                  {t(`cat.${c}` as never)}
+                </Chip>
+              );
+            })}
+          </View>
+          <TextInput
+            mode="outlined"
+            dense
+            multiline
+            label={t('detail.note_label')}
+            value={note}
+            onChangeText={setNote}
+            style={styles.noteInput}
+          />
+          <View style={styles.saveRow}>
+            <Button mode="contained" buttonColor={palette.volt} textColor={palette.bg} onPress={saveNote}>
+              {t('common.save')}
+            </Button>
+            {savedFlash && <Text style={styles.savedText}>{t('common.saved')}</Text>}
+          </View>
         </View>
 
         {/* 时序图（系列 chips 切换） */}
@@ -274,6 +339,9 @@ const styles = StyleSheet.create({
   cardTitle: { color: palette.text, fontSize: 14, fontWeight: '700' },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: { height: 30, borderColor: palette.line },
+  noteInput: { backgroundColor: palette.panel2 },
+  saveRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  savedText: { color: palette.green, fontSize: 12 },
   empty: { color: palette.muted, textAlign: 'center', marginTop: 48 },
   emptySmall: { color: palette.muted, textAlign: 'center', paddingVertical: 24 },
   dqList: { gap: 4 },

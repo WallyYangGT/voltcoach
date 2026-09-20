@@ -74,7 +74,12 @@ export default function ActivitiesScreen() {
             }>
             <View style={styles.cardTop}>
               <Text style={styles.date}>{item.date}</Text>
-              <Text style={styles.sport}>{t(`sport.${item.sport}` as never)}</Text>
+              <View style={styles.badges}>
+                <Text style={[styles.sport, item.category === 'race' && { color: palette.volt }]}>
+                  {t(`cat.${item.category}` as never)}
+                </Text>
+                <Text style={styles.sport}>{t(`sport.${item.sport}` as never)}</Text>
+              </View>
             </View>
             <View style={styles.metrics}>
               <Metric label={t('act.duration')} value={fmtDur(item.duration_sec)} />
@@ -119,6 +124,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   cardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  badges: { flexDirection: 'row', gap: 8 },
   date: { color: palette.text, fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
   sport: { color: palette.muted, fontSize: 12 },
   metrics: { flexDirection: 'row', gap: 18 },

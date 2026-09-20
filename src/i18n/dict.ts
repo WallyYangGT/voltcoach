@@ -23,6 +23,7 @@ export const DICT = {
     'common.copy': '复制',
     'common.copied': '已复制',
     'common.not_now': '暂不',
+    'common.saved': '已保存 ✓',
     'sport.cycling': '骑行',
     'sport.running': '跑步',
     'sport.swimming': '游泳',
@@ -67,6 +68,8 @@ export const DICT = {
     'detail.title': '训练详情',
     'detail.no_data': '训练不存在或已删除',
     'detail.metrics_grid_note': '指标',
+    'detail.cat_note': '分类与备注',
+    'detail.note_label': '备注（体感/路况/训练意图…）',
 
     // ---- 底部导航（App 新信息架构 §4.1） ----
     'tab.home': '首页',
@@ -176,6 +179,7 @@ export const DICT = {
     'common.copy': 'Copy',
     'common.copied': 'Copied',
     'common.not_now': 'Not now',
+    'common.saved': 'Saved ✓',
     'sport.cycling': 'Cycling',
     'sport.running': 'Running',
     'sport.swimming': 'Swimming',
@@ -219,6 +223,8 @@ export const DICT = {
     'detail.title': 'Activity',
     'detail.no_data': 'Activity not found or deleted',
     'detail.metrics_grid_note': 'Metrics',
+    'detail.cat_note': 'Category & notes',
+    'detail.note_label': 'Notes (feel / conditions / intent…)',
 
     'tab.home': 'Home',
     'tab.activities': 'Training',
