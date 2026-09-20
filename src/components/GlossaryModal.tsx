@@ -2,7 +2,7 @@
  * GlossaryModal.tsx — 首页「指标说明」弹窗（dash 标题旁「?」入口）
  *
  * 移植自 Web 版 views/dashboard.js 的 glossaryHtml + dash.glossary_title：
- * 术语表（gloss.0-10）与核心算法简介（gloss.a0-a3）词条逐字随迁（a4「AI 报告」
+ * 术语表（gloss.0-10）与核心算法简介（gloss.a0-a4）词条逐字随迁（a4「AI 报告」
  * 随 M3 AI 层落地时补）。Web 用 showModal 弹窗，RN 用核心 Modal 全屏面板 + 滚动。
  */
 import React from 'react';
@@ -12,7 +12,7 @@ import { palette } from '@/theme';
 
 /** 指标术语（gloss.N）与算法简介（gloss.aN）的词条序号 */
 const METRIC_IDS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10'];
-const ALGO_IDS = ['a0', 'a1', 'a2', 'a3'];
+const ALGO_IDS = ['a0', 'a1', 'a2', 'a3', 'a4']; // a4「AI 报告」M3 起生效
 
 export function GlossaryModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { t } = useI18n();

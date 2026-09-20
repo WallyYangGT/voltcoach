@@ -168,6 +168,8 @@ export const DICT = {
     'gloss.a2.d': '找出功率 ≥ 105% FTP 的连续段，低于阈值但 ≤ 10 秒的瞬时掉功率会被合并，短于 30 秒的段丢弃；识别到 ≥ 2 个重复工作段时输出间歇组统计。',
     'gloss.a3.t': '爬坡段提取',
     'gloss.a3.d': '30 秒滑动窗口计算局部坡度，平均坡度 ≥ 3%、段内累计爬升 ≥ 15 m、段长 ≥ 300 m 的连续路段被提取为爬坡段。',
+    'gloss.a4.t': 'AI 报告',
+    'gloss.a4.d': '本机把训练数据、负荷走势与指标口径拼装成 Markdown 提示词，调用 OpenAI 兼容接口（默认 Kimi）生成报告；未配置 API 密钥时展示完整提示词，可一键复制到任意 AI 使用。',
 
     'activities.title': '训练',
     'activities.placeholder': '训练列表与 FIT 导入（FAB）将在 M1 落地；分享面板接收同步落地。',
@@ -184,11 +186,11 @@ export const DICT = {
     'me.about': '关于',
     'me.soon': '（后续里程碑开放）',
 
-    // ---- M2：设置主体（set.* 文案与 Web 版同 key 同源；banner/note 按 App 信息架构微调：
-    //      AI 密钥引导移至 M3、settings.js 调参句删除——App 算法阈值内置） ----
+    // ---- M2：设置主体（set.* 文案与 Web 版同 key 同源；note 按 App 信息架构微调：
+    //      settings.js 调参句删除——App 算法阈值内置；M3 起 banner 补回 AI 密钥句） ----
     'set.sub': '参数保存在训练库中，分析新文件时自动生效',
     'set.banner':
-      '首次使用：请先设置骑手参数（FTP / 最大心率 / 体重），它们是 CTL/ATL/TSB、分区占比与 TSS 等派生指标的前提。保存后存入训练库，之后可随时回本页调整。',
+      '首次使用：请先设置骑手参数（FTP / 最大心率 / 体重）与 AI 密钥，它们是 CTL/ATL/TSB、分区占比、TSS 等派生指标与 AI 报告的前提。保存后存入训练库，之后可随时回本页调整。',
     'set.athlete': '骑手参数',
     'set.ftp': 'FTP 功能阈值功率（W）',
     'set.maxhr': '最大心率（bpm）',
@@ -200,6 +202,18 @@ export const DICT = {
     'set.goal': '训练目标（想达到什么）',
     'set.goal.placeholder': '例如：半年内 FTP 提升到 250W；备战 10 月 granfondo 完赛；减脂并保持有氧基础…',
     'set.profile.note': '说明：填写后，AI 复盘/规划等报告会结合你的身份与目标给出更贴合实际的建议；都留空则不纳入。',
+    // ---- M3：AI 服务配置（set.ai.* 与 Web 版同 key 同源；note 改 Keystore 口径） ----
+    'set.ai': 'AI 服务',
+    'set.ai.key': 'API 密钥（留空则退化为复制提示词模式）',
+    'set.ai.base_url': '接口地址（OpenAI 兼容）',
+    'set.ai.model': '模型名',
+    'set.ai.advanced': '高级选项（一般无需修改）',
+    'set.ai.temp': '采样温度（留空表示不传）',
+    'set.ai.timeout': '总超时（毫秒）',
+    'set.ai.stall': '流式空闲超时（毫秒）',
+    'set.ai.stream': '启用流式输出',
+    'set.ai.agentic': 'AI 工具调用（可查询训练库与做推演）',
+    'set.ai.note': '说明：密钥保存在系统安全存储（Android Keystore），不会上传到其他任何地方；其余配置保存在本地训练库。模型名以你的账号可用列表为准。',
     'set.save': '保存',
     'set.saved': '已保存 ✓',
     'set.failed': '保存失败：{msg}',
@@ -353,6 +367,8 @@ export const DICT = {
     'gloss.a2.d': 'Finds continuous segments at ≥ 105% FTP; dips below threshold ≤ 10 s are merged, segments shorter than 30 s are dropped; ≥ 2 repeated work segments produce an interval-set summary.',
     'gloss.a3.t': 'Climb detection',
     'gloss.a3.d': 'Local grade computed with a 30-second sliding window; continuous sections with average grade ≥ 3%, gain ≥ 15 m and length ≥ 300 m are extracted as climbs.',
+    'gloss.a4.t': 'AI reports',
+    'gloss.a4.d': 'On-device, training data, load trends and metric definitions are assembled into a Markdown prompt and sent to an OpenAI-compatible API (Kimi by default); without an API key the full prompt is shown for one-click copy to any AI.',
 
     'activities.title': 'Training',
     'activities.placeholder': 'Activity list and FIT import (FAB) land in M1, along with share-sheet intake.',
@@ -371,7 +387,7 @@ export const DICT = {
 
     'set.sub': 'Saved to the training library; takes effect for newly analyzed files',
     'set.banner':
-      'First use: set your athlete parameters (FTP / max HR / weight) — they underpin CTL/ATL/TSB, zone shares, TSS and every derived metric. Saving stores them in the library; come back anytime.',
+      'First use: set your athlete parameters (FTP / max HR / weight) and your AI key — they underpin CTL/ATL/TSB, zone shares, TSS and every derived metric, plus AI reports. Saving stores them in the library; come back anytime.',
     'set.athlete': 'Athlete parameters',
     'set.ftp': 'FTP functional threshold power (W)',
     'set.maxhr': 'Max heart rate (bpm)',
@@ -383,6 +399,17 @@ export const DICT = {
     'set.goal': 'Training goal (what you want to achieve)',
     'set.goal.placeholder': 'e.g. raise FTP to 250W within 6 months; finish the October granfondo; lose fat while keeping the aerobic base…',
     'set.profile.note': 'Note: when filled, AI reviews/plans tailor advice to your identity and goals; leave both empty to skip.',
+    'set.ai': 'AI service',
+    'set.ai.key': 'API key (leave empty to fall back to copy-prompt mode)',
+    'set.ai.base_url': 'API endpoint (OpenAI-compatible)',
+    'set.ai.model': 'Model name',
+    'set.ai.advanced': 'Advanced (usually no change needed)',
+    'set.ai.temp': 'Sampling temperature (leave empty to omit)',
+    'set.ai.timeout': 'Total timeout (ms)',
+    'set.ai.stall': 'Stream idle timeout (ms)',
+    'set.ai.stream': 'Enable streaming',
+    'set.ai.agentic': 'AI tool calls (query library & run simulations)',
+    'set.ai.note': 'Note: the key is stored in the system secure storage (Android Keystore) and never leaves this device; other settings live in the local training library. Use a model name available to your account.',
     'set.save': 'Save',
     'set.saved': 'Saved ✓',
     'set.failed': 'Save failed: {msg}',

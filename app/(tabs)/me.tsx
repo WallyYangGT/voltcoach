@@ -1,18 +1,19 @@
 /**
- * 「我的」（M2 设置主体）：骑手摘要卡（FTP/最大心率/体重 + 当前 form 状态）
- * + 骑手参数表单 + 身份与训练目标 + 界面语言 + 入口行（AI 记忆/数据管理/关于）。
- * 移植自 Web 版 views/settings.js 的骑手参数与身份目标两个面板（AI 服务配置属 M3、
- * 数据管理属 M4，先留入口行）；校验在 db 层（setAthlete/setProfile 双语 Error，
- * 界面 Alert 透传）。未配置骑手参数时顶部 banner 引导（§4.3，不强制锁定）。
+ * 「我的」（M2 设置主体 + M3 AI 服务配置）：骑手摘要卡（FTP/最大心率/体重 + 当前
+ * form 状态）+ 骑手参数表单 + 身份与训练目标 + AI 服务配置（BYOK，密钥存 Keystore）
+ * + 界面语言 + 入口行（AI 记忆/数据管理/关于）。
+ * 移植自 Web 版 views/settings.js（骑手参数/身份目标/AI 服务三面板；数据管理属 M4
+ * 留入口行）；校验在 db 层（setAthlete/setProfile/setAiConfig 双语 Error，界面 Alert
+ * 透传）。未配置骑手参数时顶部 banner 引导（§4.3，不强制锁定）。
  */
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, Divider, Icon, List, SegmentedButtons, TextInput } from 'react-native-paper';
+import { Button, Divider, Icon, List, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { FormSnapshot } from '@/core/form';
 import type { AthleteParams } from '@/core/settings';
-import { computeForm, getAthleteState, getProfile, setAthlete, setProfile, type RiderProfile } from '@/db';
+import { computeForm, getAiConfig, getAthleteState, getProfile, setAiConfig, setAthlete, setProfile, type AiConfig, type RiderProfile } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -35,17 +36,29 @@ export default function MeScreen() {
   const [weight, setWeight] = useState('');
   const [identity, setIdentity] = useState('');
   const [goal, setGoal] = useState('');
-  const [savedFlash, setSavedFlash] = useState<'athlete' | 'profile' | null>(null);
+  const [savedFlash, setSavedFlash] = useState<'athlete' | 'profile' | 'ai' | null>(null);
   const [savingAthlete, setSavingAthlete] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
+  // AI 服务配置（M3）：草稿为字符串（TextInput），生效值在库/Keystore
+  const [aiKey, setAiKey] = useState('');
+  const [aiBaseUrl, setAiBaseUrl] = useState('');
+  const [aiModel, setAiModel] = useState('');
+  const [aiTemp, setAiTemp] = useState('');
+  const [aiTimeout, setAiTimeout] = useState('');
+  const [aiStall, setAiStall] = useState('');
+  const [aiStream, setAiStream] = useState(false);
+  const [aiAgentic, setAiAgentic] = useState(true);
+  const [showAiKey, setShowAiKey] = useState(false);
+  const [savingAi, setSavingAi] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const today = new Date().toISOString().slice(0, 10);
-      const [state, form, prof] = await Promise.all([
+      const [state, form, prof, ai] = await Promise.all([
         getAthleteState(),
         computeForm(today, lang),
         getProfile(),
+        getAiConfig(),
       ]);
       setData({ athlete: state.athlete, configured: state.configured, form });
       setProfileState(prof);
@@ -54,6 +67,15 @@ export default function MeScreen() {
       setWeight(String(state.athlete.weight_kg));
       setIdentity(prof.identity);
       setGoal(prof.goal);
+      // AI 表单草稿从生效值重灌（key 回显明文，口径同 Web 版本地单用户应用）
+      setAiKey(ai.config.api_key ?? '');
+      setAiBaseUrl(ai.config.base_url);
+      setAiModel(ai.config.model);
+      setAiTemp(ai.config.temperature == null ? '' : String(ai.config.temperature));
+      setAiTimeout(String(ai.config.timeout_ms));
+      setAiStall(String(ai.config.stall_ms));
+      setAiStream(ai.config.stream);
+      setAiAgentic(ai.config.agentic);
     } catch (e) {
       console.warn('设置页加载失败:', e);
     }
@@ -65,7 +87,7 @@ export default function MeScreen() {
     }, [load]),
   );
 
-  const flashSaved = (which: 'athlete' | 'profile') => {
+  const flashSaved = (which: 'athlete' | 'profile' | 'ai') => {
     setSavedFlash(which);
     setTimeout(() => setSavedFlash(null), 2000);
   };
@@ -92,6 +114,32 @@ export default function MeScreen() {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
     } finally {
       setSavingProfile(false);
+    }
+  };
+
+  // AI 服务配置保存：key 清空 = 清除密钥（退化为复制提示词模式，旧版同语义）
+  const saveAi = async () => {
+    setSavingAi(true);
+    try {
+      await setAiConfig(
+        {
+          api_key: aiKey,
+          base_url: aiBaseUrl,
+          model: aiModel,
+          temperature: aiTemp.trim() === '' ? null : Number(aiTemp),
+          timeout_ms: Number(aiTimeout),
+          stall_ms: Number(aiStall),
+          stream: aiStream,
+          agentic: aiAgentic,
+        },
+        lang,
+      );
+      await load();
+      flashSaved('ai');
+    } catch (e) {
+      Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setSavingAi(false);
     }
   };
 
@@ -225,6 +273,101 @@ export default function MeScreen() {
         <Text style={styles.note}>{t('set.profile.note')}</Text>
       </View>
 
+      {/* AI 服务配置（M3 BYOK：密钥存 Keystore，其余存库；校验在 db 层 setAiConfig） */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{t('set.ai')}</Text>
+        <TextInput
+          mode="outlined"
+          dense
+          label={t('set.ai.key')}
+          value={aiKey}
+          onChangeText={setAiKey}
+          secureTextEntry={!showAiKey}
+          autoCapitalize="none"
+          autoCorrect={false}
+          right={
+            <TextInput.Icon
+              icon={showAiKey ? 'eye-off' : 'eye'}
+              onPress={() => setShowAiKey((v) => !v)}
+            />
+          }
+          style={styles.input}
+        />
+        <TextInput
+          mode="outlined"
+          dense
+          label={t('set.ai.base_url')}
+          value={aiBaseUrl}
+          onChangeText={setAiBaseUrl}
+          placeholder="https://api.moonshot.cn/v1"
+          keyboardType="url"
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={styles.input}
+        />
+        <TextInput
+          mode="outlined"
+          dense
+          label={t('set.ai.model')}
+          value={aiModel}
+          onChangeText={setAiModel}
+          placeholder="kimi-k2.6"
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={styles.input}
+        />
+        {/* 高级选项折叠区（口径同 Web 版：温度/超时/流式；agentic 工具调用总开关） */}
+        <List.Accordion title={t('set.ai.advanced')} titleStyle={{ fontSize: 12, color: palette.muted }}>
+          <TextInput
+            mode="outlined"
+            dense
+            label={t('set.ai.temp')}
+            value={aiTemp}
+            onChangeText={setAiTemp}
+            keyboardType="decimal-pad"
+            style={styles.input}
+          />
+          <TextInput
+            mode="outlined"
+            dense
+            label={t('set.ai.timeout')}
+            value={aiTimeout}
+            onChangeText={setAiTimeout}
+            keyboardType="numeric"
+            style={styles.input}
+          />
+          <TextInput
+            mode="outlined"
+            dense
+            label={t('set.ai.stall')}
+            value={aiStall}
+            onChangeText={setAiStall}
+            keyboardType="numeric"
+            style={styles.input}
+          />
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>{t('set.ai.stream')}</Text>
+            <Switch value={aiStream} onValueChange={setAiStream} color={palette.volt} />
+          </View>
+          <View style={styles.switchRow}>
+            <Text style={styles.switchLabel}>{t('set.ai.agentic')}</Text>
+            <Switch value={aiAgentic} onValueChange={setAiAgentic} color={palette.volt} />
+          </View>
+        </List.Accordion>
+        <View style={styles.saveRow}>
+          <Button
+            mode="contained"
+            buttonColor={palette.volt}
+            textColor={palette.bg}
+            disabled={savingAi}
+            onPress={saveAi}>
+            {t('set.save')}
+          </Button>
+          {savedFlash === 'ai' && <Text style={styles.saved}>{t('set.saved')}</Text>}
+        </View>
+        <Text style={styles.note}>{t('set.ai.note')}</Text>
+      </View>
+
       {/* 界面语言（切换即时生效并写训练库 lang 键，AI 报告语言随动） */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>{t('me.lang')}</Text>
@@ -303,4 +446,6 @@ const styles = StyleSheet.create({
   saved: { color: palette.green, fontSize: 12 },
   note: { color: palette.faint, fontSize: 11, lineHeight: 16 },
   soon: { color: palette.faint, fontSize: 12 },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 4 },
+  switchLabel: { color: palette.text, fontSize: 13, flex: 1 },
 });
