@@ -4,10 +4,11 @@
  * 直译自 reference/web/js/charts.js 的 drawTrendChart：共享纵轴（form 值域）
  * + TSS 背景柱 + 零轴线 + 月份刻度。M2 首页仪表盘消费（数据源 recentFormDaily
  * 口径，M2 接入训练库查询），M1 一并直译完成四类图表的搬运。
+ * 渲染宽由外部（ChartScroller，900px 内容宽口径）传入——90 天逐日序列在
+ * 屏宽下过密（约 4px/天），滚动查看才有可读性。
  */
 
 import React, { useMemo } from 'react';
-import { useWindowDimensions } from 'react-native';
 import { Line, Path, Rect, Svg, Text } from 'react-native-svg';
 import { palette } from '@/theme';
 
@@ -22,13 +23,11 @@ export interface TrendPoint {
 interface Props {
   daily: TrendPoint[];
   height?: number;
-  width?: number;
+  /** 渲染宽（px）——由 ChartScroller 给出（容器宽 vs 900px 内容宽取大） */
+  width: number;
 }
 
-export function TrendChart({ daily, height = 260, width }: Props) {
-  const { width: screenW } = useWindowDimensions();
-  const W = width ?? screenW;
-
+export function TrendChart({ daily, height = 260, width: W }: Props) {
   const built = useMemo(() => {
     if (!daily?.length) return null;
     const H = height,

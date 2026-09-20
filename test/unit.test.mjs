@@ -29,6 +29,13 @@ import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '../src/core/fo
 import { formNote, formatAnomaly } from '../src/core/i18n.ts';
 import { estimateFtpFromHistory } from '../src/core/ftp.ts';
 import { monthlySummaryFromRows } from '../src/core/monthly.ts';
+import {
+  buildActivityMetrics,
+  formatNum,
+  formatDuration,
+  formatPace,
+  metricColumns,
+} from '../src/core/metrics.ts';
 import { ATHLETE } from '../src/core/settings.ts';
 
 // 构造逐秒记录对象的辅助函数
@@ -519,4 +526,125 @@ test('monthlySummaryFromRows: 强度按时长加权，类型判定 极化/金字
   ]);
   assert.deepEqual(w[0].intensity_pct, { low: 33.3, mid: 33.3, high: 33.3 });
   assert.equal(w[0].intensity_type, 'sweet_spot');
+});
+
+// ---------------- 训练详情指标网格（core/metrics，M2 补充：内容对齐 Web 版 metrics 列表） ----------------
+
+// 取词桩：返回 key 与插值变量，便于断言「出哪一格、注释是什么」
+const tStub = (key, vars) =>
+  vars && Object.keys(vars).length ? `${key}(${JSON.stringify(vars)})` : String(key);
+
+/** 构造 summary 骨架（只填测试关心的段，其余按 analyze 产物形状占位；patch 分段深合并） */
+const summaryOf = (patch = {}) => ({
+  ...patch,
+  activity: {
+    date: '2026-09-04',
+    sport: 'cycling',
+    duration_sec: 3600,
+    distance_km: 30.5,
+    elevation_gain_m: 120,
+    ...patch.activity,
+  },
+  athlete_context: { ftp_watts: 200, max_hr: 180, weight_kg: 70, ...patch.athlete_context },
+  heart_rate: { avg: 140, max: 165, zone_distribution_pct: null, hr_drift_pct: 3.2, ...patch.heart_rate },
+  cadence: { avg: 85, ...patch.cadence },
+  data_quality: { record_count: 3600, power_coverage_pct: 100, hr_coverage_pct: 100 },
+});
+
+test('buildActivityMetrics: 完整 summary 的出格顺序与 Web 版 metrics 列表一致', () => {
+  const s = summaryOf({
+    activity: { avg_speed_kmh: 30.5, total_calories: 700 },
+    power: {
+      avg: 150.4,
+      normalized_power: 165,
+      max: 500,
+      variability_index: 1.05,
+      intensity_factor: 0.83,
+      tss: 93,
+      w_per_kg_avg: 2.15,
+      peak_curve: {},
+      zone_distribution_pct: null,
+    },
+    temperature: { avg: 24.5, min: 20, max: 31 },
+    athlete_context: { ctl: 42.1, atl: 47.1, tsb: -5 },
+  });
+  const out = buildActivityMetrics(s, tStub);
+  assert.deepEqual(out.map((m) => m.label), [
+    'm.duration', 'm.distance', 'm.avg_speed', 'm.gain', 'm.calories',
+    'NP', 'm.avg_power', 'm.max_power', 'TSS',
+    'm.avg_hr', 'm.hr_drift', 'm.cadence', 'm.temp',
+    'm.ctl', 'm.atl', 'm.tsb',
+  ]);
+  const byLabel = Object.fromEntries(out.map((m) => [m.label, m]));
+  assert.deepEqual(byLabel['m.duration'], { label: 'm.duration', value: '1h00' });
+  assert.deepEqual(byLabel['m.distance'], { label: 'm.distance', value: '30.50', unit: 'km' });
+  assert.equal(byLabel.NP.sub, 'm.np_sub({"if":"0.83"})'); // 小字注释：IF
+  assert.deepEqual(byLabel.TSS, { label: 'TSS', value: '93', sub: 'm.tss_sub({"vi":"1.05"})' });
+  assert.equal(byLabel['m.avg_power'].sub, '2.15 W/kg');
+  assert.equal(byLabel['m.avg_hr'].sub, 'm.max_hr_sub({"max":165})');
+  assert.equal(byLabel['m.hr_drift'].sub, 'm.drift_good'); // |3.2| < 5
+  assert.deepEqual(byLabel['m.temp'], { label: 'm.temp', value: '24.5', unit: '°C', sub: 'm.temp_max({"t":31})' });
+  assert.deepEqual(byLabel['m.ctl'], { label: 'm.ctl', value: '42.1', sub: 'm.ctl_sub' });
+  // TSB 简评走 core 词典（form.note.*，zh 与 Web 版逐字一致）
+  assert.deepEqual(byLabel['m.tsb'], { label: 'm.tsb', value: '-5', sub: '负荷与恢复平衡，可持续训练' });
+});
+
+test('buildActivityMetrics: 缺数据逐项跳过（无功率/心率/温度/负荷快照不崩）', () => {
+  const s = summaryOf({ athlete_context: { ftp_watts: 200, max_hr: 180, weight_kg: 70 } });
+  const out = buildActivityMetrics(s, tStub);
+  assert.deepEqual(out.map((m) => m.label), ['m.duration', 'm.distance', 'm.gain', 'm.avg_hr', 'm.hr_drift', 'm.cadence']);
+  // 距离缺失 → "-"（Web 版 num 口径）；爬升为 0 → 该项不显示（Web 版 if (a.elevation_gain_m)）
+  const s2 = summaryOf({ activity: { elevation_gain_m: 0, distance_km: null } });
+  const labels2 = buildActivityMetrics(s2, tStub).map((m) => m.label);
+  assert.ok(!labels2.includes('m.gain'));
+  assert.equal(buildActivityMetrics(s2, tStub)[1].value, '-');
+});
+
+test('buildActivityMetrics: 心率漂移 ≥5% 判读为「漂移偏大」，TSB 正数补 + 号', () => {
+  const s = summaryOf({
+    heart_rate: { avg: 140, max: 165, hr_drift_pct: -7.5, zone_distribution_pct: null },
+    athlete_context: { ctl: 42, atl: 30, tsb: 12 },
+  });
+  const out = buildActivityMetrics(s, tStub);
+  const drift = out.find((m) => m.label === 'm.hr_drift');
+  assert.deepEqual(drift, { label: 'm.hr_drift', value: '-7.5', unit: '%', sub: 'm.drift_high' });
+  const tsb = out.find((m) => m.label === 'm.tsb');
+  assert.equal(tsb.value, '+12');
+  assert.equal(tsb.sub, '状态良好，恢复充分'); // 12 → form.note.1
+});
+
+test('buildActivityMetrics: 跑步用步频/spm，游泳与配速各有独立格', () => {
+  const s = summaryOf({
+    activity: { sport: 'running', elevation_gain_m: 30 },
+    swim: { lengths_count: 40, pool_length_m: 25, avg_length_time_sec: 31.4, total_strokes: null, avg_swolf: 45.2 },
+    pace: { avg_pace_min_per_km: 5.5, best_1min_pace_min_per_km: 3.998 },
+  });
+  const out = buildActivityMetrics(s, tStub);
+  const byLabel = Object.fromEntries(out.map((m) => [m.label, m]));
+  assert.deepEqual(byLabel['m.stride'], { label: 'm.stride', value: '85', unit: 'spm' });
+  assert.equal(byLabel['m.cadence'], undefined);
+  assert.deepEqual(byLabel['m.pace'], { label: 'm.pace', value: '5:30', unit: '/km' });
+  assert.equal(byLabel['m.pace_best'].value, '4:00'); // 3.998min → 59.88s 四舍五入 60 → 进位
+  assert.deepEqual(byLabel['m.swim_lengths'], { label: 'm.swim_lengths', value: '40' });
+  assert.deepEqual(byLabel['m.swolf'], { label: 'm.swolf', value: '45.2' });
+  assert.deepEqual(byLabel['m.swim_avg'], { label: 'm.swim_avg', value: '31.4', unit: 's' });
+});
+
+test('formatNum/formatDuration/formatPace: 数值口径与边界（同 Web 版 common.js）', () => {
+  assert.equal(formatNum(null), '-');
+  assert.equal(formatNum(2.0, 2), '2'); // 全零小数位去掉
+  assert.equal(formatNum(1.5, 2), '1.50'); // 非零小数位保留两位
+  assert.equal(formatNum(30.456, 2), '30.46');
+  assert.equal(formatNum(-7.56, 1), '-7.6');
+  assert.equal(formatDuration(null), '—');
+  assert.equal(formatDuration(2700), '45m');
+  assert.equal(formatDuration(3599), '1h00'); // 进位防 "60m"
+  assert.equal(formatDuration(3900), '1h05');
+  assert.equal(formatDuration(7200, '-'), '2h00');
+  assert.equal(formatPace(null), '-');
+  assert.equal(formatPace(5.5), '5:30');
+  assert.equal(formatPace(4.999), '5:00'); // 秒位进位
+  assert.equal(metricColumns(360), 2); // 窄屏两列（同 Web 版窄屏）
+  assert.equal(metricColumns(720), 4);
+  assert.equal(metricColumns(1280), 4); // 上限 4 列
 });

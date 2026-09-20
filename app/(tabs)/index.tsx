@@ -14,11 +14,12 @@ import {
   StyleSheet,
   Text,
   View,
-  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ChartScroller } from '@/charts/ChartScroller';
 import { TrendChart, type TrendPoint } from '@/charts/TrendChart';
 import { formNote } from '@/core/i18n';
+import { formatDuration } from '@/core/metrics';
 import type { MonthlyItem } from '@/core/monthly';
 import { ATHLETE, type AthleteParams } from '@/core/settings';
 import {
@@ -45,7 +46,6 @@ export default function HomeScreen() {
   const { t, lang } = useI18n();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
   const [data, setData] = useState<HomeData | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [ftpOpen, setFtpOpen] = useState(false); // FTP 科学估算面板展开态（dash.ftp_btn）
@@ -143,7 +143,10 @@ export default function HomeScreen() {
             <LegendChip color={palette.red} label={t('dash.legend.atl')} />
             <LegendChip color={palette.green} label={t('dash.legend.tsb')} />
           </View>
-          <TrendChart daily={data!.daily} width={width - 32} />
+          {/* 初始停在最近日期一端（今天在最右端），向左滑看历史 */}
+          <ChartScroller initialScrollToEnd>
+            {(w) => <TrendChart daily={data!.daily} width={w} />}
+          </ChartScroller>
         </View>
       )}
 
@@ -181,7 +184,7 @@ export default function HomeScreen() {
                 </View>
               </View>
               <View style={styles.recentMetrics}>
-                <Metric label={t('act.duration')} value={fmtDur(item.duration_sec)} />
+                <Metric label={t('act.duration')} value={formatDuration(item.duration_sec)} />
                 <Metric label="km" value={item.distance_km != null ? item.distance_km.toFixed(2) : '—'} />
                 <Metric label="TSS" value={item.tss != null ? String(item.tss) : '—'} />
                 <Metric label="NP" value={item.np != null ? `${item.np}W` : '—'} />
@@ -260,14 +263,6 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** 时长缩写（与训练列表同口径：1h05 / 45m） */
-const fmtDur = (sec: number | null) => {
-  if (sec == null) return '—';
-  const h = Math.floor(sec / 3600),
-    m = Math.round((sec % 3600) / 60);
-  return h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m}m`;
-};
-
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
@@ -300,7 +295,7 @@ const styles = StyleSheet.create({
   tileLabel: { color: palette.muted, fontSize: 11, letterSpacing: 0.5, marginTop: 3 },
   tileValue: { fontSize: 36, fontWeight: '700', fontStyle: 'italic', fontVariant: ['tabular-nums'] },
   tileUnit: { fontSize: 14, fontStyle: 'normal', color: palette.muted, fontWeight: '400' },
-  tileNote: { color: palette.faint, fontSize: 11 },
+  tileNote: { color: palette.muted, fontSize: 12 },
   ftpBtn: { borderRadius: 6, borderWidth: 1, borderColor: palette.voltDim, paddingHorizontal: 8, paddingVertical: 4, alignSelf: 'flex-start' },
   ftpBtnText: { color: palette.volt, fontSize: 11, fontWeight: '600' },
   emptyText: { color: palette.muted, textAlign: 'center', lineHeight: 24, paddingVertical: 8 },

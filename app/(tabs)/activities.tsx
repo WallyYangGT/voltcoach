@@ -7,6 +7,7 @@ import React, { useCallback, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { FAB } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { formatDuration } from '@/core/metrics';
 import { ActivityListItem, listActivities } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
@@ -33,13 +34,6 @@ export default function ActivitiesScreen() {
       load();
     }, [load]),
   );
-
-  const fmtDur = (sec: number | null) => {
-    if (sec == null) return '—';
-    const h = Math.floor(sec / 3600),
-      m = Math.round((sec % 3600) / 60);
-    return h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m}m`;
-  };
 
   return (
     <View style={[styles.page, { paddingTop: insets.top + 12 }]}>
@@ -82,7 +76,7 @@ export default function ActivitiesScreen() {
               </View>
             </View>
             <View style={styles.metrics}>
-              <Metric label={t('act.duration')} value={fmtDur(item.duration_sec)} />
+              <Metric label={t('act.duration')} value={formatDuration(item.duration_sec)} />
               <Metric label="km" value={item.distance_km != null ? item.distance_km.toFixed(2) : '—'} />
               <Metric label="TSS" value={item.tss != null ? String(item.tss) : '—'} />
               <Metric label="NP" value={item.np != null ? `${item.np}W` : '—'} />

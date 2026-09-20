@@ -8,10 +8,10 @@
  *
  * 与 Web 版差异：viewBox 用实际组件宽高（等比渲染，文字不变形——Web 版的
  * preserveAspectRatio=none 拉伸方案在移动端窄屏上会让刻度文字严重变形）。
+ * 渲染宽由外部（ChartScroller，900px 内容宽口径）传入，本组件不自取屏宽。
  */
 
 import React, { useMemo } from 'react';
-import { useWindowDimensions } from 'react-native';
 import { Defs, G, Line, LinearGradient, Path, Stop, Svg, Text } from 'react-native-svg';
 import { palette } from '@/theme';
 
@@ -79,14 +79,11 @@ export function smoothSeries(pts: (number | null)[], n: number): (number | null)
 interface Props {
   series: SeriesSpec[];
   height?: number;
-  /** 图表宽（默认屏宽；等比渲染） */
-  width?: number;
+  /** 渲染宽（px）——由 ChartScroller 给出（容器宽 vs 900px 内容宽取大） */
+  width: number;
 }
 
-export function TimeSeriesChart({ series, height = 220, width }: Props) {
-  const { width: screenW } = useWindowDimensions();
-  const W = width ?? screenW;
-
+export function TimeSeriesChart({ series, height = 220, width: W }: Props) {
   const built = useMemo(() => {
     const H = height,
       PL = 8,

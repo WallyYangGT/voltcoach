@@ -1,22 +1,27 @@
 /**
- * 训练详情页（M1）：summary 指标 + 时序多系列图 + 功率/心率分区 + 峰功率曲线
+ * 训练详情页（M1）：summary 指标网格 + 时序多系列图 + 功率/心率分区 + 峰功率曲线
  * + 数据质量与异常标注。数据源：训练库 getActivitySummary + records gzip 落盘文件
- * （thinRecords ≤1400 抽稀口径）。布局对照 Web 版详情页（views/activities.js），
- * 移动端改为系列 chips 切换（默认功率/心率/踏频）。
+ * （thinRecords ≤1400 抽稀口径）。指标网格内容（含 IF/W·kg⁻¹/VI/心率漂移/当日
+ * CTL-ATL-TSB 小字注释）由 core/metrics.buildActivityMetrics 装配（逐条对齐 Web 版
+ * views/activities.js），本页只做排版；系列切换沿用 chips。时序图由 ChartScroller
+ * 承载横向滚动（900px 内容宽口径）。
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button, Chip, TextInput } from 'react-native-paper';
+import { ChartScroller } from '@/charts/ChartScroller';
 import { HR_ZONE_COLORS, POWER_ZONE_COLORS, ZoneBars } from '@/charts/ZoneBars';
 import { PeakCurve } from '@/charts/PeakCurve';
 import { TimeSeriesChart, type SeriesSpec } from '@/charts/TimeSeriesChart';
 import type { Summary } from '@/core/analyze';
 import { formatAnomaly } from '@/core/i18n';
+import { buildActivityMetrics, type MetricItem, type MetricText } from '@/core/metrics';
 import { thinRecords } from '@/core/records';
 import { HR_ZONES, POWER_ZONES, type Zone } from '@/core/settings';
 import { CATEGORY_KEYS, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
-import { useI18n } from '@/i18n';
+import { useI18n, type DictKey } from '@/i18n';
+import { MetricGrid } from '@/components/MetricGrid';
 import { loadStoredRecords } from '@/records-store';
 import { palette } from '@/theme';
 
@@ -122,6 +127,13 @@ export default function ActivityDetailScreen() {
     }));
   }, [thinned, visible]);
 
+  // 指标格内容（字典 key 在 UI 词典侧，故在此适配成 core 的取词签名）
+  const metrics = useMemo<MetricItem[]>(() => {
+    if (!summary) return [];
+    const tMetric: MetricText = (key, vars) => t(key as DictKey, vars);
+    return buildActivityMetrics(summary, tMetric, lang);
+  }, [summary, t, lang]);
+
   if (summary === undefined) return <View style={styles.page} />;
   if (!summary) {
     return (
@@ -140,11 +152,6 @@ export default function ActivityDetailScreen() {
   const hr = summary.heart_rate;
   const ac = summary.athlete_context;
   const dq = summary.data_quality;
-  const fmtDur = (sec: number) => {
-    const h = Math.floor(sec / 3600),
-      m = Math.round((sec % 3600) / 60);
-    return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}m`;
-  };
 
   const toggle = (key: string) =>
     setVisible((prev) => {
@@ -164,17 +171,8 @@ export default function ActivityDetailScreen() {
         />
       </Appbar.Header>
       <ScrollView contentContainerStyle={styles.body}>
-        {/* 概览大数字 */}
-        <View style={styles.grid}>
-          <Big label={t('act.duration')} value={fmtDur(a.duration_sec)} />
-          <Big label="km" value={a.distance_km != null ? a.distance_km.toFixed(2) : '—'} />
-          <Big label="m↑" value={String(a.elevation_gain_m)} />
-          {a.avg_speed_kmh != null && <Big label="km/h" value={a.avg_speed_kmh.toFixed(1)} />}
-          {a.total_calories != null && <Big label="kcal" value={String(a.total_calories)} />}
-          {p?.normalized_power != null && <Big label="NP" value={`${p.normalized_power}W`} />}
-          {p?.tss != null && <Big label="TSS" value={String(p.tss)} />}
-          {p?.intensity_factor != null && <Big label="IF" value={p.intensity_factor.toFixed(2)} />}
-        </View>
+        {/* 概览指标网格（列数随屏宽 2–4；内容与小字注释对齐 Web 版 metric-grid） */}
+        <MetricGrid items={metrics} />
 
         {/* 分类与备注（M2：写库即时生效，AI 复盘时纳入考量） */}
         <View style={styles.card}>
@@ -234,7 +232,9 @@ export default function ActivityDetailScreen() {
             ))}
           </View>
           {series.length && thinned ? (
-            <TimeSeriesChart series={series} height={200} />
+            <ChartScroller>
+              {(w) => <TimeSeriesChart series={series} height={200} width={w} />}
+            </ChartScroller>
           ) : (
             <Text style={styles.emptySmall}>{t('chart.no_data')}</Text>
           )}
@@ -302,32 +302,10 @@ export default function ActivityDetailScreen() {
   );
 }
 
-function Big({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.bigItem}>
-      <Text style={styles.bigVal}>{value}</Text>
-      <Text style={styles.bigLabel}>{label}</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: palette.bg },
   header: { backgroundColor: palette.bgSoft },
   body: { padding: 16, gap: 12, paddingBottom: 40 },
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    backgroundColor: palette.panel,
-    borderColor: palette.lineSoft,
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 14,
-    gap: 14,
-  },
-  bigItem: { minWidth: 68, gap: 2 },
-  bigVal: { color: palette.volt, fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  bigLabel: { color: palette.faint, fontSize: 11 },
   card: {
     backgroundColor: palette.panel,
     borderColor: palette.lineSoft,
