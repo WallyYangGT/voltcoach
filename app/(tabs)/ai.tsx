@@ -143,8 +143,12 @@ export default function AiCenterScreen() {
         text: t('mem.delete'),
         style: 'destructive',
         onPress: async () => {
-          await deleteAiChat(chat.id);
-          load();
+          try {
+            await deleteAiChat(chat.id);
+            load();
+          } catch (e) {
+            console.warn('删除对话失败:', e);
+          }
         },
       },
     ]);

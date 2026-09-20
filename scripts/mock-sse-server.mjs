@@ -2,8 +2,12 @@
  * mock-sse-server.mjs — PoC 3 本地 mock：OpenAI 兼容 chat/completions（SSE 流式）。
  *
  * 宿主机运行：node scripts/mock-sse-server.mjs（默认 127.0.0.1:8787）
- * 模拟器访问：adb reverse tcp:8787 tcp:8787 后，App 内请求 http://127.0.0.1:8787/v1
+ * 模拟器访问：App 内请求 http://10.0.2.2:8787/v1（10.0.2.2 = 模拟器到宿主 loopback 别名）
  * 纯 node:http 零依赖；stream:true 逐块推 SSE（30 块 × ~60ms），否则返回完整 JSON。
+ *
+ * M3 冒烟增强：请求带 tools 且消息历史只有 1 条（agentic 首轮）时，返回一个
+ * save_memory 工具调用——App 会执行工具并把结果回填发起第二轮，mock 对后续轮
+ * 返回正文，从而完整验证 runAgentLoop 的 tool_calls 回填链路与 save_memory 落库。
  */
 import http from 'node:http';
 
@@ -22,11 +26,45 @@ const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (c) => (body += c));
   req.on('end', () => {
-    let stream = false;
+    let parsed = {};
     try {
-      stream = JSON.parse(body).stream === true;
+      parsed = JSON.parse(body);
     } catch {}
-    console.log(`[${new Date().toISOString()}] POST ${req.url} stream=${stream}`);
+    const stream = parsed.stream === true;
+    console.log(`[${new Date().toISOString()}] POST ${req.url} stream=${stream} msgs=${parsed.messages?.length ?? 0}`);
+
+    // agentic 首轮（带 tools 且只有系统段/首条消息）→ 下发一次 save_memory 工具调用
+    const userMsgs = (parsed.messages ?? []).filter((m) => m.role === 'user' || m.role === 'assistant');
+    if (!stream && Array.isArray(parsed.tools) && parsed.tools.length > 0 && userMsgs.length === 1) {
+      console.log('  -> mock issue save_memory tool_call (agent loop drill)');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          id: 'mock-tool',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [
+                  {
+                    id: 'mock-call-1',
+                    type: 'function',
+                    function: {
+                      name: 'save_memory',
+                      arguments: JSON.stringify({ content: '冒烟测试记忆：由 mock 服务写入', category: 'general' }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        }),
+      );
+      return;
+    }
 
     if (!stream) {
       res.writeHead(200, { 'Content-Type': 'application/json' });

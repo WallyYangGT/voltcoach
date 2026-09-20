@@ -7,7 +7,7 @@
  * 透传）。未配置骑手参数时顶部 banner 引导（§4.3，不强制锁定）。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Divider, Icon, List, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -51,6 +51,8 @@ export default function MeScreen() {
   const [aiAgentic, setAiAgentic] = useState(true);
   const [showAiKey, setShowAiKey] = useState(false);
   const [savingAi, setSavingAi] = useState(false);
+  // AI 配置草稿只在首次加载重灌：字段多且含密钥，focus 反复重灌会静默丢弃编辑中的修改
+  const aiDraftLoadedRef = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -68,15 +70,18 @@ export default function MeScreen() {
       setWeight(String(state.athlete.weight_kg));
       setIdentity(prof.identity);
       setGoal(prof.goal);
-      // AI 表单草稿从生效值重灌（key 回显明文，口径同 Web 版本地单用户应用）
-      setAiKey(ai.config.api_key ?? '');
-      setAiBaseUrl(ai.config.base_url);
-      setAiModel(ai.config.model);
-      setAiTemp(ai.config.temperature == null ? '' : String(ai.config.temperature));
-      setAiTimeout(String(ai.config.timeout_ms));
-      setAiStall(String(ai.config.stall_ms));
-      setAiStream(ai.config.stream);
-      setAiAgentic(ai.config.agentic);
+      if (!aiDraftLoadedRef.current) {
+        aiDraftLoadedRef.current = true;
+        // AI 表单草稿从生效值重灌（key 回显明文，口径同 Web 版本地单用户应用）
+        setAiKey(ai.config.api_key ?? '');
+        setAiBaseUrl(ai.config.base_url);
+        setAiModel(ai.config.model);
+        setAiTemp(ai.config.temperature == null ? '' : String(ai.config.temperature));
+        setAiTimeout(String(ai.config.timeout_ms));
+        setAiStall(String(ai.config.stall_ms));
+        setAiStream(ai.config.stream);
+        setAiAgentic(ai.config.agentic);
+      }
     } catch (e) {
       console.warn('设置页加载失败:', e);
     }

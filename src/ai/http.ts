@@ -52,29 +52,35 @@ export async function loadDefaultFetch(): Promise<FetchLike> {
   return globalThis.fetch;
 }
 
-/** 手写 UTF-8 解码（仅用于完整行：调用方保证字节序列不含跨行断开的多字节字符） */
+/** 手写 UTF-8 解码（仅用于完整行：调用方保证字节序列不含跨行断开的多字节字符）。
+ *  续字节不合法（b & 0xc0 !== 0x80）时输出替换符 U+FFFD 并按 1 字节推进，不抛错 */
 function decodeUtf8(bytes: number[]): string {
   let out = '';
   let i = 0;
+  const cont = (k: number) => k < bytes.length && (bytes[k] & 0xc0) === 0x80;
   while (i < bytes.length) {
     const b = bytes[i];
     let cp: number;
     if (b < 0x80) {
       cp = b;
       i += 1;
-    } else if ((b & 0xe0) === 0xc0) {
+    } else if ((b & 0xe0) === 0xc0 && cont(i + 1)) {
       cp = ((b & 0x1f) << 6) | (bytes[i + 1] & 0x3f);
       i += 2;
-    } else if ((b & 0xf0) === 0xe0) {
+    } else if ((b & 0xf0) === 0xe0 && cont(i + 1) && cont(i + 2)) {
       cp = ((b & 0x0f) << 12) | ((bytes[i + 1] & 0x3f) << 6) | (bytes[i + 2] & 0x3f);
       i += 3;
-    } else {
+    } else if ((b & 0xf8) === 0xf0 && cont(i + 1) && cont(i + 2) && cont(i + 3)) {
       cp =
         ((b & 0x07) << 18) |
         ((bytes[i + 1] & 0x3f) << 12) |
         ((bytes[i + 2] & 0x3f) << 6) |
         (bytes[i + 3] & 0x3f);
       i += 4;
+    } else {
+      out += '\uFFFD'; // 畸形序列：替换符 + 单字节推进
+      i += 1;
+      continue;
     }
     if (cp > 0xffff) {
       cp -= 0x10000;
@@ -160,17 +166,26 @@ export async function requestChatCompletion(
       onStreamChunk(delta);
     }
   };
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    for (const b of value) {
-      if (b === 10) {
-        const line = decodeUtf8(buffer);
-        buffer = [];
-        handleLine(line);
-      } else if (b !== 13) {
-        buffer.push(b); // 忽略 \r（CRLF 兼容）
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      for (const b of value) {
+        if (b === 10) {
+          const line = decodeUtf8(buffer);
+          buffer = [];
+          handleLine(line);
+        } else if (b !== 13) {
+          buffer.push(b); // 忽略 \r（CRLF 兼容）
+        }
       }
+    }
+  } finally {
+    // 解析出错/abort 中断时主动释放底层连接（未消费完的 body 不留挂起）
+    try {
+      await reader.cancel();
+    } catch {
+      // 已结束的流 cancel 会拒绝，忽略
     }
   }
   if (!fullText) throw new Error(t('zh', 'ai.empty'));

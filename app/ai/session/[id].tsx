@@ -12,7 +12,7 @@
  */
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
-import { Alert, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button, TextInput } from 'react-native-paper';
 import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -45,7 +45,8 @@ export default function AiSessionScreen() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const genRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 上一次加载的实体 id：切换报告/对话时重置追问线程状态，防跨报告残留
+  const lastEntityRef = useRef<string | null>(null);
 
   const title =
     kind === 'report'
@@ -58,6 +59,13 @@ export default function AiSessionScreen() {
    *  发现 pending 残留（应用被杀中断、进程内无对应任务在跑）时补跑生成恢复 */
   const load = useCallback(async () => {
     try {
+      // 实体切换时先清追问线程状态（load 抛错也不至于把追问写进另一份报告）
+      const entityKey = `${kind}-${entityId}`;
+      if (lastEntityRef.current !== entityKey) {
+        lastEntityRef.current = entityKey;
+        setFollowChatId(null);
+        setChat(null);
+      }
       if (kind === 'report' && entityId != null) {
         const r = await getAiReport(entityId);
         setReport(r);
@@ -188,54 +196,54 @@ export default function AiSessionScreen() {
         )}
       </Appbar.Header>
 
-      {/* 报告正文（pending/failed/completed 三态） */}
-      {kind === 'report' && report?.status === 'pending' && (
-        <Text style={styles.centerNote}>{t('session.reportPending')}</Text>
-      )}
-      {kind === 'report' && report?.status === 'failed' && (
-        <View style={styles.failedBox}>
-          <Text style={styles.failedText}>{t('session.failed')}</Text>
-          {!!report.error && <Text style={styles.failedErr}>{report.error}</Text>}
-          <Button compact mode="outlined" textColor={palette.volt} onPress={retry}>
-            {t('session.retry')}
-          </Button>
-        </View>
-      )}
-      {kind === 'report' && report?.status === 'completed' && (
-        <View style={styles.body}>
+      {/* 滚动容器：报告正文（三态）与消息气泡流共用（P0 修复——长报告必须可滚动） */}
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        {kind === 'report' && report?.status === 'pending' && (
+          <Text style={styles.centerNote}>{t('session.reportPending')}</Text>
+        )}
+        {kind === 'report' && report?.status === 'failed' && (
+          <View style={styles.failedBox}>
+            <Text style={styles.failedText}>{t('session.failed')}</Text>
+            {!!report.error && <Text style={styles.failedErr}>{report.error}</Text>}
+            <Button compact mode="outlined" textColor={palette.volt} onPress={retry}>
+              {t('session.retry')}
+            </Button>
+          </View>
+        )}
+        {kind === 'report' && report?.status === 'completed' && (
           <Markdown style={mdStyles}>{report.markdown}</Markdown>
-        </View>
-      )}
+        )}
 
-      {/* 消息流（chat 页全程 / report 页的追问线程） */}
-      {messages.length > 0 && (
-        <View style={[styles.body, kind === 'report' && report?.status === 'completed' && styles.followUp]}>
-          {kind === 'report' && report?.status === 'completed' && (
-            <Text style={styles.followUpHead}>{t('session.followUp.hint')}</Text>
-          )}
-          {messages.map((m) => (
-            <View key={m.id} style={[styles.bubble, m.role === 'user' ? styles.bubbleUser : styles.bubbleAi]}>
-              {m.status === 'pending' && <Text style={styles.pendingNote}>{t('session.generating')}</Text>}
-              {m.status === 'failed' && (
-                <View style={{ gap: 6 }}>
-                  <Text style={styles.failedText}>{t('session.failed')}</Text>
-                  {!!m.error && <Text style={styles.failedErr}>{m.error}</Text>}
-                  <Button compact mode="outlined" textColor={palette.volt} onPress={retry}>
-                    {t('session.retry')}
-                  </Button>
-                </View>
-              )}
-              {m.status === 'completed' && !!m.content && (
-                m.role === 'user' ? (
-                  <Text style={styles.bubbleUserText}>{m.content}</Text>
-                ) : (
-                  <Markdown style={mdStyles}>{m.content}</Markdown>
-                )
-              )}
-            </View>
-          ))}
-        </View>
-      )}
+        {/* 消息流（chat 页全程 / report 页的追问线程） */}
+        {messages.length > 0 && (
+          <View style={[styles.followUp, kind === 'report' && report?.status === 'completed' && styles.followUpTop]}>
+            {kind === 'report' && report?.status === 'completed' && (
+              <Text style={styles.followUpHead}>{t('session.followUp.hint')}</Text>
+            )}
+            {messages.map((m) => (
+              <View key={m.id} style={[styles.bubble, m.role === 'user' ? styles.bubbleUser : styles.bubbleAi]}>
+                {m.status === 'pending' && <Text style={styles.pendingNote}>{t('session.generating')}</Text>}
+                {m.status === 'failed' && (
+                  <View style={{ gap: 6 }}>
+                    <Text style={styles.failedText}>{t('session.failed')}</Text>
+                    {!!m.error && <Text style={styles.failedErr}>{m.error}</Text>}
+                    <Button compact mode="outlined" textColor={palette.volt} onPress={retry}>
+                      {t('session.retry')}
+                    </Button>
+                  </View>
+                )}
+                {m.status === 'completed' && !!m.content && (
+                  m.role === 'user' ? (
+                    <Text style={styles.bubbleUserText}>{m.content}</Text>
+                  ) : (
+                    <Markdown style={mdStyles}>{m.content}</Markdown>
+                  )
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+      </ScrollView>
 
       {/* 输入框：report 页仅 completed 后开放追问；chat 页常开 */}
       {(kind === 'chat' || report?.status === 'completed') && (
@@ -289,9 +297,11 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: palette.bg },
   header: { backgroundColor: palette.bg, borderBottomWidth: 1, borderBottomColor: palette.lineSoft },
   headerTitle: { color: palette.text, fontSize: 15 },
-  body: { flex: 1, paddingHorizontal: 16, paddingVertical: 12 },
-  followUp: { borderTopWidth: 1, borderTopColor: palette.lineSoft, gap: 8 },
-  followUpHead: { color: palette.faint, fontSize: 11, marginTop: 8 },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
+  followUp: { gap: 8 },
+  followUpTop: { borderTopWidth: 1, borderTopColor: palette.lineSoft, paddingTop: 10, marginTop: 4 },
+  followUpHead: { color: palette.faint, fontSize: 11 },
   centerNote: { color: palette.muted, fontSize: 13, textAlign: 'center', marginTop: 48 },
   failedBox: { margin: 16, padding: 12, borderWidth: 1, borderColor: palette.red, borderRadius: 10, gap: 6 },
   failedText: { color: palette.red, fontSize: 13, fontWeight: '700' },

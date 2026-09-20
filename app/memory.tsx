@@ -39,8 +39,12 @@ export default function MemoryScreen() {
         text: t('mem.delete'),
         style: 'destructive',
         onPress: async () => {
-          await deleteMemory(m.id);
-          load();
+          try {
+            await deleteMemory(m.id);
+            load();
+          } catch (e) {
+            console.warn('删除记忆失败:', e);
+          }
         },
       },
     ]);

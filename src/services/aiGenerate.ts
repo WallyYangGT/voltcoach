@@ -34,7 +34,6 @@ import {
   updateAiChatMessage,
   updateAiReport,
   getActivitySummary,
-  getLang,
   saveMemory,
   type AiChatMode,
   type AiConfig,
@@ -51,12 +50,6 @@ import { buildSkillsSection } from '@/prompts/skills';
 import { buildChatSystemSection } from '@/prompts/chat';
 import { toolDefs, createExecuteTool, type ToolIo } from '@/tools';
 import { loadStoredRecords } from '@/records-store';
-
-/** 会话语言：显式传入 > 训练库 lang 键（界面语言切换时已同步写库） */
-export async function resolveLang(lang?: Lang | null): Promise<Lang> {
-  if (lang === 'zh' || lang === 'en') return lang;
-  return getLang();
-}
 
 // ---------------- ToolIo 绑定（db + records-store → 工具层数据访问） ----------------
 
@@ -100,9 +93,10 @@ async function callAiMaybeAgentic(
   if (config.agentic !== false) {
     return runAgentLoop(fetchImpl, config, messages, toolDefs(opts.lang), createExecuteTool(buildToolIo(), { source: opts.source, lang: opts.lang }), {
       lang: opts.lang,
-      onToolCall: (name, args, result) => {
+      onToolCall: (name, _args, result) => {
+        // 只打工具名与结果长度：args 可能携带 save_memory 的用户个人事实，不落 logcat
         const chars = typeof result === 'string' ? result.length : 0;
-        console.log(`[AI tool] ${name}(${JSON.stringify(args)}) → ${chars} 字符`);
+        console.log(`[AI tool] ${name} → ${chars} 字符`);
       },
       onDegrade: (errMsg) => console.warn(`[AI] 模型不支持 tools，已降级为单轮调用（${errMsg}）`),
     });
@@ -341,6 +335,7 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await updateAiChatMessage(messageId, { status: 'failed', error: msg });
+    await touchAiChat(chatId); // 失败同样刷新 updated_at（列表排序与旧版一致）
     console.error(`[AI chat] 后台生成失败: ${msg}`);
   } finally {
     runningChats.delete(key);
