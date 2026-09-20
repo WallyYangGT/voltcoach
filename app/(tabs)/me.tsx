@@ -13,7 +13,7 @@ import { Button, Divider, Icon, List, SegmentedButtons, Switch, TextInput } from
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { FormSnapshot } from '@/core/form';
 import type { AthleteParams } from '@/core/settings';
-import { computeForm, getAiConfig, getAthleteState, getProfile, setAiConfig, setAthlete, setProfile, type AiConfig, type RiderProfile } from '@/db';
+import { computeForm, getAiConfig, getAthleteState, getProfile, setAiConfig, setAthlete, setProfile } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -30,7 +30,6 @@ export default function MeScreen() {
   const insets = useSafeAreaInsets();
 
   const [data, setData] = useState<MeData | null>(null);
-  const [profile, setProfileState] = useState<RiderProfile | null>(null);
   // 表单草稿（TextInput 字符串；每次聚焦从库值重灌，保证外部改动可见）
   const [ftp, setFtp] = useState('');
   const [maxhr, setMaxhr] = useState('');
@@ -64,7 +63,6 @@ export default function MeScreen() {
         getAiConfig(),
       ]);
       setData({ athlete: state.athlete, configured: state.configured, form });
-      setProfileState(prof);
       setFtp(String(state.athlete.ftp_watts));
       setMaxhr(String(state.athlete.max_hr));
       setWeight(String(state.athlete.weight_kg));
@@ -114,7 +112,7 @@ export default function MeScreen() {
   const saveProfile = async () => {
     setSavingProfile(true);
     try {
-      setProfileState(await setProfile({ identity, goal }, lang));
+      await setProfile({ identity, goal }, lang);
       flashSaved('profile');
     } catch (e) {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));

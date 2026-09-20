@@ -18,7 +18,6 @@ const {
   buildProfileSection,
   buildDateSection,
   buildChatInstruction,
-  buildMetricGlossary,
   compactSummaryForPrompt,
   localizeTimestamps,
   thinToWeekly,

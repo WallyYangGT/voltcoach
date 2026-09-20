@@ -77,7 +77,8 @@ export default function ImportScreen() {
     if (shareChecked.current) return;
     shareChecked.current = true;
     const shared = takeShareFile();
-    if (shared) runImport([shared]);
+    // 导入的 setState 放到微任务里（在 effect 体内同步改状态会触发级联渲染，react-hooks/set-state-in-effect）
+    if (shared) queueMicrotask(() => runImport([shared]));
   }, []);
 
   const okCount = outcomes.filter((o) => o.ok).length;

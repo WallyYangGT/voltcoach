@@ -540,7 +540,6 @@ function aggregateAnomalies(anomalies: unknown[]): unknown[] {
 }
 
 /** 提示词数据整形接受的 summary 形状（动态结构，聚合字段按需访问） */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LooseSummary = Record<string, any>;
 
 /**

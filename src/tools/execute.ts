@@ -21,7 +21,7 @@ import type { AthleteParams } from '../core/settings.ts';
 import { AGENTIC, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from '../core/settings.ts';
 import { estimateFtpFromHistory, type CyclingRideInput } from '../core/ftp.ts';
 import { t, type Lang } from '../core/i18n.ts';
-import { safeName, thinRecords, type ThinResult } from '../core/records.ts';
+import { safeName, type ThinResult } from '../core/records.ts';
 import { compactSummaryForPrompt, localizeTimestamps, type PromptProfile } from '../prompts/prompts.ts';
 import { generateWorkout, simulateForm, type PlanDay } from '../planning/planning.ts';
 

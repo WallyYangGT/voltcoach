@@ -10,7 +10,7 @@
  * 解码——不依赖 TextDecoder（Hermes 环境兼容性），且多字节字符跨块断开也安全。
  */
 
-import { t, type Lang } from '../core/i18n.ts';
+import { t } from '../core/i18n.ts';
 
 /** fetch 形状（expo/fetch 与 globalThis.fetch 皆可） */
 export type FetchLike = typeof globalThis.fetch;

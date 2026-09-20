@@ -49,6 +49,10 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "eslint": "^9.39.4",
+    "eslint-config-expo": "^57.0.2",
+    "eslint-import-resolver-typescript": "^3.10.1",
+    "globals": "^17.12.0",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -58,7 +62,9 @@
     "web": "expo start --web",
     "test": "node --test \"test/*.test.mjs\"",
     "test:coverage": "node --test --experimental-test-coverage \"test/*.test.mjs\"",
-    "golden": "node scripts/golden-diff.mjs"
+    "golden": "node scripts/golden-diff.mjs",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix"
   },
   "private": true
 }
