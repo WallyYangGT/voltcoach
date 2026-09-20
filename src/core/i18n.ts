@@ -35,6 +35,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'memory.empty': '记忆内容不能为空',
     'memory.too_long': '记忆内容过长（上限 {n} 字）',
     'memory.supersede_not_found': '要取代的记忆不存在: {id}',
+    'srv.report_body': '训练分析报告：',
+    'srv.training_data': '本次训练数据（供引用具体细节）：',
     // ---- FTP 历史估算（src/core/ftp.ts data_needs / notes / confidence / references；zh 与旧版逐字一致） ----
     'ftp.few_rides': '窗口内有效功率骑行仅 {n} 次（需 ≥{min} 次）：请积累更多佩戴功率计的骑行数据后再估算',
     'ftp.hr_coverage': '仅 {n}/{total} 次骑行有合格心率数据：后续骑行请全程佩戴心率带，以便心率交叉验证',
@@ -103,6 +105,17 @@ const DICT: Record<Lang, Record<string, string>> = {
     'anom.timer_pause': 'Timer paused {duration}s, starting {at}',
     'anom.hr_jump': 'Heart rate jump {from}→{to} at {at}',
     'anom.other': '{text}',
+    'ai.key_type': 'api_key must be a string',
+    'ai.base_url': 'base_url must be an http(s) URL',
+    'ai.model': 'model must not be empty',
+    'ai.temperature': 'temperature must be between 0 and 2, or left empty to omit',
+    'ai.ms': '{key} must be a number of milliseconds ≥ 1000',
+    'ai.none': 'Provide at least one field: api_key / base_url / model / temperature / timeout_ms / stream / stall_ms / agentic',
+    'memory.empty': 'memory content must not be empty',
+    'memory.too_long': 'memory content too long (max {n} chars)',
+    'memory.supersede_not_found': 'memory to supersede not found: {id}',
+    'srv.report_body': 'Training analysis report:',
+    'srv.training_data': 'Data for this workout (to cite specifics):',
   },
 };
 
