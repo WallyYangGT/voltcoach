@@ -37,6 +37,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     'memory.supersede_not_found': '要取代的记忆不存在: {id}',
     'srv.report_body': '训练分析报告：',
     'srv.training_data': '本次训练数据（供引用具体细节）：',
+    // ---- 未来负荷推演与课表生成（src/planning，M3 自 reference/src/i18n.js 逐字搬运） ----
+    'plan.tsb_recovery': '当前 TSB {tsb} 低于 {thr}，身体未恢复，自动降级为恢复骑',
+    'plan.unknown_type': '未知课表类型: {target}（可选: {opts}）',
+    'plan.too_short': '{dur} 分钟装不下 {label} 课表（热身 {w} + 至少 {reps}×{min} 分钟主组 + 冷身 {c}），请增加时长或换低时长课表',
+    'sim.tsb_low': 'TSB 连续 {days} 天低于 {thr}，深度疲劳风险',
+    'sim.ctl_ramp': 'CTL 周增幅 {pct}% 超过 {thr}%，过度训练风险',
     // ---- FTP 历史估算（src/core/ftp.ts data_needs / notes / confidence / references；zh 与旧版逐字一致） ----
     'ftp.few_rides': '窗口内有效功率骑行仅 {n} 次（需 ≥{min} 次）：请积累更多佩戴功率计的骑行数据后再估算',
     'ftp.hr_coverage': '仅 {n}/{total} 次骑行有合格心率数据：后续骑行请全程佩戴心率带，以便心率交叉验证',
@@ -116,6 +122,11 @@ const DICT: Record<Lang, Record<string, string>> = {
     'memory.supersede_not_found': 'memory to supersede not found: {id}',
     'srv.report_body': 'Training analysis report:',
     'srv.training_data': 'Data for this workout (to cite specifics):',
+    'plan.tsb_recovery': 'Current TSB {tsb} is below {thr} — body not recovered, auto-downgraded to a recovery ride',
+    'plan.unknown_type': 'Unknown workout type: {target} (options: {opts})',
+    'plan.too_short': '{dur} minutes cannot fit the {label} workout (warmup {w} + at least {reps}×{min} min main sets + cooldown {c}) — increase the duration or pick a shorter workout',
+    'sim.tsb_low': 'TSB below {thr} for {days} consecutive days — deep fatigue risk',
+    'sim.ctl_ramp': 'CTL weekly ramp {pct}% exceeds {thr}% — overtraining risk',
   },
 };
 
