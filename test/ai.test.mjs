@@ -284,3 +284,56 @@ test('runAgentLoop: tool arguments 非法 JSON 按空参数处理', async () => 
   await runAgentLoop(f, CFG, [{ role: 'user', content: '问' }], FAKE_TOOLS, async (_n, args) => { seen.push(args); return '{}'; }, { timeoutMs: 5000 });
   assert.deepEqual(seen[0], {});
 });
+
+// ---------------- http.ts 错误分支（code-review 后补齐覆盖） ----------------
+
+const { requestChatCompletion: rcc } = await import('../src/ai/http.ts');
+
+test('requestChatCompletion: 非 JSON 响应体报解析失败', async () => {
+  const f = async () => new Response('not-json{{', { status: 200 });
+  await assert.rejects(rcc(f, 'http://m/v1', 'k', {}), /AI API 响应解析失败/);
+});
+
+test('requestChatCompletion: 空 choices 视为空响应', async () => {
+  const f = jsonFetch(() => ({ status: 200, body: { choices: [] } }));
+  await assert.rejects(rcc(f, 'http://m/v1', 'k', {}), /AI API 返回为空/);
+});
+
+test('requestChatCompletion: SSE data 行为坏 JSON 时抛错并 cancel 流', async () => {
+  const f = sseFetch(['data: {broken json\n\n']);
+  await assert.rejects(
+    requestChatCompletion(f, 'http://m/v1', 'k', {}, { onStreamChunk: () => {} }),
+    SyntaxError,
+  );
+});
+
+test('requestChatCompletion: SSE 帧内 error 对象透出错误', async () => {
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ error: { message: 'quota exceeded' } }) + '\n\n',
+  ]);
+  await assert.rejects(
+    requestChatCompletion(f, 'http://m/v1', 'k', {}, { onStreamChunk: () => {} }),
+    /quota exceeded/,
+  );
+});
+
+test('requestChatCompletion: SSE 解码 2/4 字节 UTF-8 与畸形序列（替换符兜底）', async () => {
+  // é = 2 字节，😀 = 4 字节 surrogate pair，原始 0xFF 单字节 = 畸形序列 → U+FFFD
+  const enc = new TextEncoder();
+  const f = async () => new Response(
+    new ReadableStream({
+      start(controller) {
+        const line = (payload) => enc.encode('data: ' + payload + '\n');
+        controller.enqueue(line(JSON.stringify({ choices: [{ delta: { content: 'café😀' } }] })));
+        controller.enqueue(new Uint8Array([0xff])); // 畸形：孤立的续字节位模式
+        controller.enqueue(line(JSON.stringify({ choices: [{ delta: { content: '!' } }] })));
+        controller.enqueue(enc.encode('data: [DONE]\n'));
+        controller.close();
+      },
+    }),
+    { status: 200 },
+  );
+  const text = await requestChatCompletion(f, 'http://m/v1', 'k', {}, { onStreamChunk: () => {} });
+  // 畸形字节产出替换符且污染所在行前缀 → 该 SSE 帧被跳过但流不中断（与旧版断字语义一致）
+  assert.equal(text, 'café😀');
+});

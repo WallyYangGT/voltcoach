@@ -245,7 +245,8 @@ export default function AiSessionScreen() {
         )}
       </ScrollView>
 
-      {/* 输入框：report 页仅 completed 后开放追问；chat 页常开 */}
+      {/* 输入行：report 页仅 completed 后开放追问；chat 页常开。
+          发送用显性 Button（Paper TextInput.Icon 在 multiline 下触摸不可靠，冒烟实证） */}
       {(kind === 'chat' || report?.status === 'completed') && (
         <View style={[styles.inputRow, { paddingBottom: insets.bottom + 10 }]}>
           <TextInput
@@ -256,15 +257,16 @@ export default function AiSessionScreen() {
             onChangeText={setDraft}
             placeholder={kind === 'report' ? t('session.followUp.hint') : t('session.chat.hint')}
             style={styles.input}
-            right={
-              <TextInput.Icon
-                icon="send"
-                color={draft.trim() ? palette.volt : palette.faint}
-                disabled={sending}
-                onPress={send}
-              />
-            }
           />
+          <Button
+            mode="contained"
+            compact
+            buttonColor={palette.volt}
+            textColor={palette.bg}
+            disabled={sending || !draft.trim()}
+            onPress={send}>
+            {t('session.send')}
+          </Button>
         </View>
       )}
     </View>
@@ -316,6 +318,6 @@ const styles = StyleSheet.create({
   bubbleAi: { alignSelf: 'flex-start', backgroundColor: palette.panel, borderWidth: 1, borderColor: palette.lineSoft },
   bubbleUserText: { color: palette.text, fontSize: 13, lineHeight: 20 },
   pendingNote: { color: palette.orange, fontSize: 12 },
-  inputRow: { paddingHorizontal: 12, paddingTop: 6 },
-  input: { backgroundColor: palette.panel, maxHeight: 120 },
+  inputRow: { paddingHorizontal: 12, paddingTop: 6, flexDirection: 'row', alignItems: 'flex-end', gap: 8 },
+  input: { backgroundColor: palette.panel, maxHeight: 120, flex: 1 },
 });
