@@ -1,47 +1,245 @@
 /**
- * 「我的」占位 — M2 落地设置主体。
- * 当前提供：界面语言切换（验证 i18n 双语链路）+ 未来入口列表。
+ * 「我的」（M2 设置主体）：骑手摘要卡（FTP/最大心率/体重 + 当前 form 状态）
+ * + 骑手参数表单 + 身份与训练目标 + 界面语言 + 入口行（AI 记忆/数据管理/关于）。
+ * 移植自 Web 版 views/settings.js 的骑手参数与身份目标两个面板（AI 服务配置属 M3、
+ * 数据管理属 M4，先留入口行）；校验在 db 层（setAthlete/setProfile 双语 Error，
+ * 界面 Alert 透传）。未配置骑手参数时顶部 banner 引导（§4.3，不强制锁定）。
  */
-import { Card, Divider, Icon, List, SegmentedButtons, Text } from 'react-native-paper';
-import { StyleSheet, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Button, Divider, Icon, List, SegmentedButtons, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { FormSnapshot } from '@/core/form';
+import type { AthleteParams } from '@/core/settings';
+import { computeForm, getAthleteState, getProfile, setAthlete, setProfile, type RiderProfile } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
+
+/** 摘要卡数据包（loading 态 null） */
+interface MeData {
+  athlete: AthleteParams;
+  configured: boolean;
+  form: FormSnapshot | null;
+}
 
 export default function MeScreen() {
   const { lang, setLang, t } = useI18n();
   const insets = useSafeAreaInsets();
+
+  const [data, setData] = useState<MeData | null>(null);
+  const [profile, setProfileState] = useState<RiderProfile | null>(null);
+  // 表单草稿（TextInput 字符串；每次聚焦从库值重灌，保证外部改动可见）
+  const [ftp, setFtp] = useState('');
+  const [maxhr, setMaxhr] = useState('');
+  const [weight, setWeight] = useState('');
+  const [identity, setIdentity] = useState('');
+  const [goal, setGoal] = useState('');
+  const [savedFlash, setSavedFlash] = useState<'athlete' | 'profile' | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const [state, form, prof] = await Promise.all([
+        getAthleteState(),
+        computeForm(today, lang),
+        getProfile(),
+      ]);
+      setData({ athlete: state.athlete, configured: state.configured, form });
+      setProfileState(prof);
+      setFtp(String(state.athlete.ftp_watts));
+      setMaxhr(String(state.athlete.max_hr));
+      setWeight(String(state.athlete.weight_kg));
+      setIdentity(prof.identity);
+      setGoal(prof.goal);
+    } catch (e) {
+      console.warn('设置页加载失败:', e);
+    }
+  }, [lang]);
+
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
+
+  const flashSaved = (which: 'athlete' | 'profile') => {
+    setSavedFlash(which);
+    setTimeout(() => setSavedFlash(null), 2000);
+  };
+
+  const saveAthlete = async () => {
+    setSaving(true);
+    try {
+      await setAthlete({ ftp_watts: Number(ftp), max_hr: Number(maxhr), weight_kg: Number(weight) }, lang);
+      await load();
+      flashSaved('athlete');
+    } catch (e) {
+      Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveProfile = async () => {
+    setSaving(true);
+    try {
+      setProfileState(await setProfile({ identity, goal }, lang));
+      flashSaved('profile');
+    } catch (e) {
+      Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const form = data?.form ?? null;
+  const formColor = !form
+    ? palette.muted
+    : form.tsb >= 5
+      ? palette.green
+      : form.tsb >= -10
+        ? palette.text
+        : form.tsb >= -20
+          ? palette.orange
+          : palette.red;
+
   return (
-    <View style={[styles.page, { paddingTop: insets.top + 16 }]}>
-      <Text variant="headlineMedium" style={styles.title}>
-        {t('me.title')}
-      </Text>
-      <Card style={styles.card}>
-        <Card.Content>
-          <Text variant="bodyMedium" style={styles.muted}>
-            {t('me.placeholder')}
-          </Text>
-        </Card.Content>
-      </Card>
+    <ScrollView
+      style={styles.page}
+      contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 96, gap: 12 }}>
+      <Text style={styles.title}>{t('me.title')}</Text>
+      <Text style={styles.sub}>{t('set.sub')}</Text>
 
-      <Card style={styles.card}>
-        <Card.Content>
-          <Text variant="labelLarge" style={styles.label}>
-            {t('me.lang')}
-          </Text>
-          <SegmentedButtons
-            value={lang}
-            onValueChange={(v) => setLang(v === 'en' ? 'en' : 'zh')}
-            buttons={[
-              { value: 'zh', label: '中文' },
-              { value: 'en', label: 'English' },
-            ]}
-            style={{ marginTop: 8 }}
-          />
-        </Card.Content>
-      </Card>
+      {/* 首开引导 banner：未配置骑手参数时提示（不强制锁定，§4.3） */}
+      {data && !data.configured && (
+        <View style={[styles.banner, { borderColor: palette.voltDim }]}>
+          <Text style={styles.bannerText}>{t('set.banner')}</Text>
+        </View>
+      )}
 
-      <Card style={styles.card}>
+      {/* 骑手摘要卡：三大参数 + 当前 form 状态（§4.3） */}
+      <View style={styles.card}>
+        <View style={styles.summaryRow}>
+          <SummaryMetric label={t('me.ftp')} value={data ? `${data.athlete.ftp_watts}W` : '—'} />
+          <SummaryMetric label={t('me.maxhr')} value={data ? `${data.athlete.max_hr}` : '—'} />
+          <SummaryMetric label={t('me.weight')} value={data ? `${data.athlete.weight_kg}kg` : '—'} />
+        </View>
+        <Divider style={styles.divider} />
+        <Text style={styles.formLine}>
+          <Text style={styles.formLabel}>{t('me.form')}</Text>
+          {form ? (
+            <>
+              <Text style={[styles.formValue, { color: formColor }]}>
+                {' '}
+                TSB {form.tsb > 0 ? '+' : ''}
+                {form.tsb}
+              </Text>
+              <Text style={styles.formNote}> · {form.form_note}</Text>
+            </>
+          ) : (
+            <Text style={styles.formNote}> — </Text>
+          )}
+        </Text>
+      </View>
+
+      {/* 骑手参数表单（范围校验在 db 层：FTP 50–500 / 心率 120–230 / 体重 30–200） */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{t('set.athlete')}</Text>
+        <TextInput
+          mode="outlined"
+          dense
+          label={t('set.ftp')}
+          value={ftp}
+          onChangeText={setFtp}
+          keyboardType="numeric"
+          style={styles.input}
+        />
+        <TextInput
+          mode="outlined"
+          dense
+          label={t('set.maxhr')}
+          value={maxhr}
+          onChangeText={setMaxhr}
+          keyboardType="numeric"
+          style={styles.input}
+        />
+        <TextInput
+          mode="outlined"
+          dense
+          label={t('set.weight')}
+          value={weight}
+          onChangeText={setWeight}
+          keyboardType="numeric"
+          style={styles.input}
+        />
+        <View style={styles.saveRow}>
+          <Button
+            mode="contained"
+            buttonColor={palette.volt}
+            textColor={palette.bg}
+            disabled={saving}
+            onPress={saveAthlete}>
+            {t('set.save')}
+          </Button>
+          {savedFlash === 'athlete' && <Text style={styles.saved}>{t('set.saved')}</Text>}
+        </View>
+        <Text style={styles.note}>{t('set.athlete.note')}</Text>
+      </View>
+
+      {/* 身份与训练目标（AI 报告个性化用，M3 消费；全空视为未配置） */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{t('set.profile')}</Text>
+        <TextInput
+          mode="outlined"
+          dense
+          label={t('set.identity')}
+          value={identity}
+          onChangeText={setIdentity}
+          placeholder={t('set.identity.placeholder')}
+          style={styles.input}
+        />
+        <TextInput
+          mode="outlined"
+          dense
+          multiline
+          label={t('set.goal')}
+          value={goal}
+          onChangeText={setGoal}
+          placeholder={t('set.goal.placeholder')}
+          style={styles.input}
+        />
+        <View style={styles.saveRow}>
+          <Button
+            mode="contained"
+            buttonColor={palette.volt}
+            textColor={palette.bg}
+            disabled={saving}
+            onPress={saveProfile}>
+            {t('set.save')}
+          </Button>
+          {savedFlash === 'profile' && <Text style={styles.saved}>{t('set.saved')}</Text>}
+        </View>
+        <Text style={styles.note}>{t('set.profile.note')}</Text>
+      </View>
+
+      {/* 界面语言（切换即时生效并写训练库 lang 键，AI 报告语言随动） */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>{t('me.lang')}</Text>
+        <SegmentedButtons
+          value={lang}
+          onValueChange={(v) => setLang(v === 'en' ? 'en' : 'zh')}
+          buttons={[
+            { value: 'zh', label: '中文' },
+            { value: 'en', label: 'English' },
+          ]}
+          style={{ marginTop: 8 }}
+        />
+      </View>
+
+      {/* 入口行：AI 记忆（M3）/ 数据管理（M4）/ 关于 */}
+      <View style={styles.card}>
         <List.Item
           title={t('me.memory')}
           left={(props) => <Icon {...props} size={20} source="brain" color={palette.muted} />}
@@ -62,36 +260,46 @@ export default function MeScreen() {
           right={() => <Text style={styles.soon}>{t('me.soon')}</Text>}
           titleStyle={{ color: palette.text }}
         />
-      </Card>
+      </View>
+    </ScrollView>
+  );
+}
+
+function SummaryMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <View style={{ gap: 2 }}>
+      <Text style={styles.summaryVal}>{value}</Text>
+      <Text style={styles.summaryLabel}>{label}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  page: {
-    flex: 1,
-    backgroundColor: palette.bg,
-    paddingHorizontal: 16,
-    gap: 12,
-  },
-  title: {
-    color: palette.text,
-    fontWeight: '700',
-  },
+  page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
+  title: { color: palette.text, fontSize: 22, fontWeight: '700' },
+  sub: { color: palette.muted, fontSize: 12 },
+  banner: { borderWidth: 1, borderRadius: 10, padding: 12, backgroundColor: palette.panel },
+  bannerText: { color: palette.text, fontSize: 12, lineHeight: 19 },
   card: {
     backgroundColor: palette.panel,
     borderColor: palette.lineSoft,
     borderWidth: 1,
+    borderRadius: 10,
+    padding: 14,
+    gap: 10,
   },
-  muted: {
-    color: palette.muted,
-    lineHeight: 22,
-  },
-  label: {
-    color: palette.muted,
-  },
-  soon: {
-    color: palette.faint,
-    fontSize: 12,
-  },
+  cardTitle: { color: palette.text, fontSize: 14, fontWeight: '700' },
+  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', paddingRight: 12 },
+  summaryVal: { color: palette.volt, fontSize: 22, fontWeight: '700', fontStyle: 'italic', fontVariant: ['tabular-nums'] },
+  summaryLabel: { color: palette.faint, fontSize: 11 },
+  divider: { backgroundColor: palette.lineSoft },
+  formLine: { fontSize: 12 },
+  formLabel: { color: palette.muted },
+  formValue: { fontWeight: '700', fontVariant: ['tabular-nums'] },
+  formNote: { color: palette.muted },
+  input: { backgroundColor: palette.panel2 },
+  saveRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  saved: { color: palette.green, fontSize: 12 },
+  note: { color: palette.faint, fontSize: 11, lineHeight: 16 },
+  soon: { color: palette.faint, fontSize: 12 },
 });
