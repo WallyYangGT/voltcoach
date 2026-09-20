@@ -104,6 +104,30 @@ export const CADENCE_ANALYSIS = {
   high_cadence_rpm: 90, // 高于该踏频视为高踏频
 };
 
+// ============ AI 服务出厂默认值（M3：设置页保存后以训练库 settings 表 ai 行为准，默认 Kimi） ============
+// api_key 例外：不进库，存 expo-secure-store（Android Keystore），见 src/db/index.ts
+export interface AiConfig {
+  api_key: string | null; // API 密钥；为空时 AI 报告退化为"复制提示词"模式
+  base_url: string; // OpenAI 兼容接口地址
+  model: string; // 模型名
+  temperature: number | null; // 采样温度；null 表示请求体不传（部分模型只允许特定取值）
+  timeout_ms: number; // 总等待超时（复盘报告生成慢，默认 10 分钟）
+  stream: boolean; // 是否流式输出；部分账号/模型不真正流式吐字，非流式更稳
+  stall_ms: number; // 流式空闲超时，每收到一个 chunk 重置
+  agentic: boolean; // 是否启用 agentic 工具调用；模型不支持 tools 时自动降级单轮
+}
+
+export const AI_CONFIG: AiConfig = {
+  api_key: null,
+  base_url: 'https://api.moonshot.cn/v1', // OpenAI 兼容接口地址
+  model: 'kimi-k2.6',
+  temperature: null,
+  timeout_ms: 600000,
+  stream: false,
+  stall_ms: 60000,
+  agentic: true,
+};
+
 // ============ 以下配置块随对应模块在后续里程碑搬运 ============
 
 // Agentic 工具调用参数（M3 src/ai / src/tools）
@@ -123,4 +147,54 @@ export const FORM_SIMULATION = {
   tsb_low_days: 7, // TSB 持续低于阈值达到该天数触发警示
   ctl_ramp_pct: 10, // CTL 周增幅上限（%），超出触发过度训练风险警示
   tsb_recovery: -20, // generateWorkout 中 TSB 低于该值自动降级为恢复课
+};
+
+// ============ 单次课表模板（M3 src/planning generateWorkout 使用） ============
+// 功率按 FTP 百分比；时长单位分钟；TSS 估算按各段 时长秒 × IF² / 36 逐段求和
+export interface WorkoutTemplate {
+  label: string;
+  warmup_min?: number;
+  steady?: { pct: [number, number]; if: number }; // 无间歇组的全程稳态课
+  set?: { pct: [number, number]; if: number; min_min: number; max_min: number };
+  reps?: [number, number];
+  rest_min?: number | null; // null = 组间休息与单组等时
+  cooldown_min?: number;
+}
+
+export const WORKOUT_TEMPLATES: Record<
+  'recovery' | 'endurance' | 'sweet_spot' | 'threshold' | 'vo2max',
+  WorkoutTemplate
+> = {
+  recovery: {
+    label: '恢复骑',
+    steady: { pct: [0.4, 0.55], if: 0.5 }, // 全程稳态，无间歇组
+  },
+  endurance: {
+    label: '有氧耐力',
+    steady: { pct: [0.56, 0.75], if: 0.68 },
+  },
+  sweet_spot: {
+    label: '甜区',
+    warmup_min: 15,
+    set: { pct: [0.88, 0.94], if: 0.91, min_min: 10, max_min: 20 },
+    reps: [2, 3],
+    rest_min: 5,
+    cooldown_min: 10,
+  },
+  threshold: {
+    label: '阈值',
+    warmup_min: 15,
+    set: { pct: [0.95, 1.05], if: 1.0, min_min: 10, max_min: 15 },
+    reps: [2, 3],
+    rest_min: 5,
+    cooldown_min: 10,
+  },
+  vo2max: {
+    label: 'VO2max',
+    warmup_min: 15,
+    set: { pct: [1.06, 1.2], if: 1.13, min_min: 3, max_min: 5 },
+    reps: [4, 6],
+    rest_min: null, // null = 组间休息与单组等时
+    cooldown_min: 10,
+  },
 };

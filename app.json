@@ -55,9 +55,12 @@
       [
         "expo-share-intent",
         {
-          "androidIntentFilters": ["*/*"]
+          "androidIntentFilters": [
+            "*/*"
+          ]
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,
