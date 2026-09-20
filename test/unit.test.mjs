@@ -28,6 +28,7 @@ import { parseRecordsCsv, thinRecords, safeName } from '../src/core/records.ts';
 import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '../src/core/form.ts';
 import { formNote, formatAnomaly } from '../src/core/i18n.ts';
 import { estimateFtpFromHistory } from '../src/core/ftp.ts';
+import { monthlySummaryFromRows } from '../src/core/monthly.ts';
 import { ATHLETE } from '../src/core/settings.ts';
 
 // 构造逐秒记录对象的辅助函数
@@ -458,4 +459,64 @@ test('estimateFtpFromHistory: 缺 5min 峰功率时 CP 模型退化，仅用 Cog
   assert.equal(r.estimate.methods.cp_model, null);
   assert.equal(r.estimate.ftp_w, r.estimate.methods.coggan_20min.ftp_w);
   assert.match(r.notes.join('\n'), /CP 模型不可用/);
+});
+
+// ---------------- 月度汇总（M2 搬运：monthly.ts，归并口径同源自 reference/src/db.js monthlySummary） ----------------
+
+// 强度分布 summary_json 构造辅助
+const zoneJson = (z) => JSON.stringify({ power: { zone_distribution_pct: z } });
+const monthRow = (date, dur, dist, tss, summary_json = '{}') => ({
+  date,
+  duration_sec: dur,
+  distance_km: dist,
+  tss,
+  summary_json,
+});
+
+test('monthlySummaryFromRows: 按自然月归并 TSS/时长/距离/次数，月份倒序、n 截断', () => {
+  const rows = [
+    monthRow('2026-09-05', 3600, 40, 100),
+    monthRow('2026-09-01', 1800, 20, 50), // summary_json 无 power 段 → 该月无强度数据
+    monthRow('2026-08-20', 7200, 90, 180, 'corrupted{'), // 损坏 JSON 只丢强度分布
+  ];
+  const r = monthlySummaryFromRows(rows);
+  assert.equal(r.length, 2);
+  assert.equal(r[0].month, '2026-09');
+  assert.equal(r[0].tss, 150);
+  assert.equal(r[0].hours, 1.5);
+  assert.equal(r[0].distance_km, 60);
+  assert.equal(r[0].sessions, 2);
+  assert.equal(r[0].intensity_pct, null); // 9 月两行均无有效强度数据
+  assert.equal(r[0].intensity_type, null);
+  assert.equal(r[1].month, '2026-08');
+  assert.equal(r[1].tss, 180);
+  // n 截断：只取最近 1 个月
+  assert.equal(monthlySummaryFromRows(rows, 1).length, 1);
+});
+
+test('monthlySummaryFromRows: 强度按时长加权，类型判定 极化/金字塔/甜区', () => {
+  // 极化：低强度(Z1-Z2) ≥75% 且 高>中
+  const pol = monthlySummaryFromRows([
+    monthRow('2026-09-01', 3600, 40, 100, zoneJson({ Z1: 60, Z2: 20, Z5: 20 })),
+  ]);
+  assert.deepEqual(pol[0].intensity_pct, { low: 80, mid: 0, high: 20 });
+  assert.equal(pol[0].intensity_type, 'polarized');
+  // 金字塔：低>中>高（60/40/0）
+  const pyr = monthlySummaryFromRows([
+    monthRow('2026-09-01', 3600, 40, 100, zoneJson({ Z2: 60, Z3: 30, Z4: 10 })),
+  ]);
+  assert.deepEqual(pyr[0].intensity_pct, { low: 60, mid: 40, high: 0 });
+  assert.equal(pyr[0].intensity_type, 'pyramidal');
+  // 甜区：其余取向（中 100%）
+  const sw = monthlySummaryFromRows([
+    monthRow('2026-09-01', 3600, 40, 100, zoneJson({ Z3: 60, Z4: 40 })),
+  ]);
+  assert.equal(sw[0].intensity_type, 'sweet_spot');
+  // 加权口径：两次骑行时长不同，按时长加权累计（1800s / 1800s / 1800s → 各 33.3%）
+  const w = monthlySummaryFromRows([
+    monthRow('2026-09-01', 3600, 40, 100, zoneJson({ Z1: 50, Z5: 50 })),
+    monthRow('2026-09-02', 1800, 20, 50, zoneJson({ Z3: 100 })),
+  ]);
+  assert.deepEqual(w[0].intensity_pct, { low: 33.3, mid: 33.3, high: 33.3 });
+  assert.equal(w[0].intensity_type, 'sweet_spot');
 });

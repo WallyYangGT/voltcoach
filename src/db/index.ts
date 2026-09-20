@@ -16,8 +16,10 @@ import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import type { Summary } from '@/core/analyze';
-import { fillDailyTss, formSnapshotAtEnd } from '@/core/form';
+import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '@/core/form';
+import type { CyclingRideInput } from '@/core/ftp';
 import { t, type Lang } from '@/core/i18n';
+import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
 import { ATHLETE, FTP_ESTIMATION, type AthleteParams } from '@/core/settings';
 
 const DB_NAME = 'fitness.db';
@@ -352,6 +354,72 @@ async function dailyTssSeries(endDate: string) {
 export async function computeForm(date: string, lang: Lang = 'zh') {
   const series = await dailyTssSeries(date);
   return formSnapshotAtEnd(series, lang);
+}
+
+/**
+ * 最近 N 天逐日负荷序列 [{ date, tss, ctl, atl, tsb }]（口径与旧版 recentFormDaily 一致）。
+ * 递推用 core/form 的 formSeriesDaily；序列末端延伸到今天（UTC，无训练日 TSS=0 照常
+ * 参与衰减），趋势图与「当前体能指数」反映今天而不是停在最后一次训练的日期。
+ * 默认 90 天为仪表盘趋势图口径（Web 版 dashboard 同款）。
+ */
+export async function recentFormDaily(days = 90): Promise<{ date: string; tss: number; ctl: number; atl: number; tsb: number }[]> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ d: string | null }>(`SELECT MAX(date) AS d FROM activities`);
+  if (!row?.d) return [];
+  // 活动日期为 UTC 口径（records 时间戳的 ISO 前 10 位），今天同样取 UTC
+  const today = new Date().toISOString().slice(0, 10);
+  const series = await dailyTssSeries(row.d < today ? today : row.d);
+  return formSeriesDaily(series).slice(-days);
+}
+
+// ---------------- 月度汇总（归并计算在 core/monthly，本层只查询） ----------------
+
+/** 最近 n 个月汇总（月 TSS/时长/距离/次数 + 强度占比与类型，口径与旧版 monthlySummary 一致） */
+export async function monthlySummary(n = 6): Promise<MonthlyItem[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<MonthlyRow>(
+    `SELECT date, duration_sec, distance_km, tss, summary_json
+     FROM activities ORDER BY date DESC`,
+  );
+  return monthlySummaryFromRows(rows, n);
+}
+
+// ---------------- FTP 历史估算取数（估算算法在 core/ftp，本层只查询） ----------------
+
+/** 最近 N 天内的骑行训练完整 summary（FTP 估算输入，按日期倒序；口径与旧版 cyclingSummariesSince 一致） */
+export async function cyclingSummariesSince(days = 42): Promise<CyclingRideInput[]> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ d: string | null }>(`SELECT MAX(date) AS d FROM activities`);
+  if (!row?.d) return [];
+  const since = new Date(row.d + 'T00:00:00Z');
+  since.setUTCDate(since.getUTCDate() - days);
+  const sinceStr = since.toISOString().slice(0, 10);
+  const rows = await db.getAllAsync<{
+    file_name: string;
+    date: string;
+    duration_sec: number | null;
+    summary_json: string;
+  }>(
+    `SELECT file_name, date, duration_sec, summary_json
+     FROM activities
+     WHERE sport = 'cycling' AND date >= ?
+     ORDER BY date DESC`,
+    sinceStr,
+  );
+  const out: CyclingRideInput[] = [];
+  for (const r of rows) {
+    try {
+      out.push({
+        file_name: r.file_name,
+        date: r.date,
+        duration_sec: r.duration_sec,
+        summary: JSON.parse(r.summary_json),
+      });
+    } catch {
+      // 存档 JSON 损坏时跳过该条
+    }
+  }
+  return out;
 }
 
 // ---------------- 界面语言（settings 表 lang 键，AI 提示词缺省取此值） ----------------
