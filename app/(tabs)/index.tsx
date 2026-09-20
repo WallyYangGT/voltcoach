@@ -28,6 +28,7 @@ import {
   monthlySummary,
   recentFormDaily,
 } from '@/db';
+import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -46,6 +47,7 @@ export default function HomeScreen() {
   const { width } = useWindowDimensions();
   const [data, setData] = useState<HomeData | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [ftpOpen, setFtpOpen] = useState(false); // FTP 科学估算面板展开态（dash.ftp_btn）
 
   const load = useCallback(async () => {
     try {
@@ -103,13 +105,27 @@ export default function HomeScreen() {
             />
           </>
         )}
-        <HeroTile color={palette.volt} label={t('dash.ftp')} value={`${data?.athlete.ftp_watts ?? '—'}`} note="W" />
+        {/* FTP 瓦片：值 + 「科学估算」入口（Web 版 hero 的 note 位即按钮） */}
+        <View style={styles.tile}>
+          <View style={[styles.tileBar, { backgroundColor: palette.volt }]} />
+          <Text style={styles.tileLabel}>{t('dash.ftp')}</Text>
+          <Text style={[styles.tileValue, { color: palette.volt }]}>
+            {data?.athlete.ftp_watts ?? '—'}
+            <Text style={styles.tileUnit}> W</Text>
+          </Text>
+          <Pressable style={styles.ftpBtn} onPress={() => setFtpOpen((v) => !v)}>
+            <Text style={styles.ftpBtnText}>{t('dash.ftp_btn')}</Text>
+          </Pressable>
+        </View>
         {!last && (
           <View style={[styles.tile, styles.tileFull]}>
             <Text style={styles.emptyText}>{t('dash.empty')}</Text>
           </View>
         )}
       </View>
+
+      {/* FTP 科学估算面板（展开时渲染，采纳写回后经 onApplied 刷新 hero） */}
+      {ftpOpen && <FtpEstimatePanel onApplied={load} />}
 
       {/* 负荷趋势（近 90 天逐日 CTL/ATL/TSB + TSS 灰柱；空库隐藏面板） */}
       {last && (
@@ -257,7 +273,10 @@ const styles = StyleSheet.create({
   tileBar: { position: 'absolute', top: 0, left: 0, right: 0, height: 3 },
   tileLabel: { color: palette.muted, fontSize: 11, letterSpacing: 0.5, marginTop: 3 },
   tileValue: { fontSize: 36, fontWeight: '700', fontStyle: 'italic', fontVariant: ['tabular-nums'] },
+  tileUnit: { fontSize: 14, fontStyle: 'normal', color: palette.muted, fontWeight: '400' },
   tileNote: { color: palette.faint, fontSize: 11 },
+  ftpBtn: { borderRadius: 6, borderWidth: 1, borderColor: palette.voltDim, paddingHorizontal: 8, paddingVertical: 4, alignSelf: 'flex-start' },
+  ftpBtnText: { color: palette.volt, fontSize: 11, fontWeight: '600' },
   emptyText: { color: palette.muted, textAlign: 'center', lineHeight: 24, paddingVertical: 8 },
   panel: {
     backgroundColor: palette.panel,
