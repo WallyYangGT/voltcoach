@@ -23,6 +23,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'category.invalid': '分类需为 training/race/recovery/leisure',
     'activity.not_found': '训练不存在',
     'note.too_long': '备注过长（上限 {n} 字）',
+    'profile.type': '{key} 需为字符串',
+    'profile.too_long': '{key} 过长（上限 {n} 字）',
     // ---- FTP 历史估算（src/core/ftp.ts data_needs / notes / confidence / references；zh 与旧版逐字一致） ----
     'ftp.few_rides': '窗口内有效功率骑行仅 {n} 次（需 ≥{min} 次）：请积累更多佩戴功率计的骑行数据后再估算',
     'ftp.hr_coverage': '仅 {n}/{total} 次骑行有合格心率数据：后续骑行请全程佩戴心率带，以便心率交叉验证',
@@ -61,6 +63,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'category.invalid': 'category must be training/race/recovery/leisure',
     'activity.not_found': 'activity not found',
     'note.too_long': 'note too long (max {n} chars)',
+    'profile.type': '{key} must be a string',
+    'profile.too_long': '{key} too long (max {n} chars)',
     'ftp.few_rides': 'Only {n} rides in the window have valid power (need ≥{min}): record more power-meter rides before estimating',
     'ftp.hr_coverage': 'Only {n}/{total} rides have valid HR data: wear a HR strap on all rides so HR cross-checking is possible',
     'ftp.no_20min': 'No ride in the window has 20 continuous minutes of data: do a ≥30 min ride with a sustained 20 min high-power effort (long outdoor climb or indoor trainer)',

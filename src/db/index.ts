@@ -190,6 +190,73 @@ export async function setAthlete(partial: Partial<AthleteParams>, lang: Lang = '
   return merged;
 }
 
+// ---------------- 用户背景与训练目标（存 settings 表 profile 行，「我的」设置页维护） ----------------
+
+/** 用户背景与训练目标（identity 一句话身份 / goal 一段话目标） */
+export interface RiderProfile {
+  identity: string;
+  goal: string;
+  /** 任一字段非空即视为已配置 */
+  configured: boolean;
+}
+
+// 各字段长度上限：身份一句话、目标一段话
+const PROFILE_LIMITS = { identity: 100, goal: 500 } as const;
+
+/** 当前用户背景与训练目标；未配置时两字段为空字符串（行内容损坏时按未配置返回） */
+export async function getProfile(): Promise<RiderProfile> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = 'profile'`,
+  );
+  let profile: RiderProfile = { identity: '', goal: '', configured: false };
+  if (row) {
+    try {
+      const p = JSON.parse(row.value);
+      profile = {
+        identity: typeof p.identity === 'string' ? p.identity : '',
+        goal: typeof p.goal === 'string' ? p.goal : '',
+        configured: false,
+      };
+    } catch {
+      // 行内容损坏时按未配置返回
+    }
+  }
+  return { ...profile, configured: !!(profile.identity || profile.goal) };
+}
+
+/**
+ * 更新用户背景与训练目标（允许只给部分字段）：校验 → 合并写库。
+ * 两字段都为空时删除 profile 行（视为未配置）。非法值抛 Error（message 按 lang 双语）。
+ */
+export async function setProfile(
+  partial: Partial<{ identity: string; goal: string }>,
+  lang: Lang = 'zh',
+): Promise<RiderProfile> {
+  const current = await getProfile();
+  const merged = { identity: current.identity, goal: current.goal };
+  for (const key of Object.keys(PROFILE_LIMITS) as (keyof typeof PROFILE_LIMITS)[]) {
+    if (partial?.[key] == null) continue;
+    if (typeof partial[key] !== 'string')
+      throw new Error(t(lang, 'profile.type', { key }));
+    const v = (partial[key] as string).trim();
+    if (v.length > PROFILE_LIMITS[key])
+      throw new Error(t(lang, 'profile.too_long', { key, n: PROFILE_LIMITS[key] }));
+    merged[key] = v;
+  }
+  const db = await getDb();
+  if (!merged.identity && !merged.goal) {
+    await db.runAsync(`DELETE FROM settings WHERE key = 'profile'`);
+  } else {
+    await db.runAsync(
+      `INSERT INTO settings (key, value) VALUES ('profile', ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      JSON.stringify(merged),
+    );
+  }
+  return { ...merged, configured: !!(merged.identity || merged.goal) };
+}
+
 // ---------------- 训练记录（M1：导入 / 列表 / 详情） ----------------
 
 /** 分析结果入库：同一文件名重复分析时覆盖更新（口径与旧版一致） */
