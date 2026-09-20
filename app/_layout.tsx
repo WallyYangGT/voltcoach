@@ -65,6 +65,15 @@ function RootStack() {
         name="activity/[id]"
         options={{ animation: 'slide_from_right' }}
       />
+      {/* M3：AI 会话详情（报告正文+追问 / 直接对话）与记忆管理页 */}
+      <Stack.Screen
+        name="ai/session/[id]"
+        options={{ animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
+        name="memory"
+        options={{ animation: 'slide_from_right' }}
+      />
       <Stack.Screen name="import" options={{ presentation: 'fullScreenModal' }} />
     </Stack>
   );

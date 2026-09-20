@@ -194,6 +194,21 @@ export async function createReportDraft(
   return createPendingAiReport(mode, context, prompt);
 }
 
+// 运行中注册表（进程内）：同一任务不重复 fire；UI 侧据此判断 pending 占位是
+// "生成中"还是"应用被杀留下的残留"（残留时重跑以恢复——提示词/系统段均已落库）
+const runningReports = new Set<number>();
+const runningChats = new Set<string>();
+
+/** 报告生成是否正在进行（会话详情页的恢复判断用） */
+export function isReportGenerating(reportId: number): boolean {
+  return runningReports.has(reportId);
+}
+
+/** 对话消息生成是否正在进行 */
+export function isChatGenerating(chatId: number, messageId: number): boolean {
+  return runningChats.has(`${chatId}:${messageId}`);
+}
+
 /**
  * 报告生成任务（fire-and-forget）：读回占位记录的 prompt，agentic 开启时追加
  * 工具指引与记忆段，生成结果回写 completed；失败回写 failed + error（UI 轮询
@@ -201,6 +216,8 @@ export async function createReportDraft(
  * 函数即可（系统段与提示词均已落库，无会话态丢失）。
  */
 export async function generateReport(reportId: number, lang: Lang = 'zh'): Promise<void> {
+  if (runningReports.has(reportId)) return; // 同一报告不重复 fire
+  runningReports.add(reportId);
   try {
     const config = await requireAiConfig(lang);
     const report = await getAiReport(reportId);
@@ -220,6 +237,8 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     const msg = e instanceof Error ? e.message : String(e);
     await updateAiReport(reportId, { status: 'failed', error: msg });
     console.error(`[AI] 后台分析失败: ${msg}`);
+  } finally {
+    runningReports.delete(reportId);
   }
 }
 
@@ -301,6 +320,9 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
  * 应用中途被杀留下的 pending 占位，重进会话页时以同一 messageId 重跑本函数即可。
  */
 export async function runChatGeneration(chatId: number, messageId: number, lang: Lang = 'zh'): Promise<void> {
+  const key = `${chatId}:${messageId}`;
+  if (runningChats.has(key)) return; // 同一消息不重复 fire
+  runningChats.add(key);
   try {
     const config = await requireAiConfig(lang);
     const chat = await getAiChat(chatId);
@@ -320,5 +342,7 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     const msg = e instanceof Error ? e.message : String(e);
     await updateAiChatMessage(messageId, { status: 'failed', error: msg });
     console.error(`[AI chat] 后台生成失败: ${msg}`);
+  } finally {
+    runningChats.delete(key);
   }
 }

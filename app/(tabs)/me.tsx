@@ -6,7 +6,7 @@
  * 留入口行）；校验在 db 层（setAthlete/setProfile/setAiConfig 双语 Error，界面 Alert
  * 透传）。未配置骑手参数时顶部 banner 引导（§4.3，不强制锁定）。
  */
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Button, Divider, Icon, List, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
@@ -26,6 +26,7 @@ interface MeData {
 
 export default function MeScreen() {
   const { lang, setLang, t } = useI18n();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
 
   const [data, setData] = useState<MeData | null>(null);
@@ -382,12 +383,13 @@ export default function MeScreen() {
         />
       </View>
 
-      {/* 入口行：AI 记忆（M3）/ 数据管理（M4）/ 关于 */}
+      {/* 入口行：AI 记忆（M3 接通）/ 数据管理（M4）/ 关于 */}
       <View style={styles.card}>
         <List.Item
           title={t('me.memory')}
           left={(props) => <Icon {...props} size={20} source="brain" color={palette.muted} />}
-          right={() => <Text style={styles.soon}>{t('me.soon')}</Text>}
+          right={(props) => <Icon {...props} size={18} source="chevron-right" color={palette.faint} />}
+          onPress={() => router.push('/memory')}
           titleStyle={{ color: palette.text }}
         />
         <Divider />
