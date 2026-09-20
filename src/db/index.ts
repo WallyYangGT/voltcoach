@@ -10,6 +10,11 @@
  *  - 骑手参数不再用"全局可变对象原地合并"（旧版 syncAthleteFromDb 模式），
  *    改 getEffectiveAthlete() 显式返回合并值，由调用方（导入服务）注入 analyzeFile；
  *  - CTL/ATL/TSB 递推在 src/core/form.ts（纯函数），本层只做查询。
+ *
+ * M3 追加（自 reference/src/db.js AI 段平移）：ai_reports / ai_chats / ai_chat_messages /
+ * ai_memories 四表 CRUD 与 get/setAiConfig。差异：api_key 不入库（旧版明文存 settings 行），
+ * 改存 expo-secure-store（Android Keystore，AI_KEY_STORE），get 时合并、set 时分流；
+ * 其余校验口径（base_url 正则、temperature 0–2、记忆 500 字/白名单分类）与旧版逐字一致。
  */
 
 import * as Crypto from 'expo-crypto';
@@ -20,7 +25,7 @@ import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '@/core/form';
 import type { CyclingRideInput } from '@/core/ftp';
 import { t, type Lang } from '@/core/i18n';
 import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
-import { ATHLETE, FTP_ESTIMATION, type AthleteParams } from '@/core/settings';
+import { ATHLETE, AI_CONFIG, FTP_ESTIMATION, type AiConfig, type AthleteParams } from '@/core/settings';
 
 const DB_NAME = 'fitness.db';
 const DB_KEY_STORE = 'voltcoach.dbkey'; // SecureStore 键名（随 2026-09-19 更名用新前缀）
@@ -513,4 +518,581 @@ export async function setLang(lang: Lang): Promise<Lang> {
     lang,
   );
   return lang;
+}
+
+// ---------------- AI 服务配置（settings 表 ai 行 + SecureStore 存密钥，M3） ----------------
+
+// AI 密钥不进训练库（旧版明文入库）：存 SecureStore（Android Keystore），
+// 默认不进系统备份；db 的 ai 行只保存其余配置字段。
+const AI_KEY_STORE = 'voltcoach.aikey';
+
+/**
+ * 当前 AI 配置：出厂默认 ← settings 表 ai 行覆盖 ← api_key 从 SecureStore 读出。
+ * 库行内容损坏时忽略该行（按默认值），返回 configured = 是否已配置密钥。
+ */
+export async function getAiConfig(): Promise<{ config: AiConfig; configured: boolean }> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = 'ai'`,
+  );
+  const config: AiConfig = { ...AI_CONFIG };
+  if (row) {
+    try {
+      const saved = JSON.parse(row.value) as Partial<AiConfig>;
+      // api_key 永远以 SecureStore 为准，忽略库行里的历史残留
+      delete saved.api_key;
+      Object.assign(config, saved);
+    } catch {
+      // 行内容损坏时按默认值返回
+    }
+  }
+  const key = await SecureStore.getItemAsync(AI_KEY_STORE);
+  config.api_key = key || null;
+  return { config, configured: Boolean(config.api_key) };
+}
+
+/**
+ * 更新 AI 服务配置（允许只给部分字段）：校验 → api_key 写 SecureStore、其余合并写库。
+ * 校验口径与旧版 setAiConfig 逐字平移（非法值抛双语 Error，界面直接透传）；
+ * api_key 传空字符串表示清除密钥（退化为复制提示词模式）。
+ */
+export async function setAiConfig(
+  partial: Partial<Omit<AiConfig, 'api_key'>> & { api_key?: string | null },
+  lang: Lang = 'zh',
+): Promise<AiConfig> {
+  const updates: Partial<AiConfig> = {};
+  let keyUpdate: string | null | undefined; // undefined = 未涉及密钥
+  if (partial?.api_key !== undefined && partial.api_key !== null) {
+    if (typeof partial.api_key !== 'string') throw new Error(t(lang, 'ai.key_type'));
+    keyUpdate = partial.api_key.trim() || null;
+  }
+  if (partial?.base_url != null) {
+    const u = String(partial.base_url).trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/.+/.test(u)) throw new Error(t(lang, 'ai.base_url'));
+    updates.base_url = u;
+  }
+  if (partial?.model != null) {
+    const m = String(partial.model).trim();
+    if (!m) throw new Error(t(lang, 'ai.model'));
+    updates.model = m;
+  }
+  if (partial?.temperature !== undefined) {
+    if (partial.temperature === null || (partial.temperature as unknown) === '') {
+      updates.temperature = null; // 不传 temperature，用 API 默认
+    } else {
+      const v = Number(partial.temperature);
+      if (!Number.isFinite(v) || v < 0 || v > 2)
+        throw new Error(t(lang, 'ai.temperature'));
+      updates.temperature = v;
+    }
+  }
+  for (const key of ['timeout_ms', 'stall_ms'] as const) {
+    if (partial?.[key] == null) continue;
+    const v = Number(partial[key]);
+    if (!Number.isFinite(v) || v < 1000)
+      throw new Error(t(lang, 'ai.ms', { key }));
+    updates[key] = Math.round(v);
+  }
+  if (partial?.stream != null) updates.stream = Boolean(partial.stream);
+  if (partial?.agentic != null) updates.agentic = Boolean(partial.agentic);
+  if (!Object.keys(updates).length && keyUpdate === undefined)
+    throw new Error(t(lang, 'ai.none'));
+
+  // 合并顺序：出厂默认 ← 库中现有值 ← 本次更新（与旧版 { ...AI_CONFIG, ...updates } 等价）
+  const { config: current } = await getAiConfig();
+  const merged: AiConfig = { ...current, ...updates };
+  if (keyUpdate !== undefined) {
+    if (keyUpdate) {
+      await SecureStore.setItemAsync(AI_KEY_STORE, keyUpdate);
+    } else {
+      await SecureStore.deleteItemAsync(AI_KEY_STORE);
+    }
+  }
+  merged.api_key = keyUpdate !== undefined ? keyUpdate : current.api_key;
+  // db 行剔除 api_key（密钥只存 SecureStore）
+  const { api_key: _omit, ...dbPart } = merged;
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES ('ai', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    JSON.stringify(dbPart),
+  );
+  return merged;
+}
+
+// ---------------- AI 报告（ai_reports，M3 自 reference/src/db.js 平移） ----------------
+
+export type AiReportMode = 'review' | 'plan' | 'taper' | 'compare';
+
+/** 报告上下文（场景参数）：review 带文件名、taper 带比赛日期、compare 带对比文件 */
+export interface AiReportContext {
+  file_name?: string | null;
+  race_date?: string | null;
+  compare_with?: string | null;
+}
+
+/** 报告列表项（不含 prompt/markdown 正文，列表页用） */
+export interface AiReportListItem {
+  id: number;
+  mode: AiReportMode;
+  file_name: string | null;
+  race_date: string | null;
+  compare_with: string | null;
+  status: string;
+  error: string | null;
+  created_at: string;
+}
+
+/** 完整报告行（含 prompt + markdown） */
+export interface AiReportRow extends AiReportListItem {
+  prompt: string;
+  markdown: string;
+}
+
+/** 保存完成的 AI 报告；每个 mode 仅保留最近 30 条（id DESC，不受 created_at 秒级精度影响） */
+export async function saveAiReport(
+  mode: AiReportMode,
+  context: AiReportContext | null,
+  prompt: string,
+  markdown: string,
+): Promise<number> {
+  const db = await getDb();
+  const info = await db.runAsync(
+    `INSERT INTO ai_reports (mode, file_name, race_date, compare_with, prompt, markdown, status)
+     VALUES (?, ?, ?, ?, ?, ?, 'completed')`,
+    mode,
+    context?.file_name ?? null,
+    context?.race_date ?? null,
+    context?.compare_with ?? null,
+    prompt ?? '',
+    markdown ?? '',
+  );
+  const id = Number(info.lastInsertRowId);
+  await trimAiReports(db, mode);
+  return id;
+}
+
+/** 创建 status = pending 的报告占位记录（生成中前端可见进度），返回 id；同样受 30 条滚动限制 */
+export async function createPendingAiReport(
+  mode: AiReportMode,
+  context: AiReportContext | null,
+  prompt: string,
+): Promise<number> {
+  const db = await getDb();
+  const info = await db.runAsync(
+    `INSERT INTO ai_reports (mode, file_name, race_date, compare_with, prompt, markdown, status)
+     VALUES (?, ?, ?, ?, ?, '', 'pending')`,
+    mode,
+    context?.file_name ?? null,
+    context?.race_date ?? null,
+    context?.compare_with ?? null,
+    prompt ?? '',
+  );
+  const id = Number(info.lastInsertRowId);
+  await trimAiReports(db, mode);
+  return id;
+}
+
+/** 每个 mode 滚动保留最近 30 条报告（pending 占位也参与计数） */
+async function trimAiReports(db: SQLite.SQLiteDatabase, mode: AiReportMode): Promise<void> {
+  await db.runAsync(
+    `DELETE FROM ai_reports
+     WHERE id NOT IN (
+       SELECT id FROM ai_reports WHERE mode = ? ORDER BY id DESC LIMIT 30
+     ) AND mode = ?`,
+    mode,
+    mode,
+  );
+}
+
+/** 更新报告（后台生成成功/失败时回填；COALESCE 语义与旧版一致，null 字段不覆盖） */
+export async function updateAiReport(
+  id: number,
+  patch: { markdown?: string; status?: string; error?: string | null },
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE ai_reports
+     SET markdown = COALESCE(?, markdown),
+         status = COALESCE(?, status),
+         error = COALESCE(?, error)
+     WHERE id = ?`,
+    patch.markdown ?? null,
+    patch.status ?? null,
+    patch.error ?? null,
+    id,
+  );
+}
+
+/**
+ * 报告列表：mode 传具体场景时只列该 mode（旧版口径），传 'all' 时全部混排
+ * （会话中心统一历史列表用，按 id 倒序跨 mode 排序）。
+ */
+export async function listAiReports(
+  mode: AiReportMode | 'all' = 'all',
+  n = 30,
+): Promise<AiReportListItem[]> {
+  const db = await getDb();
+  const rows =
+    mode === 'all'
+      ? await db.getAllAsync<AiReportListItem & { prompt: string; markdown: string }>(
+          `SELECT id, mode, file_name, race_date, compare_with, status, error, created_at
+           FROM ai_reports ORDER BY id DESC LIMIT ?`,
+          n,
+        )
+      : await db.getAllAsync<AiReportListItem & { prompt: string; markdown: string }>(
+          `SELECT id, mode, file_name, race_date, compare_with, status, error, created_at
+           FROM ai_reports WHERE mode = ? ORDER BY id DESC LIMIT ?`,
+          mode,
+          n,
+        );
+  return rows.map((r) => ({
+    id: r.id,
+    mode: r.mode,
+    file_name: r.file_name,
+    race_date: r.race_date,
+    compare_with: r.compare_with,
+    status: r.status,
+    error: r.error,
+    created_at: r.created_at,
+  }));
+}
+
+/** 按 id 取单条完整报告（含 prompt + markdown + status + error），不存在返回 null */
+export async function getAiReport(id: number): Promise<AiReportRow | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<
+    AiReportListItem & { prompt: string; markdown: string }
+  >(`SELECT * FROM ai_reports WHERE id = ?`, id);
+  if (!row) return null;
+  return {
+    id: row.id,
+    mode: row.mode,
+    file_name: row.file_name,
+    race_date: row.race_date,
+    compare_with: row.compare_with,
+    prompt: row.prompt,
+    markdown: row.markdown,
+    status: row.status,
+    error: row.error,
+    created_at: row.created_at,
+  };
+}
+
+// ---------------- AI 对话（ai_chats / ai_chat_messages，追问与直接对话统一，M3） ----------------
+
+export type AiChatMode = 'follow_up' | 'chat';
+
+// 每个 mode 滚动保留的对话数上限（沿用 ai_reports 的 id DESC LIMIT 清理模式）
+const AI_CHAT_KEEP = 50;
+
+/** 对话列表项（附消息条数与 pending 标记，供列表态显示"生成中"，不含正文） */
+export interface AiChatListItem {
+  id: number;
+  mode: AiChatMode;
+  report_id: number | null;
+  file_name: string | null;
+  title: string | null;
+  message_count: number;
+  has_pending: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 对话消息行 */
+export interface AiChatMessageRow {
+  id: number;
+  chat_id: number;
+  role: 'user' | 'assistant';
+  content: string;
+  status: string;
+  error: string | null;
+  created_at: string;
+}
+
+/** 对话元信息 + 全部消息（按 id 升序） */
+export interface AiChatRow extends Omit<AiChatListItem, 'message_count' | 'has_pending'> {
+  messages: AiChatMessageRow[];
+}
+
+/**
+ * 创建 AI 对话（mode: follow_up 报告追问 / chat 直接对话），返回 id。
+ * 每个 mode 仅保留最近 50 个对话，超出的旧对话连同其全部消息一起删除（级联）。
+ */
+export async function createAiChat(
+  mode: AiChatMode,
+  meta: { report_id?: number | null; file_name?: string | null; title?: string | null } = {},
+): Promise<number> {
+  const db = await getDb();
+  const info = await db.runAsync(
+    `INSERT INTO ai_chats (mode, report_id, file_name, title) VALUES (?, ?, ?, ?)`,
+    mode,
+    meta.report_id ?? null,
+    meta.file_name ?? null,
+    meta.title ?? null,
+  );
+  const id = Number(info.lastInsertRowId);
+  // 滚动清理：先删被挤出对话的消息，再删对话本身
+  await db.runAsync(
+    `DELETE FROM ai_chat_messages WHERE chat_id IN (
+       SELECT id FROM ai_chats WHERE mode = ? AND id NOT IN (
+         SELECT id FROM ai_chats WHERE mode = ? ORDER BY id DESC LIMIT ?
+       )
+     )`,
+    mode,
+    mode,
+    AI_CHAT_KEEP,
+  );
+  await db.runAsync(
+    `DELETE FROM ai_chats
+     WHERE id NOT IN (
+       SELECT id FROM ai_chats WHERE mode = ? ORDER BY id DESC LIMIT ?
+     ) AND mode = ?`,
+    mode,
+    AI_CHAT_KEEP,
+    mode,
+  );
+  return id;
+}
+
+/** 追加一条对话消息（assistant 可用 status='pending' 占位），返回消息 id */
+export async function addAiChatMessage(
+  chatId: number,
+  role: AiChatMessageRow['role'],
+  content: string,
+  status = 'completed',
+): Promise<number> {
+  const db = await getDb();
+  const info = await db.runAsync(
+    `INSERT INTO ai_chat_messages (chat_id, role, content, status) VALUES (?, ?, ?, ?)`,
+    chatId,
+    role,
+    String(content ?? ''),
+    status,
+  );
+  return Number(info.lastInsertRowId);
+}
+
+/** 更新对话消息（后台生成成功/失败时回填，COALESCE 语义同 updateAiReport） */
+export async function updateAiChatMessage(
+  id: number,
+  patch: { content?: string; status?: string; error?: string | null },
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE ai_chat_messages
+     SET content = COALESCE(?, content),
+         status = COALESCE(?, status),
+         error = COALESCE(?, error)
+     WHERE id = ?`,
+    patch.content ?? null,
+    patch.status ?? null,
+    patch.error ?? null,
+    id,
+  );
+}
+
+/** 有新消息时刷新对话的 updated_at（列表按它倒序，最近活跃的对话排前） */
+export async function touchAiChat(chatId: number): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(`UPDATE ai_chats SET updated_at = datetime('now') WHERE id = ?`, chatId);
+}
+
+/** 某 mode 的对话列表（按 updated_at 倒序，附消息条数与 pending 标记，不含正文） */
+export async function listAiChats(mode: AiChatMode, n = AI_CHAT_KEEP): Promise<AiChatListItem[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    id: number;
+    mode: AiChatMode;
+    report_id: number | null;
+    file_name: string | null;
+    title: string | null;
+    message_count: number;
+    has_pending: number;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `SELECT c.id, c.mode, c.report_id, c.file_name, c.title, c.created_at, c.updated_at,
+            (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.chat_id = c.id) AS message_count,
+            EXISTS(SELECT 1 FROM ai_chat_messages m
+                   WHERE m.chat_id = c.id AND m.status = 'pending') AS has_pending
+     FROM ai_chats c WHERE c.mode = ?
+     ORDER BY c.updated_at DESC, c.id DESC LIMIT ?`,
+    mode,
+    n,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    mode: r.mode,
+    report_id: r.report_id,
+    file_name: r.file_name,
+    title: r.title,
+    message_count: r.message_count,
+    has_pending: !!r.has_pending,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  }));
+}
+
+/** 按 id 取对话元信息 + 全部消息（按 id 升序），不存在返回 null */
+export async function getAiChat(id: number): Promise<AiChatRow | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{
+    id: number;
+    mode: AiChatMode;
+    report_id: number | null;
+    file_name: string | null;
+    title: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(`SELECT * FROM ai_chats WHERE id = ?`, id);
+  if (!row) return null;
+  const messages = await db.getAllAsync<AiChatMessageRow>(
+    `SELECT id, chat_id, role, content, status, error, created_at
+     FROM ai_chat_messages WHERE chat_id = ? ORDER BY id`,
+    id,
+  );
+  return {
+    id: row.id,
+    mode: row.mode,
+    report_id: row.report_id,
+    file_name: row.file_name,
+    title: row.title,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    messages,
+  };
+}
+
+/** 该报告最新的 follow_up 对话 id（报告详情页追问"继续既有对话"用），没有返回 null */
+export async function findFollowUpChat(reportId: number): Promise<number | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ id: number }>(
+    `SELECT id FROM ai_chats WHERE mode = 'follow_up' AND report_id = ?
+     ORDER BY id DESC LIMIT 1`,
+    reportId,
+  );
+  return row?.id ?? null;
+}
+
+/** 删除整个对话及其全部消息，返回删除的对话数（0 = 不存在） */
+export async function deleteAiChat(id: number): Promise<number> {
+  const db = await getDb();
+  await db.runAsync(`DELETE FROM ai_chat_messages WHERE chat_id = ?`, id);
+  const info = await db.runAsync(`DELETE FROM ai_chats WHERE id = ?`, id);
+  return info.changes;
+}
+
+// ---------------- AI 记忆（ai_memories，带时间戳与取代链，M3） ----------------
+
+// 记忆分类白名单（非法值归入 general）
+const MEMORY_CATEGORIES = new Set(['general', 'injury', 'schedule', 'goal', 'preference']);
+// 单条记忆长度上限（AI 用中文概括的完整陈述）
+const MEMORY_MAX_LEN = 500;
+// 库中最多保留条数：超出先删最旧的已被取代记忆，不足再删最旧有效记忆
+const MEMORY_KEEP = 100;
+
+/** 记忆行（listAll 附 active 有效标记） */
+export interface AiMemoryRow {
+  id: number;
+  content: string;
+  category: string;
+  source: string | null;
+  created_at: string;
+  superseded_by: number | null;
+  active?: boolean;
+}
+
+/**
+ * 保存一条 AI 记忆（用户个人事实：伤病/日程约束/目标变化/明确偏好等），返回 id。
+ * content 必填且 ≤500 字；category 非法归 general；supersedes_id 存在时校验目标
+ * 记忆存在，并把其 superseded_by 置为新 id（被取代的记忆不再注入但保留可追溯）。
+ * 非法输入抛 Error（双语 message，工具层转为 {error} JSON 反馈给 AI）。
+ */
+export async function saveMemory(
+  input: {
+    content?: unknown;
+    category?: unknown;
+    source?: string | null;
+    supersedes_id?: unknown;
+  },
+  lang: Lang = 'zh',
+): Promise<number> {
+  const text = String(input?.content ?? '').trim();
+  if (!text) throw new Error(t(lang, 'memory.empty'));
+  if (text.length > MEMORY_MAX_LEN)
+    throw new Error(t(lang, 'memory.too_long', { n: MEMORY_MAX_LEN }));
+  const cat = MEMORY_CATEGORIES.has(input?.category as string)
+    ? (input.category as string)
+    : 'general';
+  const db = await getDb();
+  let supersedeId: number | null = null;
+  if (input?.supersedes_id != null) {
+    supersedeId = Number(input.supersedes_id);
+    const target = await db.getFirstAsync<{ id: number }>(
+      `SELECT id FROM ai_memories WHERE id = ?`,
+      supersedeId,
+    );
+    if (!target)
+      throw new Error(t(lang, 'memory.supersede_not_found', { id: supersedeId }));
+  }
+  const info = await db.runAsync(
+    `INSERT INTO ai_memories (content, category, source) VALUES (?, ?, ?)`,
+    text,
+    cat,
+    input?.source ?? null,
+  );
+  const id = Number(info.lastInsertRowId);
+  if (supersedeId != null) {
+    await db.runAsync(`UPDATE ai_memories SET superseded_by = ? WHERE id = ?`, id, supersedeId);
+  }
+  // 滚动清理：最多保留 100 条，先删最旧的已被取代记忆，不足再删最旧有效记忆
+  const totalRow = await db.getFirstAsync<{ c: number }>(`SELECT COUNT(*) AS c FROM ai_memories`);
+  let excess = (totalRow?.c ?? 0) - MEMORY_KEEP;
+  if (excess > 0) {
+    const del = await db.runAsync(
+      `DELETE FROM ai_memories WHERE id IN (
+         SELECT id FROM ai_memories WHERE superseded_by IS NOT NULL ORDER BY id LIMIT ?
+       )`,
+      excess,
+    );
+    excess -= del.changes;
+    if (excess > 0) {
+      await db.runAsync(
+        `DELETE FROM ai_memories WHERE id IN (
+           SELECT id FROM ai_memories ORDER BY id LIMIT ?
+         )`,
+        excess,
+      );
+    }
+  }
+  return id;
+}
+
+/** 最近 n 条有效记忆（未被取代，注入提示词用；id DESC，拼装时反转为时间正序） */
+export async function listMemories(n = 30): Promise<AiMemoryRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<AiMemoryRow>(
+    `SELECT id, content, category, source, created_at
+     FROM ai_memories WHERE superseded_by IS NULL
+     ORDER BY id DESC LIMIT ?`,
+    n,
+  );
+}
+
+/** 全部记忆（含已被取代的，管理界面用；id DESC，附 active 有效标记） */
+export async function listAllMemories(): Promise<AiMemoryRow[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<AiMemoryRow>(
+    `SELECT id, content, category, source, created_at, superseded_by
+     FROM ai_memories ORDER BY id DESC`,
+  );
+  return rows.map((r) => ({ ...r, active: r.superseded_by == null }));
+}
+
+/** 删除指定记忆，返回删除条数（0 = 不存在） */
+export async function deleteMemory(id: number): Promise<number> {
+  const db = await getDb();
+  const info = await db.runAsync(`DELETE FROM ai_memories WHERE id = ?`, id);
+  return info.changes;
 }

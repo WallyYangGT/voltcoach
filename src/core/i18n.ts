@@ -25,6 +25,16 @@ const DICT: Record<Lang, Record<string, string>> = {
     'note.too_long': '备注过长（上限 {n} 字）',
     'profile.type': '{key} 需为字符串',
     'profile.too_long': '{key} 过长（上限 {n} 字）',
+    // ---- AI 配置与记忆校验消息（src/db，M3 自 reference/src/i18n.js 逐字搬运） ----
+    'ai.key_type': 'api_key 需为字符串',
+    'ai.base_url': 'base_url 需为 http(s) 地址',
+    'ai.model': 'model 不能为空',
+    'ai.temperature': 'temperature 需在 0–2 之间，或留空表示不传',
+    'ai.ms': '{key} 需为 ≥1000 的毫秒数',
+    'ai.none': '至少需要提供一个字段：api_key / base_url / model / temperature / timeout_ms / stream / stall_ms / agentic',
+    'memory.empty': '记忆内容不能为空',
+    'memory.too_long': '记忆内容过长（上限 {n} 字）',
+    'memory.supersede_not_found': '要取代的记忆不存在: {id}',
     // ---- FTP 历史估算（src/core/ftp.ts data_needs / notes / confidence / references；zh 与旧版逐字一致） ----
     'ftp.few_rides': '窗口内有效功率骑行仅 {n} 次（需 ≥{min} 次）：请积累更多佩戴功率计的骑行数据后再估算',
     'ftp.hr_coverage': '仅 {n}/{total} 次骑行有合格心率数据：后续骑行请全程佩戴心率带，以便心率交叉验证',
