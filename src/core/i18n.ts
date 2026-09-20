@@ -56,6 +56,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     'tool.unknown': '未知工具: {name}',
     'tool.failed': '工具执行失败: {msg}',
     'tool.result_truncated': '（结果已截断）',
+    // ---- AI 请求层（src/ai，M3 自 reference/src/i18n.js 逐字搬运） ----
+    'ai.no_key': '未配置 AI 密钥（Web 设置页可配），无法调用 AI API',
+    'ai.stall': 'AI 流已空闲超过 {sec} 秒未收到数据。可能是该模型/账号不真正流式输出，建议在设置页关闭流式。',
+    'ai.total_timeout': 'AI 请求总时间超过 {sec} 秒。若模型确实需要更久，可在设置页增大超时时间；否则建议检查网络/API 可用性。',
+    'ai.rounds_exhausted': '工具调用次数已用完，请基于已获得的信息直接作答。',
+    'ai.empty': 'AI API 返回为空',
     // ---- FTP 历史估算（src/core/ftp.ts data_needs / notes / confidence / references；zh 与旧版逐字一致） ----
     'ftp.few_rides': '窗口内有效功率骑行仅 {n} 次（需 ≥{min} 次）：请积累更多佩戴功率计的骑行数据后再估算',
     'ftp.hr_coverage': '仅 {n}/{total} 次骑行有合格心率数据：后续骑行请全程佩戴心率带，以便心率交叉验证',
@@ -152,6 +158,11 @@ const DICT: Record<Lang, Record<string, string>> = {
     'tool.unknown': 'unknown tool: {name}',
     'tool.failed': 'tool execution failed: {msg}',
     'tool.result_truncated': '（result truncated）',
+    'ai.no_key': 'No AI key configured (Settings page) — cannot call the AI API',
+    'ai.stall': 'AI stream idle for over {sec} seconds with no data. The model/account may not truly stream — consider turning streaming off in Settings.',
+    'ai.total_timeout': 'AI request exceeded {sec} seconds total. If the model genuinely needs longer, raise the timeout in Settings; otherwise check network/API availability.',
+    'ai.rounds_exhausted': 'Tool call rounds exhausted — answer directly based on the information gathered so far.',
+    'ai.empty': 'AI API returned empty',
   },
 };
 
