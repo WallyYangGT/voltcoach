@@ -130,7 +130,7 @@ export async function runAgentLoop(
   cfg: AiRuntimeConfig,
   messages: AgentMessage[],
   tools: object[],
-  executeTool: (name: string, args: object) => Promise<string> | string,
+  executeTool: (name: string, args: Record<string, unknown>) => Promise<string> | string,
   { onHeartbeat, onToolCall, onDegrade, timeoutMs, lang = 'zh' }: AgentLoopOpts = {},
 ): Promise<string> {
   if (!cfg.api_key) throw new Error(t(lang, 'ai.no_key'));
@@ -193,7 +193,7 @@ export async function runAgentLoop(
       });
       for (const tc of toolCalls) {
         const name = tc?.function?.name ?? '';
-        let args: object = {};
+        let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(tc?.function?.arguments || '{}');
         } catch {

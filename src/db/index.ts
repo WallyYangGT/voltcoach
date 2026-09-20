@@ -27,6 +27,9 @@ import { t, type Lang } from '@/core/i18n';
 import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
 import { ATHLETE, AI_CONFIG, FTP_ESTIMATION, type AiConfig, type AthleteParams } from '@/core/settings';
 
+// 供编排层/设置页引用的配置类型（db 层是 AiConfig 的存取入口，re-export 同源导出）
+export type { AiConfig };
+
 const DB_NAME = 'fitness.db';
 const DB_KEY_STORE = 'voltcoach.dbkey'; // SecureStore 键名（随 2026-09-19 更名用新前缀）
 const SCHEMA_VERSION = 1;
