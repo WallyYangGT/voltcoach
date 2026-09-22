@@ -58,14 +58,26 @@ export async function setOnelapAccount(account: string, password: string | null)
   await SecureStore.setItemAsync(ONELAP_PASSWORD_STORE, password);
 }
 
-/** 单轮同步结果（UI 展示 imported/skipped/failed 三计数） */
+/** 单轮同步结果（UI 展示 imported/skipped/failed 三计数；error 按稳定码映射 i18n） */
+export type SyncErrorCode = 'no_account' | 'auth' | 'other';
+
 export interface SyncOutcome {
   imported: number;
   skipped: number;
   failed: number;
-  /** 终止原因：null=正常跑完；'no_account'='auth'=未配置/凭据失效；'error'=运行错误 */
-  error: string | null;
+  /** null = 正常跑完；code 供 UI 双语化，message 为原始技术信息（存库并透出） */
+  error: { code: SyncErrorCode; message: string } | null;
 }
+
+/** OnelapError → 稳定码（auth 单列供双语化，其余归 other 透出原始信息） */
+function toError(e: unknown): { code: SyncErrorCode; message: string } {
+  if (e instanceof OnelapError) {
+    return { code: e.code === 'auth' ? 'auth' : 'other', message: e.message };
+  }
+  return { code: 'other', message: e instanceof Error ? e.message : String(e) };
+}
+
+const NO_ACCOUNT = { code: 'no_account', message: '' } as const;
 
 let running: Promise<SyncOutcome> | null = null;
 
@@ -82,18 +94,19 @@ export function runOnelapSync(): Promise<SyncOutcome> {
 async function runSyncOnce(): Promise<SyncOutcome> {
   const account = await getOnelapAccount();
   if (!account) {
-    return { imported: 0, skipped: 0, failed: 0, error: 'no_account' };
+    return { imported: 0, skipped: 0, failed: 0, error: { ...NO_ACCOUNT } };
   }
 
   const state = await getSyncState();
   const outcome = await pullActivities(account, state);
+  const err = outcome.error;
   // 水位线只在成功跑完时推进（部分失败下次重试窗口不变——前移 24h 缓冲兜底重复拉取）
   const next: SyncState = {
     ...state,
-    last_sync_at: outcome.error === 'auth' ? state.last_sync_at : new Date().toISOString(),
-    last_result: outcome.error ? 'error' : 'ok',
-    last_error: outcome.error,
-    last_counts: outcome.error ? state.last_counts : { imported: outcome.imported, skipped: outcome.skipped, failed: outcome.failed },
+    last_sync_at: err ? state.last_sync_at : new Date().toISOString(),
+    last_result: err ? 'error' : 'ok',
+    last_error: err?.message || null,
+    last_counts: err ? state.last_counts : { imported: outcome.imported, skipped: outcome.skipped, failed: outcome.failed },
   };
   await setSyncState(next);
   return outcome;
@@ -111,7 +124,7 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
   try {
     session = await client.login(account.account, account.password);
   } catch (e) {
-    return { imported: 0, skipped: 0, failed: 0, error: describeError(e) };
+    return { imported: 0, skipped: 0, failed: 0, error: toError(e) };
   }
 
   // 水位线：上次同步时间前移 24h（跨设备时区/时钟偏差缓冲）；首次同步全量
@@ -123,7 +136,7 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
   try {
     cloudList = await client.listSince(session, since);
   } catch (e) {
-    return { imported: 0, skipped: 0, failed: 0, error: describeError(e) };
+    return { imported: 0, skipped: 0, failed: 0, error: toError(e) };
   }
 
   const existing = new Set(await listActivityFileNames());
@@ -142,17 +155,13 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
       outcome.imported += 1;
     } catch (e) {
       if (e instanceof OnelapError && e.code === 'auth') {
-        return { ...outcome, error: describeError(e) };
+        return { ...outcome, error: toError(e) };
       }
       outcome.failed += 1;
       console.warn(`顽鹿活动 ${act.id} 同步失败（跳过继续）:`, e);
     }
   }
   return outcome;
-}
-
-function describeError(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 let lastAutoAttempt = 0;

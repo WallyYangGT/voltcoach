@@ -399,7 +399,8 @@ export default function MeScreen() {
         <List.Item
           title={t('me.data')}
           left={(props) => <Icon {...props} size={20} source="database" color={palette.muted} />}
-          right={() => <Text style={styles.soon}>{t('me.soon')}</Text>}
+          right={(props) => <Icon {...props} size={18} source="chevron-right" color={palette.faint} />}
+          onPress={() => router.push('/data')}
           titleStyle={{ color: palette.text }}
         />
         <Divider />
