@@ -124,10 +124,16 @@ async function runSyncOnce(): Promise<SyncOutcome> {
 
 /** 登录 + 拉取 + 入库；逐活动失败仅计数不中断（§10.4 口径），鉴权失败终止本轮 */
 async function pullActivities(account: OnelapAccount, state: SyncState): Promise<SyncOutcome> {
+  // 端点联调注入点：EXPO_PUBLIC_* 打包期内联（Expo 标准机制），生产构建不设即用
+  // 真实端点；模拟器冒烟设 EXPO_PUBLIC_ONELAP_BASE=http://10.0.2.2:8791 对本地 mock
+  const base = process.env.EXPO_PUBLIC_ONELAP_BASE;
   const client = createOnelapClient({
     fetchImpl: await loadDefaultFetch(),
     md5Hex: (s) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, s),
     randomBytes: (n) => Crypto.getRandomBytes(n),
+    baseUrlOverrides: base
+      ? { login: `${base}/api/login`, rideRecord: `${base}/api/otm/ride_record` }
+      : undefined,
   });
 
   let session: OnelapSession;

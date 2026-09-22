@@ -153,26 +153,30 @@ export function buildFitContentUrl(baseUrl: string, key: string): string {
 const REQUEST_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 
-/** 带超时的 fetch：AbortController 手工实现（Hermes 不保证有 AbortSignal.timeout） */
+/**
+ * 带超时的 fetch：AbortController 手工实现（Hermes 不保证有 AbortSignal.timeout）。
+ * 返回 done()：signal 同时保护 body 读取（服务端"发头即挂住 body"同样会挂死
+ * 调用方），调用方读完 body 后必须调 done() 清计时器——推荐 try/finally 包裹。
+ */
 async function fetchWithTimeout(
   doFetch: FetchLike,
   url: string,
   init: RequestInit,
   timeoutMs: number,
-): Promise<Response> {
+): Promise<{ res: Response; done: () => void }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await doFetch(url, { ...init, signal: controller.signal });
+    const res = await doFetch(url, { ...init, signal: controller.signal });
+    return { res, done: () => clearTimeout(timer) };
   } catch (e) {
+    clearTimeout(timer);
     // AbortError → 统一按网络类超时报错（调用方映射 OnelapError('network')）
     const msg = String(e);
     if (msg.includes('abort') || msg.includes('Abort')) {
       throw new OnelapError('network', `请求超时（${Math.round(timeoutMs / 1000)}s）: ${url}`);
     }
     throw e;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -184,44 +188,59 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
   const loginUrl = deps.baseUrlOverrides?.login ?? ONELAP_LOGIN_URL;
   const rideBase = deps.baseUrlOverrides?.rideRecord ?? ONELAP_RIDE_RECORD_BASE;
 
-  async function postRaw(url: string, headers: Record<string, string>, body: unknown): Promise<Response> {
-    let res: Response;
+  async function postRaw(
+    url: string,
+    headers: Record<string, string>,
+    body: unknown,
+  ): Promise<{ res: Response; done: () => void }> {
     try {
-      res = await fetchWithTimeout(doFetch, url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      }, REQUEST_TIMEOUT_MS);
+      return await fetchWithTimeout(
+        doFetch,
+        url,
+        { method: 'POST', headers, body: JSON.stringify(body) },
+        REQUEST_TIMEOUT_MS,
+      );
     } catch (e) {
       if (e instanceof OnelapError) throw e;
       throw new OnelapError('network', `网络请求失败: ${String(e)}`);
     }
-    if (res.status === 401 || res.status === 403) {
-      throw new OnelapError('auth', `鉴权被拒（HTTP ${res.status}）`);
-    }
-    if (!res.ok) {
-      throw new OnelapError('api', `接口异常（HTTP ${res.status}）: ${url}`);
-    }
-    return res;
   }
 
-  async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<unknown> {
-    return (await postRaw(url, headers, body)).json();
-  }
-
-  async function getJson(url: string, headers: Record<string, string>): Promise<unknown> {
-    let res: Response;
-    try {
-      res = await fetchWithTimeout(doFetch, url, { method: 'GET', headers }, REQUEST_TIMEOUT_MS);
-    } catch (e) {
-      if (e instanceof OnelapError) throw e;
-      throw new OnelapError('network', `网络请求失败: ${String(e)}`);
-    }
+  function checkStatus(url: string, res: Response): void {
     if (res.status === 401 || res.status === 403) {
       throw new OnelapError('auth', `鉴权被拒（HTTP ${res.status}）`);
     }
     if (!res.ok) throw new OnelapError('api', `接口异常（HTTP ${res.status}）: ${url}`);
-    return res.json();
+  }
+
+  async function postJson(url: string, headers: Record<string, string>, body: unknown): Promise<unknown> {
+    const { res, done } = await postRaw(url, headers, body);
+    try {
+      checkStatus(url, res);
+      return await res.json();
+    } finally {
+      done();
+    }
+  }
+
+  async function getJson(url: string, headers: Record<string, string>): Promise<unknown> {
+    let done: () => void = () => {}; // fetch 本身抛错时（未拿到计时器）finally 也要安全
+    try {
+      const { res, done: clear } = await fetchWithTimeout(
+        doFetch,
+        url,
+        { method: 'GET', headers },
+        REQUEST_TIMEOUT_MS,
+      );
+      done = clear;
+      checkStatus(url, res);
+      return await res.json();
+    } catch (e) {
+      if (e instanceof OnelapError) throw e;
+      throw new OnelapError('network', `网络请求失败: ${String(e)}`);
+    } finally {
+      done();
+    }
   }
 
   function authHeaders(session: OnelapSession): Record<string, string> {
@@ -241,7 +260,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
       const passwordMd5 = await md5Hex(password);
       const sign = await md5Hex(buildSignStr(account, nonce, passwordMd5, timestamp));
       // 头与 Referer/Origin 对齐网页端登录（Go 实现逐项复刻）
-      const res = await postRaw(loginUrl, {
+      const { res, done } = await postRaw(loginUrl, {
         'User-Agent': DESKTOP_UA,
         Accept: 'application/json, text/plain, */*',
         'Content-Type': 'application/json;charset=utf-8',
@@ -251,7 +270,13 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
         timestamp,
         sign,
       }, { account, password: passwordMd5 });
-      const text = await res.text();
+      let text: string;
+      try {
+        checkStatus(loginUrl, res);
+        text = await res.text();
+      } finally {
+        done();
+      }
       let json: {
         data?: { token?: string; refresh_token?: string; userinfo?: { uid?: number | string } }[];
       };
@@ -320,22 +345,22 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
     },
 
     async downloadByKey(session, key, activityId) {
-      // 下载 FIT 字节（fit_content 路径 = base64(key)）
-      let res: Response;
+      // 下载 FIT 字节（fit_content 路径 = base64(key)），body 读取同样在超时信号保护内
+      const { res, done } = await fetchWithTimeout(
+        doFetch,
+        buildFitContentUrl(rideBase, key),
+        { headers: authHeaders(session) },
+        DOWNLOAD_TIMEOUT_MS,
+      );
+      let bytes: ArrayBuffer;
       try {
-        res = await fetchWithTimeout(
-          doFetch,
-          buildFitContentUrl(rideBase, key),
-          { headers: authHeaders(session) },
-          DOWNLOAD_TIMEOUT_MS,
-        );
-      } catch (e) {
-        if (e instanceof OnelapError) throw e;
-        throw new OnelapError('network', `FIT 下载失败: ${String(e)}`);
+        if (res.status === 401 || res.status === 403) throw new OnelapError('auth', '下载被拒（会话过期）');
+        if (!res.ok) throw new OnelapError('api', `FIT 下载异常（HTTP ${res.status}）`);
+        bytes = await res.arrayBuffer();
+      } finally {
+        done();
       }
-      if (res.status === 401 || res.status === 403) throw new OnelapError('auth', '下载被拒（会话过期）');
-      if (!res.ok) throw new OnelapError('api', `FIT 下载异常（HTTP ${res.status}）`);
-      return { bytes: new Uint8Array(await res.arrayBuffer()), fileName: extractFitFileName(key, activityId) };
+      return { bytes: new Uint8Array(bytes), fileName: extractFitFileName(key, activityId) };
     },
   };
 }

@@ -71,11 +71,12 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
   }
 
   // ④ 重加密到本机 key（staged → import_new），⑤ 关库原子替换，⑥ records 重写
-  // 注意：File.move() 会原地改写实例 uri（指向改名后的 fitness.db），因此 finally
-  // 的临时文件清理必须用 importedTmp 指向原临时名（move 成功时该名字已不存在，
-  // cleanup 自然 no-op）——绝不能 cleanup 改名后的实例，否则成功路径会把刚换上的
-  // 新库当"临时文件"删掉（数据销毁且当次会话不可见）。
-  const importedTmp = new File(dir, `voltcoach-import-new-${Date.now()}.db`);
+  // ⚠️ File.move() 会原地改写实例 uri（expo-file-system 契约：实例指向改名后的
+  // fitness.db），因此清理必须「名字落字符串 + finally 新造 File」：cleanup 操作的
+  // 实例永远指向原临时名（move 成功时该路径已不存在 → no-op）；绝不能用传给 move()
+  // 的实例做清理——那是把刚换上的新库当临时文件删掉（数据销毁且当次会话不可见）。
+  const importedTmpName = `voltcoach-import-new-${Date.now()}.db`;
+  const importedTmp = new File(dir, importedTmpName);
   try {
     if (await hasSqlCipher(conn)) {
       const localKey = await getDbKey();
@@ -116,7 +117,7 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
   } finally {
     await closeQuietly(conn);
     cleanup(staged);
-    cleanup(importedTmp); // move 成功时该名字已不存在 → no-op；失败路径清理真临时文件
+    cleanup(new File(dir, importedTmpName)); // 新实例恒指原临时名：成功路径 no-op，失败路径清真临时文件
   }
 }
 
