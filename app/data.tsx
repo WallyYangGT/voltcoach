@@ -19,7 +19,14 @@ import { BackupError, checkSchemaVersion as gateVersion } from '@/backup/manifes
 import { unpackBackup } from '@/backup/archive';
 import { SCHEMA_VERSION, getSyncState, setSyncState, type SyncState } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
-import { getOnelapAccount, runOnelapSync, setOnelapAccount, type SyncOutcome } from '@/services/syncOnelap';
+import {
+  getOnelapAccount,
+  onelapOverrideBase,
+  probeOnelapEndpoints,
+  runOnelapSync,
+  setOnelapAccount,
+  type SyncOutcome,
+} from '@/services/syncOnelap';
 import { palette } from '@/theme';
 
 export default function DataScreen() {
@@ -33,6 +40,7 @@ export default function DataScreen() {
   const [hasAccount, setHasAccount] = useState(false);
   const [syncState, setSyncStateLocal] = useState<SyncState | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [pinging, setPinging] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [lastOutcome, setLastOutcome] = useState<SyncOutcome | null>(null);
 
@@ -134,6 +142,24 @@ export default function DataScreen() {
     } finally {
       setSyncing(false);
       load();
+    }
+  };
+
+  const probeNow = async () => {
+    setPinging(true);
+    try {
+      const results = await probeOnelapEndpoints();
+      const lines = results.map((r) => {
+        const host = r.url.replace(/^https?:\/\//, '');
+        return r.reachable
+          ? t('data.sync.pingOk', { host, ms: r.ms, status: r.status ?? 0 })
+          : t('data.sync.pingFail', { host, detail: r.detail ?? '' });
+      });
+      Alert.alert(t('data.sync.pingTitle'), `${lines.join('\n')}\n\n${t('data.sync.pingNoAccount')}`);
+    } catch (e) {
+      Alert.alert(t('data.err.generic'), String(e));
+    } finally {
+      setPinging(false);
     }
   };
 
@@ -248,6 +274,7 @@ export default function DataScreen() {
         syncState.last_result === 'ok' ? '✓' : `✗ ${syncState.last_error ?? ''}`
       }`
     : t('data.sync.never');
+  const overrideBase = onelapOverrideBase();
 
   return (
     <View style={styles.page}>
@@ -262,6 +289,10 @@ export default function DataScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{t('data.sync.title')}</Text>
           <Text style={styles.note}>{t('data.sync.desc')}</Text>
+          {/* 联调构建显式自曝：避免把指向 mock 的包装到真机上用（曾发生过一次） */}
+          {overrideBase != null && (
+            <Text style={styles.warn}>{t('data.sync.devEndpoint', { url: overrideBase })}</Text>
+          )}
           <TextInput
             label={t('data.sync.account')}
             value={account}
@@ -305,15 +336,27 @@ export default function DataScreen() {
             <Text style={styles.rowLabel}>{t('data.sync.last')}</Text>
             <Text style={styles.rowValue}>{lastSyncLine}</Text>
           </View>
-          <Button
-            mode="outlined"
-            compact
-            onPress={syncNow}
-            disabled={syncing || !hasAccount}
-            loading={syncing}
-          >
-            {syncing ? t('data.sync.doing') : t('data.sync.now')}
-          </Button>
+          <View style={styles.row}>
+            <Button
+              mode="outlined"
+              compact
+              onPress={syncNow}
+              disabled={syncing || pinging || !hasAccount}
+              loading={syncing}
+            >
+              {syncing ? t('data.sync.doing') : t('data.sync.now')}
+            </Button>
+            {/* 测试连接：不需要账号，只验证能否连上顽鹿服务器（排查网络/被墙/改包问题） */}
+            <Button
+              mode="text"
+              compact
+              onPress={probeNow}
+              disabled={syncing || pinging}
+              loading={pinging}
+            >
+              {pinging ? t('data.sync.pingDoing') : t('data.sync.ping')}
+            </Button>
+          </View>
           {lastOutcome && !lastOutcome.error && (
             <Text style={styles.note}>
               {[t('data.sync.imported', { n: lastOutcome.imported }), t('data.sync.skipped', { n: lastOutcome.skipped }), t('data.sync.failed', { n: lastOutcome.failed })].join(' · ')}

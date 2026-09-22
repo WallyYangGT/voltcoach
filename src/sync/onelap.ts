@@ -64,6 +64,8 @@ export interface OnelapDeps {
   /** unix 秒（登录 timestamp 用） */
   now?: () => number;
   baseUrlOverrides?: { login?: string; rideRecord?: string };
+  /** 超时覆盖（单测把 30s/120s 压到几十毫秒；不传即生产口径） */
+  timeouts?: { requestMs?: number; downloadMs?: number; probeMs?: number };
 }
 
 export interface OnelapClient {
@@ -187,11 +189,82 @@ export function jitterDelayMs(rand: () => number = Math.random, min = PACE_MIN_M
   return min + Math.floor(Math.min(r, 0.999_999) * (max - min + 1));
 }
 
+// ---------------- 连接探测（「测试连接」按钮，纯函数 + 注入 fetch/时钟） ----------------
+
+/** 单次探测结果：reachable = 拿到了任何 HTTP 响应（含 4xx/5xx，能应答即链路通） */
+export interface ProbeResult {
+  url: string;
+  reachable: boolean;
+  /** 往返毫秒（不可达时为尝试耗时） */
+  ms: number;
+  /** HTTP 状态码（不可达时为 null） */
+  status: number | null;
+  /** 不可达原因（可达时为 null） */
+  detail: string | null;
+}
+
+/** 需要探测的端点来源（登录域 + 数据域；带 baseUrlOverrides 时指向 mock，同源自动去重） */
+export function endpointOrigins(overrides?: { login?: string; rideRecord?: string }): string[] {
+  const urls = [
+    overrides?.login ?? ONELAP_LOGIN_URL,
+    overrides?.rideRecord ?? ONELAP_RIDE_RECORD_BASE,
+  ];
+  const origins: string[] = [];
+  for (const u of urls) {
+    try {
+      const o = new URL(u).origin;
+      if (!origins.includes(o)) origins.push(o);
+    } catch {
+      // 非法 URL 跳过（配置错误由同步请求自身报错）
+    }
+  }
+  return origins;
+}
+
+/**
+ * 探测单个端点：GET 该源根路径，短超时（默认 10s）。**只为验证链路**——能拿到任何
+ * HTTP 状态码即算可达（403/404 也证明 DNS/连接/TLS/HTTP 都通），全无响应才算不可达，
+ * 此时把原因（连接超时/DNS 失败/连接被拒）原样透出——正是排查「真机连不上」最需要的信息。
+ */
+export async function probeEndpoint(
+  url: string,
+  opts: { fetchImpl?: FetchLike; timeoutMs?: number; now?: () => number } = {},
+): Promise<ProbeResult> {
+  const doFetch = opts.fetchImpl ?? globalThis.fetch;
+  const timeoutMs = opts.timeoutMs ?? PROBE_TIMEOUT_MS;
+  const nowMs = opts.now ?? (() => Date.now());
+  const started = nowMs();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await doFetch(url, { method: 'GET', signal: controller.signal });
+    return { url, reachable: true, ms: Math.round(nowMs() - started), status: res.status, detail: null };
+  } catch (e) {
+    const msg = String(e);
+    const detail = isAbortLike(msg)
+      ? `连接超时（${Math.round(timeoutMs / 1000)}s 无响应）`
+      : msg.replace(/^Error:\s*/, '').slice(0, 160);
+    return { url, reachable: false, ms: Math.round(nowMs() - started), status: null, detail };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ---------------- 客户端 ----------------
 
 /** 请求超时口径（对齐 AI 层思路：自管超时，不依赖运行时隐藏行为）。下载给大余量 */
 const REQUEST_TIMEOUT_MS = 30_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
+/** 连接探测（「测试连接」按钮）用短超时——探测要快速给结论，不能让人等 30s */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/** fetch 失败信息是否表示「被我们自己的超时掐断」。
+ *  expo/fetch 的文案是 "Fetch request has been canceled"（无 abort 字样），
+ *  标准实现给 AbortError——两种都要认，否则超时会被显示成一条看不懂的英文原文。 */
+function isAbortLike(message: string): boolean {
+  const m = message.toLowerCase();
+  return m.includes('abort') || m.includes('cancel');
+}
 
 /**
  * 带超时的 fetch：AbortController 手工实现（Hermes 不保证有 AbortSignal.timeout）。
@@ -211,10 +284,12 @@ async function fetchWithTimeout(
     return { res, done: () => clearTimeout(timer) };
   } catch (e) {
     clearTimeout(timer);
-    // AbortError → 统一按网络类超时报错（调用方映射 OnelapError('network')）
     const msg = String(e);
-    if (msg.includes('abort') || msg.includes('Abort')) {
-      throw new OnelapError('network', `请求超时（${Math.round(timeoutMs / 1000)}s）: ${url}`);
+    if (isAbortLike(msg)) {
+      throw new OnelapError(
+        'network',
+        `请求超时（${Math.round(timeoutMs / 1000)}s 无响应，请检查网络或接口地址）: ${url}`,
+      );
     }
     throw e;
   }
@@ -227,6 +302,8 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const loginUrl = deps.baseUrlOverrides?.login ?? ONELAP_LOGIN_URL;
   const rideBase = deps.baseUrlOverrides?.rideRecord ?? ONELAP_RIDE_RECORD_BASE;
+  const requestTimeoutMs = deps.timeouts?.requestMs ?? REQUEST_TIMEOUT_MS;
+  const downloadTimeoutMs = deps.timeouts?.downloadMs ?? DOWNLOAD_TIMEOUT_MS;
 
   async function postRaw(
     url: string,
@@ -238,7 +315,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
         doFetch,
         url,
         { method: 'POST', headers, body: JSON.stringify(body) },
-        REQUEST_TIMEOUT_MS,
+        requestTimeoutMs,
       );
     } catch (e) {
       if (e instanceof OnelapError) throw e;
@@ -270,7 +347,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
         doFetch,
         url,
         { method: 'GET', headers },
-        REQUEST_TIMEOUT_MS,
+        requestTimeoutMs,
       );
       done = clear;
       checkStatus(url, res);
@@ -390,7 +467,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
         doFetch,
         buildFitContentUrl(rideBase, key),
         { headers: authHeaders(session) },
-        DOWNLOAD_TIMEOUT_MS,
+        downloadTimeoutMs,
       );
       let bytes: ArrayBuffer;
       try {

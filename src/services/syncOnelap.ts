@@ -1,13 +1,17 @@
 /**
  * syncOnelap.ts — 顽鹿云同步编排（MIGRATION_PLAN §10.4）
  *
- * 流程：读 SecureStore 账号 → 登录 → 云端列表（水位线增量：上次同步时间前移 24h
- * 防边界漏拉，首次全量）→ 逐活动查 fileKey 算文件名，本地已有的跳过（upsert 幂等
- * 去重口径的下载省略版）→ 未知活动下载 FIT 字节走 importFitBytes 入库 → 回写水位线
- * 与结果到 settings.sync。
+ * 流程：读 SecureStore 账号 → 取会话（缓存的 token 优先，无缓存或失效才用密码登录）
+ * → 云端列表（窗口化增量：`syncWindowStart` = 上次同步时间前移 24h 与「最近 90 天」
+ * 取较晚者，首次同步 90 天窗口）→ 逐活动查 fileKey 算文件名，本地已有的跳过
+ * （upsert 幂等去重口径的下载省略版）→ 未知活动下载 FIT 字节走 importFitBytes 入库
+ * → 回写水位线与结果到 settings.sync。活动之间随机间隔（`jitterDelayMs`）摊平请求突发。
  *
- * 取舍：token 不做持久缓存（§10.4「令牌缓存」的简化）——低频个人同步每次全新登录
- * 成本可忽略，免去 token 过期/失效分支；会话中途 401 视为账号失效终止本轮。
+ * 会话策略（2026-09-23 由「每次全新登录」改为令牌缓存）：token/uid 存 SecureStore
+ * （`voltcoach.onelap.session`），复用到 401 为止——带密码的登录次数因此大幅下降，
+ * 形态更贴近官方 App 的长会话；401 时自动清缓存、重登一次并重试原请求（只重试一次，
+ * 避免密码错误时的重试风暴）。账号变更/解绑即作废缓存。
+ *
  * 自动同步：前台 AppState 触发（国内 ROM 后台限制多，打开时拉最可靠，§10.4），
  * 模块级 1h 节流；失败仅警告不中断应用。并发防双跑：进行中的同步共享同一 Promise。
  */
@@ -24,12 +28,15 @@ import {
 import { importFitBytes } from './importFit';
 import {
   createOnelapClient,
+  endpointOrigins,
   extractFitFileName,
   jitterDelayMs,
   OnelapError,
   parseRideTime,
+  probeEndpoint,
   syncWindowStart,
   type OnelapSession,
+  type ProbeResult,
 } from '@/sync/onelap';
 
 /** 同步节流用的等待（活动之间随机间隔，降低请求突发） */
@@ -40,6 +47,8 @@ function sleep(ms: number): Promise<void> {
 // SecureStore 键名（与 dbkey/aikey 同前缀口径）
 const ONELAP_ACCOUNT_STORE = 'voltcoach.onelap.account';
 const ONELAP_PASSWORD_STORE = 'voltcoach.onelap.password';
+/** 会话缓存（token/uid 的 JSON）——401 才重登，见文件头「会话策略」 */
+const ONELAP_SESSION_STORE = 'voltcoach.onelap.session';
 
 /** 前台自动同步的最小间隔（手动「立即同步」不受限） */
 const AUTO_THROTTLE_MS = 60 * 60 * 1000;
@@ -58,17 +67,67 @@ export async function getOnelapAccount(): Promise<OnelapAccount | null> {
   return account && password ? { account, password } : null;
 }
 
-/** 保存/更新账号（password 传 null 表示清除整组凭据） */
+/** 保存/更新账号（password 传 null 表示清除整组凭据；此时一并作废缓存会话） */
 export async function setOnelapAccount(account: string, password: string | null): Promise<void> {
   if (!account.trim() || !password) {
     await Promise.all([
       SecureStore.deleteItemAsync(ONELAP_ACCOUNT_STORE),
       SecureStore.deleteItemAsync(ONELAP_PASSWORD_STORE),
+      SecureStore.deleteItemAsync(ONELAP_SESSION_STORE),
     ]);
     return;
   }
   await SecureStore.setItemAsync(ONELAP_ACCOUNT_STORE, account.trim());
   await SecureStore.setItemAsync(ONELAP_PASSWORD_STORE, password);
+  // 账号可能换了人：旧会话即刻作废，避免拿 A 的 token 读 B 的数据
+  const cached = await readCachedSession();
+  if (cached && cached.account !== account.trim()) {
+    await SecureStore.deleteItemAsync(ONELAP_SESSION_STORE);
+  }
+}
+
+// ---------------- 会话缓存（token/uid 复用至 401，大幅减少带密码登录） ----------------
+
+/** 读缓存会话；无缓存/内容损坏/账号不符返回 null（调用方转为密码登录）。
+ *  信任边界：与 AI Key 同级（SecureStore/Keystore 支撑）——bearer token 的固有性质是
+ *  持有即可读该账号云端数据，故与密钥同存同管。若登录响应结构变化导致 uid 取空，
+ *  缓存会退化为「每轮多一次登录 + 报账号密码错误」，届时按登录响应格式排查。 */
+async function readCachedSession(): Promise<(OnelapSession & { account: string }) | null> {
+  const raw = await SecureStore.getItemAsync(ONELAP_SESSION_STORE);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<OnelapSession & { account: string }>;
+    if (typeof parsed.token !== 'string' || typeof parsed.uid !== 'string' || typeof parsed.account !== 'string') {
+      return null;
+    }
+    return { account: parsed.account, token: parsed.token, uid: parsed.uid };
+  } catch {
+    return null; // 行内容损坏按无缓存处理
+  }
+}
+
+/** 缓存会话（仅当账号仍绑定且匹配时写入；会话缓存是纯优化，存储异常只警告不阻断同步） */
+async function writeCachedSession(account: string, session: OnelapSession): Promise<void> {
+  try {
+    // 复核账号仍绑定：解绑/换号发生在同步途中的话，不要把作废的会话写回去
+    const bound = await getOnelapAccount();
+    if (!bound || bound.account.trim() !== account) return;
+    await SecureStore.setItemAsync(
+      ONELAP_SESSION_STORE,
+      JSON.stringify({ account, token: session.token, uid: session.uid }),
+    );
+  } catch (e) {
+    console.warn('会话缓存写入失败（忽略，下次同步会重新登录）:', e);
+  }
+}
+
+/** 作废缓存会话（401 后调用；连同解绑路径一并清理）。删除失败只警告——不能阻断重登 */
+export async function clearCachedSession(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(ONELAP_SESSION_STORE);
+  } catch (e) {
+    console.warn('会话缓存清除失败（忽略，交给后续 401 自愈）:', e);
+  }
 }
 
 /** 单轮同步结果（UI 展示 imported/skipped/failed 三计数；error 按稳定码映射 i18n） */
@@ -135,26 +194,71 @@ async function runSyncOnce(): Promise<SyncOutcome> {
   return outcome;
 }
 
-/** 登录 + 拉取 + 入库；逐活动失败仅计数不中断（§10.4 口径），鉴权失败终止本轮 */
-async function pullActivities(account: OnelapAccount, state: SyncState): Promise<SyncOutcome> {
-  // 端点联调注入点：EXPO_PUBLIC_* 打包期内联（Expo 标准机制），生产构建不设即用
-  // 真实端点；模拟器冒烟设 EXPO_PUBLIC_ONELAP_BASE=http://10.0.2.2:8791 对本地 mock
+/** 联调端点覆盖（EXPO_PUBLIC_ONELAP_BASE 打包期内联；生产构建不设即为 undefined） */
+function endpointOverrides(): { login: string; rideRecord: string } | undefined {
   const base = process.env.EXPO_PUBLIC_ONELAP_BASE;
-  const client = createOnelapClient({
+  return base ? { login: `${base}/api/login`, rideRecord: `${base}/api/otm/ride_record` } : undefined;
+}
+
+/** 当前生效的联调端点（无覆盖返回 null）——UI 据此显式提示，防止把联调包当生产包用 */
+export function onelapOverrideBase(): string | null {
+  return process.env.EXPO_PUBLIC_ONELAP_BASE || null; // 空串按无覆盖（与 endpointOverrides 同为 falsy 判定）
+}
+
+/** 应用侧客户端工厂（fetch/md5/随机数绑定 expo 实现；端点与超时口径集中在此） */
+async function buildClient() {
+  return createOnelapClient({
     fetchImpl: await loadDefaultFetch(),
     md5Hex: (s) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, s),
     randomBytes: (n) => Crypto.getRandomBytes(n),
-    baseUrlOverrides: base
-      ? { login: `${base}/api/login`, rideRecord: `${base}/api/otm/ride_record` }
-      : undefined,
+    baseUrlOverrides: endpointOverrides(),
   });
+}
 
+/** 「测试连接」：探测登录域与数据域的可达性（不含凭据，纯链路验证） */
+export async function probeOnelapEndpoints(): Promise<ProbeResult[]> {
+  const [fetchImpl, origins] = await Promise.all([
+    loadDefaultFetch(),
+    Promise.resolve(endpointOrigins(endpointOverrides())),
+  ]);
+  return Promise.all(origins.map((origin) => probeEndpoint(origin, { fetchImpl })));
+}
+
+/**
+ * 登录 + 拉取 + 入库；逐活动失败仅计数不中断（§10.4 口径），鉴权失败终止本轮。
+ * 会话：优先复用缓存 token，401 时清缓存→重登一次→重试原请求（只重试一次）。
+ */
+async function pullActivities(account: OnelapAccount, state: SyncState): Promise<SyncOutcome> {
+  const client = await buildClient();
+
+  // 会话就绪：先用缓存 token（无则密码登录）
   let session: OnelapSession;
   try {
-    session = await client.login(account.account, account.password);
+    const cached = await readCachedSession();
+    if (cached && cached.account === account.account.trim()) {
+      session = { token: cached.token, uid: cached.uid };
+      console.log('顽鹿同步：复用缓存会话（无需密码登录）');
+    } else {
+      session = await client.login(account.account, account.password);
+      await writeCachedSession(account.account.trim(), session);
+    }
   } catch (e) {
     return { imported: 0, skipped: 0, failed: 0, error: toError(e), failureFloor: null };
   }
+
+  /** 带一次自动重登的调用：仅在 auth 错误时清缓存重登重试，其余错误原样抛出 */
+  const withAuthRetry = async <T>(fn: (s: OnelapSession) => Promise<T>): Promise<T> => {
+    try {
+      return await fn(session);
+    } catch (e) {
+      if (!(e instanceof OnelapError) || e.code !== 'auth') throw e;
+      console.warn('顽鹿会话失效（401），清缓存并重新登录一次');
+      await clearCachedSession();
+      session = await client.login(account.account, account.password);
+      await writeCachedSession(account.account.trim(), session);
+      return fn(session);
+    }
+  };
 
   // 窗口起点：水位线前移 24h 缓冲，但不早于「最近 SYNC_WINDOW_DAYS 天」（首次同步
   // 与长期未同步都截断——只回溯 3 个月，降低抓取观感，见 onelap.syncWindowStart）
@@ -162,7 +266,7 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
 
   let cloudList;
   try {
-    cloudList = await client.listSince(session, since);
+    cloudList = await withAuthRetry((s) => client.listSince(s, since));
   } catch (e) {
     return { imported: 0, skipped: 0, failed: 0, error: toError(e), failureFloor: null };
   }
@@ -173,13 +277,13 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
     // 活动之间随机等待 300–800ms：摊平请求突发（每个活动要发 2 个请求）
     if (i > 0) await sleep(jitterDelayMs());
     try {
-      const key = await client.getFitKey(session, act.id);
+      const key = await withAuthRetry((s) => client.getFitKey(s, act.id));
       const fileName = extractFitFileName(key, act.id);
       if (existing.has(fileName)) {
         outcome.skipped += 1;
         continue;
       }
-      const { bytes, fileName: normalized } = await client.downloadByKey(session, key, act.id);
+      const { bytes, fileName: normalized } = await withAuthRetry((s) => client.downloadByKey(s, key, act.id));
       await importFitBytes(bytes, normalized);
       existing.add(normalized);
       outcome.imported += 1;

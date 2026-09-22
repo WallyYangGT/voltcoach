@@ -65,6 +65,7 @@
     "test": "node --test \"test/*.test.mjs\"",
     "test:coverage": "node --test --experimental-test-coverage \"test/*.test.mjs\"",
     "golden": "node scripts/golden-diff.mjs",
+    "check:apk": "node scripts/check-release-bundle.mjs",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix"
   },

@@ -17,6 +17,7 @@ import {
   buildFitContentUrl,
   buildSignStr,
   createOnelapClient,
+  endpointOrigins,
   extractFitFileName,
   isBeforeSince,
   jitterDelayMs,
@@ -26,6 +27,7 @@ import {
   parseRideTime,
   PACE_MAX_MS,
   PACE_MIN_MS,
+  probeEndpoint,
   SYNC_WINDOW_DAYS,
   syncWindowStart,
 } from '../src/sync/onelap.ts';
@@ -144,6 +146,71 @@ test('jitterDelayMs: 非法/越界随机数 → 回落下界（防御）', () =>
   assert.equal(jitterDelayMs(() => Number.NaN), PACE_MIN_MS);
   assert.equal(jitterDelayMs(() => -1), PACE_MIN_MS);
   assert.equal(jitterDelayMs(() => 2), PACE_MAX_MS); // 越上界钳到 max
+});
+
+test('endpointOrigins: 默认取登录域与数据域两个源；同源去重', () => {
+  assert.deepEqual(endpointOrigins(), ['https://www.onelap.cn', 'https://otm.onelap.cn']);
+  // mock 覆盖时两个端点同源 → 只探一次
+  assert.deepEqual(
+    endpointOrigins({ login: 'http://10.0.2.2:8791/api/login', rideRecord: 'http://10.0.2.2:8791/api/otm/ride_record' }),
+    ['http://10.0.2.2:8791'],
+  );
+  assert.deepEqual(endpointOrigins({ login: 'not-a-url', rideRecord: ONELAP_RIDE_RECORD_BASE }), ['https://otm.onelap.cn']);
+});
+
+test('probeEndpoint: 拿到任何 HTTP 响应即算链路可达（404/500 也证明连得上）', async () => {
+  const ok = await probeEndpoint('https://example.test', {
+    fetchImpl: async () => new Response('ok', { status: 200 }),
+    now: (() => { let t = 1000; return () => (t += 120); })(),
+  });
+  assert.equal(ok.reachable, true);
+  assert.equal(ok.status, 200);
+  assert.equal(ok.ms, 120);
+  assert.equal(ok.detail, null);
+
+  const err = await probeEndpoint('https://example.test', {
+    fetchImpl: async () => new Response('boom', { status: 500 }),
+  });
+  assert.equal(err.reachable, true, 'HTTP 500 仍算可达（服务器在应答）');
+  assert.equal(err.status, 500);
+});
+
+test('probeEndpoint: 连接失败透出原始原因（DNS/拒绝连接等）', async () => {
+  const r = await probeEndpoint('https://example.test', {
+    fetchImpl: async () => {
+      throw new Error('Network request failed');
+    },
+  });
+  assert.equal(r.reachable, false);
+  assert.equal(r.status, null);
+  assert.match(r.detail, /Network request failed/);
+});
+
+test('probeEndpoint: 超时（含 expo/fetch 的 canceled 措辞）→ 明确的连接超时提示', async () => {
+  // 模拟 expo/fetch 在 signal abort 时的报错文案（不含 abort 字样）
+  const hanging = (url, init) =>
+    new Promise((_, reject) => {
+      init.signal.addEventListener('abort', () => reject(new Error('Fetch request has been canceled')));
+    });
+  const r = await probeEndpoint('https://example.test', { fetchImpl: hanging, timeoutMs: 30 });
+  assert.equal(r.reachable, false);
+  assert.match(r.detail, /连接超时/);
+});
+
+test('createOnelapClient: 请求超时（含 canceled 措辞）归一为 network 且提示「请求超时」', async () => {
+  const hanging = (url, init) =>
+    new Promise((_, reject) => {
+      init.signal.addEventListener('abort', () => reject(new Error('Fetch request has been canceled')));
+    });
+  const client = createOnelapClient({
+    ...nodeDeps,
+    fetchImpl: hanging,
+    timeouts: { requestMs: 30, downloadMs: 30 },
+  });
+  await assert.rejects(
+    () => client.login('rider@example.com', 'pw'),
+    (e) => e.code === 'network' && /请求超时/.test(e.message) && !/canceled/i.test(e.message),
+  );
 });
 
 test('e2e: 登录（服务端校验签名）→ 增量列表 → 下载 FIT 全流程对 mock server', async () => {
