@@ -65,6 +65,8 @@ export interface UseAiReportResult {
   sending: boolean;
   /** 追问：返回错误文案（成功为 null），由调用方决定如何提示 */
   sendFollowUp: (text: string) => Promise<string | null>;
+  /** 重试追问/对话里的一条失败消息（失败气泡上的重试） */
+  retryChatMessage: (chatId: number, messageId: number) => void;
 }
 
 export function useAiReport(reportId: number | null, lang: Lang): UseAiReportResult {
@@ -177,6 +179,22 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
 
   const reportFileName = report?.file_name ?? null;
 
+  /**
+   * 重试追问/对话里的一条失败消息（失败气泡上的重试）。
+   * ⚠️ 必须紧跟一次 load()：此刻库状态仍是 failed、只有进程内有任务在跑，不重渲染的话
+   * shouldPollReport 拿不到 chatRunning，轮询不会启动 → 重试成功了气泡也永远停在失败态
+   * （2026-09-22 那个坑的第三处：报告 / 对话框 / 追问气泡）。
+   */
+  const retryChatMessage = useCallback(
+    (chatId: number, messageId: number) => {
+      void runChatGeneration(chatId, messageId, lang).catch((e) =>
+        console.warn('追问重试失败:', e),
+      );
+      void load();
+    },
+    [lang, load],
+  );
+
   const sendFollowUp = useCallback(
     async (text: string): Promise<string | null> => {
       if (reportId == null) return null;
@@ -222,5 +240,6 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
     regenerate,
     sending,
     sendFollowUp,
+    retryChatMessage,
   };
 }

@@ -13,7 +13,7 @@ import { Button } from 'react-native-paper';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { getAiConfig, getLatestReviewReport } from '@/db';
-import { buildReportPrompt, createReportDraft, runChatGeneration } from '@/services/aiGenerate';
+import { buildReportPrompt, createReportDraft } from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiReportBody } from './AiReportBody';
@@ -95,7 +95,7 @@ export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
   useImperativeHandle(ref, () => ({ analyze }), [analyze]);
 
   /** 重新生成：新建一份（旧报告留档在会话中心），口径同 Web 版 */
-  const { regenerate: regenerateReport, sendFollowUp } = ai;
+  const { regenerate: regenerateReport, sendFollowUp, retryChatMessage } = ai;
   const regenerate = useCallback(() => {
     void (async () => {
       try {
@@ -107,12 +107,10 @@ export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
   }, [regenerateReport]);
 
   const retryFollowUp = useCallback(() => {
-    const target = ai.chat?.messages.find((m) => m.status === 'failed' || m.status === 'pending');
-    if (target && ai.chat)
-      void runChatGeneration(ai.chat.id, target.id, lang).catch((e) =>
-        console.warn('追问重试失败:', e),
-      );
-  }, [ai.chat, lang]);
+    const chat = ai.chat;
+    const target = chat?.messages.find((m) => m.status === 'failed' || m.status === 'pending');
+    if (chat && target) retryChatMessage(chat.id, target.id);
+  }, [ai.chat, retryChatMessage]);
 
   const send = useCallback(
     async (text: string) => {
