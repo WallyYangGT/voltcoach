@@ -144,10 +144,11 @@ function badBodyError(status: number, text: string, lang: Lang): AiTransportErro
  * 长报告请求可能已经等了数分钟，不重试就等于让用户手动再来一遍。
  * - **重试改用流式**（仅限不带 tools 的请求）：非流式长请求中途一行字节都不流动，
  *   最容易撞上网关/NAT 的空闲超时——真机"等半天后 JSON 解析失败"的现场形态；
- *   流式让字节持续流动，且正文边收边攒，被掐断时还能保住已收到的部分。
- *   带 tools 的请求不切换（tool_calls 的增量帧与 SSE 组合解析复杂，保持非流式）。
+ *   流式让字节持续流动，正文边收边攒。带 tools 的请求不切换（tool_calls 的增量帧
+ *   与 SSE 组合解析复杂，保持非流式）。
  * - 已吐过字的流式响应不重试（正文已交给调用方，重来会造成重复内容）。
- * - 共用调用方的 signal：总超时预算不重置；等待期间被 abort 则不再补发。
+ * - 共用调用方的 signal：总超时预算不重置（首次失败若已耗掉大半预算，重试可能来不及）；
+ *   等待期间被 abort 则不再补发。
  * 重试前经 onRetry 告知调用方（UI 进度）。
  */
 export async function requestChatCompletion(
@@ -271,6 +272,7 @@ async function requestOnce(
   let fullText = '';
   let rawText = ''; // 原始正文（无 data: 帧时按普通 JSON 响应兜底）
   let sawFrame = false;
+  let sawDelta = false; // 是否已收到增量帧（与整段 message 帧互斥，防正文重复）
   const emit = (delta: string) => {
     fullText += delta;
     onStreamChunk?.(delta);
@@ -293,9 +295,17 @@ async function requestOnce(
     }
     if (obj.error) throw new AiTransportError(obj.error.message || JSON.stringify(obj.error), false);
     const choice = obj.choices?.[0];
-    // 兼容两种形态：增量 delta（标准流式）与整段 message（部分账号不真正流式）
-    const delta = choice?.delta?.content ?? choice?.message?.content;
-    if (delta) emit(delta);
+    // 兼容两种形态：增量 delta（标准流式）与整段 message（部分账号不真正流式）。
+    // ⚠️ 两种形态互斥：见过增量就不再认整段帧——部分网关会在 delta 流末尾补一帧带
+    // message 的收尾帧，若无条件取 message.content，正文会被拼成两遍（静默污染落库正文）。
+    const deltaContent = choice?.delta?.content;
+    if (deltaContent) {
+      sawDelta = true;
+      emit(deltaContent);
+      return;
+    }
+    const wholeContent = choice?.message?.content;
+    if (wholeContent && !sawDelta) emit(wholeContent);
   };
   try {
     for (;;) {
@@ -336,7 +346,8 @@ async function requestOnce(
     // 服务端无视 stream 直接回了整段 JSON：按非流式格式解析（否则会被误判成空响应）
     const msg = parseMessageBody(rawText + decodeUtf8(buffer), res.status, lang);
     const content = msg.content ?? '';
-    if (content) emit(content);
+    if (!content) throw new AiTransportError(t(lang, 'ai.empty'), true); // 不回空正文给调用方
+    emit(content);
     return onStreamChunk ? content : msg;
   }
   if (!fullText) throw new AiTransportError(t(lang, 'ai.empty'), true);

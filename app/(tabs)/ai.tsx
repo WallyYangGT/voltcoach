@@ -106,6 +106,11 @@ export default function AiCenterScreen() {
       Alert.alert(t('ai.scenario.needParam'));
       return;
     }
+    // 未配置密钥时不落"注定失败"的占位报告（口径同 Web 版 runAi：直接给配置/复制提示词）
+    if (configured === false) {
+      Alert.alert(t('ai.center.unconfigured'));
+      return;
+    }
     setCreating(true);
     try {
       const id = await createReportDraft(scenario, scenarioContext(scenario), lang);

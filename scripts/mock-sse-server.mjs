@@ -13,6 +13,10 @@
  *   MOCK_FAIL_EMPTY=N —— 前 N 次"正文请求"（不含 tool_call 演练轮）返回 200 + 空正文；
  *   真机上 Hermes 在 res.json() 里抛的正是 JSON Parse error: Unexpected end of input。
  *   用于演练传输层自动重试（首轮空 → 自动补发 → 成功）。
+ *   MOCK_TRUNCATE=N   —— 前 N 次正文请求的非流式正文**截半**下发（真机"正文被中间层
+ *   掐断"的形态，报「AI 响应不是完整 JSON」）；与 MOCK_FAIL_EMPTY 独立计数。
+ *   MOCK_CUT_AFTER=N  —— 流式请求推 N 帧后 `res.destroy()` 掐断连接（演练"已吐字的流
+ *   不重试"与读取中断归传输级）。
  *   MOCK_DELAY_MS=N   —— 正文请求前等待 N 毫秒，模拟长报告（观察"生成中"状态与已等待时长）。
  */
 import http from 'node:http';
@@ -24,6 +28,8 @@ const REPLY =
   '用以反映变强度骑行的真实生理负荷，比平均功率更能刻画疲劳代价。'.repeat(2);
 
 const FAIL_EMPTY = Number(process.env.MOCK_FAIL_EMPTY || 0); // 前 N 次正文请求注入空正文
+const TRUNCATE = Number(process.env.MOCK_TRUNCATE || 0); // 前 N 次正文请求注入截半正文
+const CUT_AFTER = Number(process.env.MOCK_CUT_AFTER || 0); // 流式推 N 帧后掐断连接
 const DELAY_MS = Number(process.env.MOCK_DELAY_MS || 0); // 正文请求前的模拟等待
 let contentCalls = 0; // 正文请求计数（tool_call 演练轮不计入）
 
@@ -86,14 +92,16 @@ const server = http.createServer((req, res) => {
     }
     const respond = () => {
       if (!stream) {
+        const full = JSON.stringify({
+          id: 'mock-1',
+          choices: [{ index: 0, message: { role: 'assistant', content: REPLY }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
+        });
+        // 截半下发：真机"正文被中间层掐断"的形态（客户端报「不是完整 JSON」）
+        const cut = contentCalls <= TRUNCATE;
+        if (cut) console.log(`  -> fault injected: truncated body (#${contentCalls}, bad-json drill)`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(
-          JSON.stringify({
-            id: 'mock-1',
-            choices: [{ index: 0, message: { role: 'assistant', content: REPLY }, finish_reason: 'stop' }],
-            usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
-          }),
-        );
+        res.end(cut ? full.slice(0, Math.floor(full.length / 2)) : full);
         return;
       }
 
@@ -108,6 +116,13 @@ const server = http.createServer((req, res) => {
       const pieces = REPLY.match(new RegExp(`.{1,${chunkSize}}`, 'gu')) ?? [];
       let i = 0;
       const timer = setInterval(() => {
+        if (CUT_AFTER > 0 && i >= CUT_AFTER) {
+          // 推 N 帧后掐断连接：客户端应归为读取中断传输级错误（已吐字则不重试）
+          clearInterval(timer);
+          console.log(`[${new Date().toISOString()}] socket destroyed after ${i} chunks (cut drill)`);
+          res.destroy();
+          return;
+        }
         if (i >= pieces.length) {
           clearInterval(timer);
           res.write('data: [DONE]\n\n');

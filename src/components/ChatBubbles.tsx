@@ -25,7 +25,10 @@ export function ChatBubbles({ chatId, messages, onRetry }: Props) {
   return (
     <View style={styles.list}>
       {messages.map((m) => {
-        const progress = m.status === 'pending' ? getChatProgress(chatId, m.id) : null;
+        // pending（生成中）与 failed（重试中）都可能带传输级自动重试进度
+        const progress = m.status === 'pending' || m.status === 'failed'
+          ? getChatProgress(chatId, m.id)
+          : null;
         return (
           <View
             key={m.id}
@@ -45,8 +48,14 @@ export function ChatBubbles({ chatId, messages, onRetry }: Props) {
                 <Text style={styles.failedText}>{t('session.failed')}</Text>
                 {!!m.error && <Text style={styles.failedErr}>{m.error}</Text>}
                 <Button compact mode="outlined" textColor={palette.volt} onPress={onRetry}>
-                  {t('session.retry')}
+                  {progress ? t('ai.retrying') : t('session.retry')}
                 </Button>
+                {/* 重试期间库状态仍是 failed：自动重试进度要在这里也可见（同 AiReportBody） */}
+                {!!progress && (
+                  <Text style={styles.progressNote}>
+                    {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
+                  </Text>
+                )}
               </View>
             )}
             {m.status === 'completed' &&

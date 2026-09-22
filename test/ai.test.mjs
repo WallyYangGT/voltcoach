@@ -430,6 +430,21 @@ test('requestChatCompletion: 带 tools 的请求重试不改流式（tool_calls 
   assert.equal(res.content, '工具轮重试');
 });
 
+test('requestChatCompletion: 流式「delta 帧 + 末尾整段 message 帧」不重复正文', async () => {
+  // 部分网关在增量流末尾补一帧带 message 的收尾帧：无条件取 message.content 会让正文翻倍
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: '前半段' } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ message: { content: '前半段后半段' } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const chunks = [];
+  const text = await requestChatCompletion(f, 'http://m/v1', 'k', {}, {
+    onStreamChunk: (d) => chunks.push(d),
+  });
+  assert.equal(text, '前半段');
+  assert.deepEqual(chunks, ['前半段']);
+});
+
 test('requestChatCompletion: 流式请求收到整段 JSON（服务端无视 stream）按非流式解析', async () => {
   const f = async () =>
     new Response(JSON.stringify({ choices: [{ message: { content: '整段正文' } }] }), { status: 200 });
@@ -439,6 +454,15 @@ test('requestChatCompletion: 流式请求收到整段 JSON（服务端无视 str
   });
   assert.equal(text, '整段正文');
   assert.deepEqual(chunks, ['整段正文']);
+});
+
+test('requestChatCompletion: 流式请求收到无正文的整段 JSON 视为空响应', async () => {
+  const f = async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: null } }] }), { status: 200 });
+  await assert.rejects(
+    requestChatCompletion(f, 'http://m/v1', 'k', {}, { onStreamChunk: () => {}, retryDelayMs: 1 }),
+    /AI API 返回为空/,
+  );
 });
 
 test('requestChatCompletion: 空 choices 视为空响应', async () => {

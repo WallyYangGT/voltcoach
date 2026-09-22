@@ -108,7 +108,10 @@ export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
 
   const retryFollowUp = useCallback(() => {
     const target = ai.chat?.messages.find((m) => m.status === 'failed' || m.status === 'pending');
-    if (target && ai.chat) void runChatGeneration(ai.chat.id, target.id, lang);
+    if (target && ai.chat)
+      void runChatGeneration(ai.chat.id, target.id, lang).catch((e) =>
+        console.warn('追问重试失败:', e),
+      );
   }, [ai.chat, lang]);
 
   const send = useCallback(

@@ -129,10 +129,19 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
     }, [load]),
   );
 
-  // 生成中轮询：判定抽到 core/report-status（纯函数 + 单测守住 2026-09-22 的回归）
+  // 生成中轮询：判定抽到 core/report-status（纯函数 + 单测守住 2026-09-22 的回归）。
+  // chatRunning：追问里"失败气泡点了重试"时库状态仍是 failed，只有进程内任务在跑——
+  // 不把它算进来，重试成功的气泡就永远停在失败态（与报告页同一个坑）。
   const chatPending = !!chat?.messages.some((m) => m.status === 'pending');
+  const chatRunning = !!chat && chat.messages.some((m) => isChatGenerating(chat.id, m.id));
   const taskRunning = reportId != null && isReportGenerating(reportId);
-  const polling = shouldPollReport({ status: report?.status, retrying, taskRunning, chatPending });
+  const polling = shouldPollReport({
+    status: report?.status,
+    retrying,
+    taskRunning,
+    chatPending,
+    chatRunning,
+  });
 
   useEffect(() => {
     if (!polling) return;
@@ -184,7 +193,9 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
           lang,
         );
         setFollowChatId(chatId);
-        void runChatGeneration(chatId, messageId, lang);
+        void runChatGeneration(chatId, messageId, lang).catch((e) =>
+          console.warn('追问生成任务异常:', e),
+        );
         await load();
         return null;
       } catch (e) {

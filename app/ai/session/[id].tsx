@@ -58,7 +58,10 @@ export default function AiSessionScreen() {
       if (c) {
         for (const m of c.messages) {
           if (m.status === 'pending' && !isChatGenerating(c.id, m.id)) {
-            void runChatGeneration(c.id, m.id, lang);
+            // pending 残留（应用被杀中断）：以同一消息重跑即可恢复
+            void runChatGeneration(c.id, m.id, lang).catch((e) =>
+              console.warn('对话恢复生成失败:', e),
+            );
           }
         }
       }
@@ -76,16 +79,18 @@ export default function AiSessionScreen() {
   // 报告页的追问线程与对话页的消息流统一成一个变量（重试逻辑随之共用）
   const chat = kind === 'report' ? ai.chat : chatRow;
 
-  // 对话 pending 轮询（报告页轮询在 useAiReport 内）
+  // 对话 pending 轮询（报告页轮询在 useAiReport 内）。
+  // chatRunning：失败气泡点重试时库状态仍是 failed、只有进程内有任务——不轮询就永远停在失败态
   const chatPending = !!chatRow?.messages.some((m) => m.status === 'pending');
+  const chatRunning = !!chatRow && chatRow.messages.some((m) => isChatGenerating(chatRow.id, m.id));
   useFocusEffect(
     useCallback(() => {
-      if (!chatPending) return;
+      if (!chatPending && !chatRunning) return;
       const timer = setInterval(() => {
         void loadChat();
       }, POLL_MS);
       return () => clearInterval(timer);
-    }, [chatPending, loadChat]),
+    }, [chatPending, chatRunning, loadChat]),
   );
 
   const report = ai.report;
@@ -101,7 +106,11 @@ export default function AiSessionScreen() {
   const retryChat = useCallback(() => {
     if (!chat) return;
     const target = chat.messages.find((m) => m.status === 'failed' || m.status === 'pending');
-    if (target) void runChatGeneration(chat.id, target.id, lang);
+    if (target) {
+      void runChatGeneration(chat.id, target.id, lang).catch((e) =>
+        console.warn('对话重试失败:', e),
+      );
+    }
     if (kind === 'report') void reloadReport();
     else void loadChat();
   }, [chat, lang, kind, reloadReport, loadChat]);
@@ -142,13 +151,17 @@ export default function AiSessionScreen() {
         // 新对话：首条消息落库建对话后 replace 到真实 id（返回列表可见）
         const { chatId, messageId } = await submitChatMessage({ mode: 'chat', message: text }, lang);
         router.replace(`/ai/session/chat-${chatId}`);
-        void runChatGeneration(chatId, messageId, lang);
+        void runChatGeneration(chatId, messageId, lang).catch((e) =>
+          console.warn('对话生成任务异常:', e),
+        );
       } else if (entityId != null) {
         const { messageId } = await submitChatMessage(
           { chatId: entityId, mode: 'chat', message: text },
           lang,
         );
-        void runChatGeneration(entityId, messageId, lang);
+        void runChatGeneration(entityId, messageId, lang).catch((e) =>
+          console.warn('对话生成任务异常:', e),
+        );
         await loadChat();
       }
     } catch (e) {
