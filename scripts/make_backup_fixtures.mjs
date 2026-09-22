@@ -7,7 +7,8 @@
  * 产物，可用 argv[2] 指定任意 .fitbackup）。
  *
  * 用法：node scripts/make_backup_fixtures.mjs [基底.fitbackup] [输出目录]
- * 产物用 adb push 到模拟器 Download，再在「数据管理 → 从备份包导入」里逐个选。
+ *   基底默认取旧 repo 的 export/ 目录下最新产物（D:/projects/fit-reader/export）；
+ *   产物用 adb push 到模拟器 Download，再在「数据管理 → 从备份包导入」里逐个选。
  */
 
 import fs from 'node:fs';
@@ -15,25 +16,49 @@ import path from 'node:path';
 import { unzipSync } from 'fflate';
 import { packBackup } from '../src/backup/archive.ts';
 
-const src = process.argv[2] ?? 'D:/projects/fit-reader/export/voltcoach-backup-20260922-201134.fitbackup';
+/** 默认基底：旧 repo export/ 下最新的 .fitbackup（找不到给出可操作的报错） */
+function latestLegacyExport() {
+  const dir = process.env.FIT_READER_EXPORT_DIR ?? 'D:/projects/fit-reader/export';
+  if (fs.existsSync(dir)) {
+    const candidates = fs
+      .readdirSync(dir)
+      .filter((n) => n.endsWith('.fitbackup'))
+      .sort();
+    if (candidates.length) return path.join(dir, candidates[candidates.length - 1]);
+  }
+  console.error(
+    `找不到基底备份包。请先跑 \`node index.js --export\`（旧仓库），或显式传入：\n` +
+      `  node scripts/make_backup_fixtures.mjs <基底.fitbackup> [输出目录]\n` +
+      `（也可用 FIT_READER_EXPORT_DIR 指向旧仓库的 export 目录，当前找的是 ${dir}）`,
+  );
+  process.exit(1);
+}
+
+const src = process.argv[2] ?? latestLegacyExport();
 const outDir = process.argv[3] ?? path.join(process.env.TEMP ?? '/tmp', 'backup-fixtures');
 fs.mkdirSync(outDir, { recursive: true });
 
-// 真实包解出 db 与 manifest（作为夹具基底）
-const real = unzipSync(new Uint8Array(fs.readFileSync(src)));
+// 真实包解出 db / manifest / records（作为夹具基底）
+const real = flatten(unzipSync(new Uint8Array(fs.readFileSync(src))));
 const dbBytes = real['fitness.db'];
+if (!dbBytes) {
+  console.error(`基底包缺 fitness.db（不是 .fitbackup？）: ${src}`);
+  process.exit(1);
+}
+const realManifest = JSON.parse(new TextDecoder().decode(real['manifest.json']));
 const records = Object.entries(real)
   .filter(([n]) => n.startsWith('records/'))
   .map(([n, gz]) => ({ name: n.replace(/^records\//, '').replace(/\.records\.csv\.gz$/, ''), gz }));
+console.log(`基底: ${src}（活动 ${realManifest.counts.activities} · records ${records.length}）`);
 
 const base = {
   format: 'fitbackup',
   schema_version: 1,
-  app_version: '0.1.0',
+  app_version: realManifest.app_version ?? '0.1.0',
   exported_at: '2026-09-22T12:00:00.000Z',
   device: 'fixture',
   db_key: null,
-  counts: { activities: 22, records: records.length },
+  counts: realManifest.counts, // 与基底库一致，避免确认框显示与实际不符
 };
 
 const write = (name, bytes) => {
@@ -58,7 +83,15 @@ write(
 const garbage = new Uint8Array(Array.from({ length: dbBytes.length }, (_, i) => (i * 31 + 7) % 256));
 write('fx4-needs-pass.fitbackup', packBackup({ ...base, db_key: null }, garbage, records));
 
-// ⑤ 明文库 + 提示：db_key=null 的真库（合法），但 counts 虚标 → 确认框仍应显示（对照项）
-write('fx5-plain-ok.fitbackup', packBackup({ ...base, counts: { activities: 1, records: 1 } }, dbBytes, records.slice(0, 1)));
-
 console.log(`\n输出目录: ${outDir}`);
+
+/** unzipSync 产出嵌套目录树，拍平成 'a/b' 全路径键（与 src/backup/archive.ts 的 flatten 同口径） */
+function flatten(nested, prefix = '') {
+  const out = {};
+  for (const [name, value] of Object.entries(nested)) {
+    const full = prefix ? `${prefix}/${name}` : name;
+    if (value instanceof Uint8Array) out[full] = value;
+    else Object.assign(out, flatten(value, full));
+  }
+  return out;
+}
