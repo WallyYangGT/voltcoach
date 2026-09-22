@@ -350,6 +350,26 @@ test('requestChatCompletion: 5xx 属瞬时故障重试一次', async () => {
   assert.equal(calls, 2);
 });
 
+test('requestChatCompletion: 正文读取中断报读取失败（非"解析失败"）并按传输级重试', async () => {
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new Error('socket hang up'));
+        },
+      }),
+      { status: 200 },
+    );
+  };
+  await assert.rejects(
+    rcc(f, 'http://m/v1', 'k', {}, { retryDelayMs: 1 }),
+    /AI 响应读取失败：socket hang up/,
+  );
+  assert.equal(calls, 2); // 断连属瞬时故障，重试一次
+});
+
 test('requestChatCompletion: 空 choices 视为空响应', async () => {
   const f = jsonFetch(() => ({ status: 200, body: { choices: [] } }));
   await assert.rejects(rcc(f, 'http://m/v1', 'k', {}), /AI API 返回为空/);
