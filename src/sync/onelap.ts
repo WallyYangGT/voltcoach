@@ -357,6 +357,10 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
         if (res.status === 401 || res.status === 403) throw new OnelapError('auth', '下载被拒（会话过期）');
         if (!res.ok) throw new OnelapError('api', `FIT 下载异常（HTTP ${res.status}）`);
         bytes = await res.arrayBuffer();
+      } catch (e) {
+        // body 阶段超时/网络中断同样归一为 network（而非裸 AbortError 逃逸）
+        if (e instanceof OnelapError) throw e;
+        throw new OnelapError('network', `FIT 下载失败: ${String(e)}`);
       } finally {
         done();
       }
