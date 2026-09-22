@@ -74,8 +74,9 @@ export default function ActivityDetailScreen() {
   // AI 复盘面板：顶部按钮触发生成/露出面板，panelY 记录面板位置供滚动定位
   const scrollRef = useRef<ScrollView>(null);
   const panelRef = useRef<AiReviewPanelHandle>(null);
-  const panelY = useRef(0);
+  const panelY = useRef<number | null>(null); // null = 面板尚未完成 layout（首次渲染前不滚动）
   const revealPanel = useCallback(() => {
+    if (panelY.current == null) return; // 还没量到位置就滚 = 滚到页顶
     scrollRef.current?.scrollTo({ y: Math.max(0, panelY.current - 12), animated: true });
   }, []);
 

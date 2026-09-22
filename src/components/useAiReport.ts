@@ -23,11 +23,13 @@ import {
   createReportDraft,
   generateReport,
   getReportProgress,
+  isChatGenerating,
   isReportGenerating,
   runChatGeneration,
   submitChatMessage,
   type GenProgress,
 } from '@/services/aiGenerate';
+import { shouldPollReport } from '@/core/report-status';
 import type { Lang } from '@/core/i18n';
 
 const POLL_MS = 1500; // 生成中轮询节奏（对齐旧 Web 版 pollAiChat 间隔）
@@ -85,22 +87,37 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
       setProgress(null);
       return;
     }
+    const id = reportId; // 本次加载的目标：await 期间 reportId 可能被切走（重新生成），旧结果不许覆盖
     try {
-      if (lastIdRef.current !== reportId) {
-        lastIdRef.current = reportId;
+      if (lastIdRef.current !== id) {
+        lastIdRef.current = id;
         setChat(null);
         setFollowChatId(null);
       }
-      const r = await getAiReport(reportId);
+      const r = await getAiReport(id);
+      if (lastIdRef.current !== id) return; // 已切到别的报告：丢弃过期响应
       setReport(r);
-      setProgress(getReportProgress(reportId));
+      setProgress(getReportProgress(id));
       if (r && r.status === 'pending' && !isReportGenerating(r.id)) {
         // pending 残留（进程被杀中断）：提示词与系统段均已落库，重跑即可恢复
-        void generateReport(r.id, lang);
+        void generateReport(r.id, lang).catch((e) => console.warn('报告恢复生成失败:', e));
       }
-      const fid = await findFollowUpChat(reportId);
+      const fid = await findFollowUpChat(id);
+      if (lastIdRef.current !== id) return;
       setFollowChatId(fid);
-      setChat(fid ? await getAiChat(fid) : null);
+      const c = fid ? await getAiChat(fid) : null;
+      if (lastIdRef.current !== id) return;
+      setChat(c);
+      // 追问消息的 pending 残留同样要补跑（否则气泡永远"生成中"、轮询也停不下来）
+      if (c) {
+        for (const m of c.messages) {
+          if (m.status === 'pending' && !isChatGenerating(c.id, m.id)) {
+            void runChatGeneration(c.id, m.id, lang).catch((e) =>
+              console.warn('追问恢复生成失败:', e),
+            );
+          }
+        }
+      }
     } catch (e) {
       console.warn('报告加载失败:', e);
     }
@@ -112,10 +129,10 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
     }, [load]),
   );
 
-  // 生成中轮询：pending 占位、进程内有任务（含重试）、或追问消息 pending 时持续轮询
+  // 生成中轮询：判定抽到 core/report-status（纯函数 + 单测守住 2026-09-22 的回归）
   const chatPending = !!chat?.messages.some((m) => m.status === 'pending');
   const taskRunning = reportId != null && isReportGenerating(reportId);
-  const polling = report?.status === 'pending' || retrying || taskRunning || chatPending;
+  const polling = shouldPollReport({ status: report?.status, retrying, taskRunning, chatPending });
 
   useEffect(() => {
     if (!polling) return;
@@ -130,10 +147,12 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
     if (reportId == null) return;
     setRetrying(true);
     // 生成任务回写状态后 load 会读到新状态；retrying 交给下面的生成态归零
-    void generateReport(reportId, lang).finally(() => {
-      setRetrying(false);
-      void load();
-    });
+    void generateReport(reportId, lang)
+      .catch((e) => console.warn('报告重试失败:', e))
+      .finally(() => {
+        setRetrying(false);
+        void load();
+      });
     void load();
   }, [reportId, lang, load]);
 

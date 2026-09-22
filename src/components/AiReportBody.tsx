@@ -51,17 +51,25 @@ export function AiReportBody({ report, progress, elapsedSec, retrying, onRetry }
 
   if (report.status === 'failed') {
     return (
-      <View style={styles.failedBox}>
-        <Text style={styles.failedText}>{t('session.failed')}</Text>
-        {!!report.error && <Text style={styles.failedErr}>{report.error}</Text>}
-        <Button
-          compact
-          mode="outlined"
-          textColor={palette.volt}
-          disabled={retrying}
-          onPress={onRetry}>
-          {retrying ? t('ai.retrying') : t('session.retry')}
-        </Button>
+      <View style={styles.block}>
+        <View style={styles.failedBox}>
+          <Text style={styles.failedText}>{t('session.failed')}</Text>
+          {!!report.error && <Text style={styles.failedErr}>{report.error}</Text>}
+          <Button
+            compact
+            mode="outlined"
+            textColor={palette.volt}
+            disabled={retrying}
+            onPress={onRetry}>
+            {retrying ? t('ai.retrying') : t('session.retry')}
+          </Button>
+        </View>
+        {/* 重试期间库状态仍是 failed：自动重试进度必须在这里也可见（用户此刻最需要知道"在补发"） */}
+        {!!progress && (
+          <Text style={styles.hint}>
+            {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
+          </Text>
+        )}
       </View>
     );
   }

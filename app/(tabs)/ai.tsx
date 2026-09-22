@@ -111,8 +111,8 @@ export default function AiCenterScreen() {
       const id = await createReportDraft(scenario, scenarioContext(scenario), lang);
       setSheetOpen(false);
       router.push(`/ai/session/report-${id}`);
-      // 后台生成：详情页轮询 db 状态展示进度
-      void generateReport(id, lang);
+      // 后台生成：详情页轮询 db 状态展示进度（写库失败在编排层内消化，这里只兜底不裸拒）
+      void generateReport(id, lang).catch((e) => console.warn('报告生成任务异常:', e));
     } catch (e) {
       Alert.alert(e instanceof Error ? e.message : String(e));
     } finally {

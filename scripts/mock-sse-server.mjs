@@ -8,6 +8,12 @@
  * M3 冒烟增强：请求带 tools 且消息历史只有 1 条（agentic 首轮）时，返回一个
  * save_memory 工具调用——App 会执行工具并把结果回填发起第二轮，mock 对后续轮
  * 返回正文，从而完整验证 runAgentLoop 的 tool_calls 回填链路与 save_memory 落库。
+ *
+ * 故障注入（2026-09-22 真机 JSON 解析事故的复现开关）：
+ *   MOCK_FAIL_EMPTY=N —— 前 N 次"正文请求"（不含 tool_call 演练轮）返回 200 + 空正文；
+ *   真机上 Hermes 在 res.json() 里抛的正是 JSON Parse error: Unexpected end of input。
+ *   用于演练传输层自动重试（首轮空 → 自动补发 → 成功）。
+ *   MOCK_DELAY_MS=N   —— 正文请求前等待 N 毫秒，模拟长报告（观察"生成中"状态与已等待时长）。
  */
 import http from 'node:http';
 
@@ -16,6 +22,10 @@ const REPLY =
   'NP（Normalized Power，标准化功率）是 Coggan 功率体系的核心指标：' +
   '把逐秒功率先做 30 秒滚动平均、再取四次方均值后开四次方根，' +
   '用以反映变强度骑行的真实生理负荷，比平均功率更能刻画疲劳代价。'.repeat(2);
+
+const FAIL_EMPTY = Number(process.env.MOCK_FAIL_EMPTY || 0); // 前 N 次正文请求注入空正文
+const DELAY_MS = Number(process.env.MOCK_DELAY_MS || 0); // 正文请求前的模拟等待
+let contentCalls = 0; // 正文请求计数（tool_call 演练轮不计入）
 
 const server = http.createServer((req, res) => {
   if (req.method !== 'POST' || !req.url?.includes('/chat/completions')) {
@@ -66,49 +76,66 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    if (!stream) {
+    // 故障注入：前 N 次正文请求返回 200 + 空正文（真机上即 JSON Parse error 现场）
+    contentCalls += 1;
+    if (contentCalls <= FAIL_EMPTY) {
+      console.log(`  -> fault injected: empty 200 body (#${contentCalls}, transport retry drill)`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(
-        JSON.stringify({
-          id: 'mock-1',
-          choices: [{ index: 0, message: { role: 'assistant', content: REPLY }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
-        }),
-      );
+      res.end('');
       return;
     }
-
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-    });
-    res.flushHeaders();
-    // 按 4 字一段切块推送，模拟真实 token 流
-    const chunkSize = 4;
-    const pieces = REPLY.match(new RegExp(`.{1,${chunkSize}}`, 'gu')) ?? [];
-    let i = 0;
-    const timer = setInterval(() => {
-      if (i >= pieces.length) {
-        clearInterval(timer);
-        res.write('data: [DONE]\n\n');
-        res.end();
-        console.log(`[${new Date().toISOString()}] stream completed: ${i} chunks`);
+    const respond = () => {
+      if (!stream) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            id: 'mock-1',
+            choices: [{ index: 0, message: { role: 'assistant', content: REPLY }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
+          }),
+        );
         return;
       }
-      const payload = JSON.stringify({
-        id: 'mock-1',
-        choices: [{ index: 0, delta: { content: pieces[i] } }],
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
       });
-      res.write(`data: ${payload}\n\n`);
-      i++;
-    }, 30);
-    // 注意挂 res 而不是 req：现代 Node 中 req 的 'close' 在请求体读完后立刻触发，
-    // 挂 req 会瞬间清掉 interval 导致一个字节都发不出去
-    res.on('close', () => {
-      if (i < pieces.length) console.log(`[${new Date().toISOString()}] client closed early at chunk ${i}/${pieces.length}`);
-      clearInterval(timer);
-    });
+      res.flushHeaders();
+      // 按 4 字一段切块推送，模拟真实 token 流
+      const chunkSize = 4;
+      const pieces = REPLY.match(new RegExp(`.{1,${chunkSize}}`, 'gu')) ?? [];
+      let i = 0;
+      const timer = setInterval(() => {
+        if (i >= pieces.length) {
+          clearInterval(timer);
+          res.write('data: [DONE]\n\n');
+          res.end();
+          console.log(`[${new Date().toISOString()}] stream completed: ${i} chunks`);
+          return;
+        }
+        const payload = JSON.stringify({
+          id: 'mock-1',
+          choices: [{ index: 0, delta: { content: pieces[i] } }],
+        });
+        res.write(`data: ${payload}\n\n`);
+        i++;
+      }, 30);
+      // 注意挂 res 而不是 req：现代 Node 中 req 的 'close' 在请求体读完后立刻触发，
+      // 挂 req 会瞬间清掉 interval 导致一个字节都发不出去
+      res.on('close', () => {
+        if (i < pieces.length) console.log(`[${new Date().toISOString()}] client closed early at chunk ${i}/${pieces.length}`);
+        clearInterval(timer);
+      });
+    };
+
+    if (DELAY_MS > 0) {
+      console.log(`  -> simulating long report: wait ${DELAY_MS}ms`);
+      setTimeout(respond, DELAY_MS);
+    } else {
+      respond();
+    }
   });
 });
 

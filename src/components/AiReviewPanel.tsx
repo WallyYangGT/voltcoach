@@ -7,7 +7,7 @@
  * 报告正文并接上追问。顶部「AI 分析」按钮走 analyze()：已有报告则直接露出本面板，
  * 没有则新建并触发后台生成（口径同 Web 版「已有报告时跳到底部，否则触发分析」）。
  */
-import React, { useCallback, useImperativeHandle, useState } from 'react';
+import React, { useCallback, useImperativeHandle, useRef, useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -40,6 +40,7 @@ export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
   const [looking, setLooking] = useState(true); // 首次查找中：先不渲染，避免"无报告"CTA 闪一下
   const [configured, setConfigured] = useState<boolean | null>(null); // 未配置 AI → 复制提示词兜底
   const [copied, setCopied] = useState(false);
+  const busyRef = useRef(false); // analyze 在飞行中（防连点造重复报告）
   const ai = useAiReport(reportId, lang);
 
   const find = useCallback(async () => {
@@ -68,14 +69,24 @@ export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
   }, [fileName, lang]);
 
   const analyze = useCallback(() => {
+    if (busyRef.current) return; // 连点保护：查找/新建期间不重复发起
+    busyRef.current = true;
     void (async () => {
       try {
         // 以库为准再查一次（防"查找未完成时连点"造出重复报告）
         const current = await getLatestReviewReport(fileName);
-        if (current) setReportId(current.id);
-        else await startNew();
+        if (current) {
+          setReportId(current.id);
+        } else {
+          // 未配置密钥时不落"注定失败"的占位报告（口径同会话中心：直接给配置/复制提示词）
+          const cfg = await getAiConfig();
+          setConfigured(cfg.configured);
+          if (cfg.configured) await startNew();
+        }
       } catch (e) {
         Alert.alert(e instanceof Error ? e.message : String(e));
+      } finally {
+        busyRef.current = false;
       }
       onReveal?.();
     })();
