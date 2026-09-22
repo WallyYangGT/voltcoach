@@ -255,6 +255,10 @@ export const DICT = {
     'session.send': '发送',
     'session.newChat': '新对话',
     'session.back': '返回',
+    // ---- M3 后补：生成中状态与传输级自动重试（长报告等待可见化） ----
+    'ai.retrying': '重试中…',
+    'ai.retryNote': '响应被中断，正在自动重试（第 {n} 次尝试）',
+    'ai.elapsed': '已等待 {t}',
     // ---- M3：AI 记忆页 ----
     'mem.title': 'AI 记忆',
     'mem.sub': 'AI 在交互中主动记录的用户个人事实（目标/伤病/日程/偏好等），会在后续报告与对话中生效。',
@@ -704,6 +708,9 @@ export const DICT = {
     'session.send': 'Send',
     'session.newChat': 'New chat',
     'session.back': 'Back',
+    'ai.retrying': 'Retrying…',
+    'ai.retryNote': 'Response was interrupted — auto-retrying (attempt {n})',
+    'ai.elapsed': 'Waiting {t}',
     'mem.title': 'AI Memory',
     'mem.sub': 'Personal facts the AI records proactively during chats and reports (goals / injuries / schedule / preferences) — they take effect in later sessions.',
     'mem.empty': 'No memories yet. The AI records what it learns about you while answering.',

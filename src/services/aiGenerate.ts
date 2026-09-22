@@ -201,7 +201,7 @@ const runningReports = new Set<number>();
 const runningChats = new Set<string>();
 
 /** 生成进度（进程内）：传输级自动重试的现场信息，UI 轮询时同步读取展示 */
-interface GenProgress {
+export interface GenProgress {
   attempt: number; // 下一次尝试的序号（2 = 首次响应异常、正在重试）
   note: string; // 上一次失败的原因（原文，便于诊断网关/网络问题）
 }
