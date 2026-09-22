@@ -83,16 +83,23 @@ async function requireAiConfig(lang: Lang): Promise<AiConfig & { api_key: string
  * callAiMaybeAgentic（对标 server.js 同名函数）：agentic 开启走 runAgentLoop
  * （工具 schema 与执行器按语言装配，source 作为 save_memory 的场景标记），
  * 关闭走单轮 callAI。执行结果仅打日志，用户只见最终正文（口径同旧版）。
+ * onRetry：传输层自动重试回调（透传到 UI 进度：长请求等了几分钟后被网关掐断时，
+ * 用户需要知道"正在自动重试"而不是看着一个不动的转圈）。
  */
 async function callAiMaybeAgentic(
   config: AiConfig & { api_key: string },
   messages: Parameters<typeof runAgentLoop>[2],
-  opts: { source: string | null; lang: Lang },
+  opts: {
+    source: string | null;
+    lang: Lang;
+    onRetry?: (nextAttempt: number, errMsg: string) => void;
+  },
 ): Promise<string> {
   const fetchImpl = await loadDefaultFetch();
   if (config.agentic !== false) {
     return runAgentLoop(fetchImpl, config, messages, toolDefs(opts.lang), createExecuteTool(buildToolIo(), { source: opts.source, lang: opts.lang }), {
       lang: opts.lang,
+      onRetry: opts.onRetry,
       onToolCall: (name, _args, result) => {
         // 只打工具名与结果长度：args 可能携带 save_memory 的用户个人事实，不落 logcat
         const chars = typeof result === 'string' ? result.length : 0;
@@ -101,7 +108,7 @@ async function callAiMaybeAgentic(
       onDegrade: (errMsg) => console.warn(`[AI] 模型不支持 tools，已降级为单轮调用（${errMsg}）`),
     });
   }
-  return callAI(fetchImpl, config, messages, { lang: opts.lang });
+  return callAI(fetchImpl, config, messages, { lang: opts.lang, onRetry: opts.onRetry });
 }
 
 // ---------------- 报告：prompt 组装与生成任务 ----------------
@@ -193,9 +200,22 @@ export async function createReportDraft(
 const runningReports = new Set<number>();
 const runningChats = new Set<string>();
 
+/** 生成进度（进程内）：传输级自动重试的现场信息，UI 轮询时同步读取展示 */
+interface GenProgress {
+  attempt: number; // 下一次尝试的序号（2 = 首次响应异常、正在重试）
+  note: string; // 上一次失败的原因（原文，便于诊断网关/网络问题）
+}
+const reportProgress = new Map<number, GenProgress>();
+const chatProgress = new Map<string, GenProgress>();
+
 /** 报告生成是否正在进行（会话详情页的恢复判断用） */
 export function isReportGenerating(reportId: number): boolean {
   return runningReports.has(reportId);
+}
+
+/** 报告当前的重试进度（无重试/未运行返回 null） */
+export function getReportProgress(reportId: number): GenProgress | null {
+  return reportProgress.get(reportId) ?? null;
 }
 
 /** 对话消息生成是否正在进行 */
@@ -203,11 +223,18 @@ export function isChatGenerating(chatId: number, messageId: number): boolean {
   return runningChats.has(`${chatId}:${messageId}`);
 }
 
+/** 对话消息当前的重试进度（无重试/未运行返回 null） */
+export function getChatProgress(chatId: number, messageId: number): GenProgress | null {
+  return chatProgress.get(`${chatId}:${messageId}`) ?? null;
+}
+
 /**
  * 报告生成任务（fire-and-forget）：读回占位记录的 prompt，agentic 开启时追加
  * 工具指引与记忆段，生成结果回写 completed；失败回写 failed + error（UI 轮询
  * db 状态展示）。应用中途被杀只留下 pending 占位——再次进入详情页时重跑本
  * 函数即可（系统段与提示词均已落库，无会话态丢失）。
+ * 传输级失败（空/破损正文、断连、429/5xx）由传输层自动重试一次，重试进度经
+ * getReportProgress 透出（长请求被网关掐断是 2026-09-22 真机事故的现场形态）。
  */
 export async function generateReport(reportId: number, lang: Lang = 'zh'): Promise<void> {
   if (runningReports.has(reportId)) return; // 同一报告不重复 fire
@@ -224,7 +251,14 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     const markdown = await callAiMaybeAgentic(
       config,
       [{ role: 'user', content: finalPrompt }],
-      { source: report.mode, lang }, // 场景标记：save_memory 写入 ai_memories.source
+      {
+        source: report.mode, // 场景标记：save_memory 写入 ai_memories.source
+        lang,
+        onRetry: (attempt, errMsg) => {
+          reportProgress.set(reportId, { attempt, note: errMsg });
+          console.warn(`[AI] 报告 #${reportId} 响应异常，自动重试（第 ${attempt} 次）：${errMsg}`);
+        },
+      },
     );
     await updateAiReport(reportId, { markdown, status: 'completed', error: null });
   } catch (e) {
@@ -233,6 +267,7 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     console.error(`[AI] 后台分析失败: ${msg}`);
   } finally {
     runningReports.delete(reportId);
+    reportProgress.delete(reportId);
   }
 }
 
@@ -328,7 +363,14 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     const markdown = await callAiMaybeAgentic(
       config,
       [{ role: 'user', content: system }, ...history],
-      { source: chat.mode, lang }, // 场景标记：save_memory 写入 ai_memories.source
+      {
+        source: chat.mode, // 场景标记：save_memory 写入 ai_memories.source
+        lang,
+        onRetry: (attempt, errMsg) => {
+          chatProgress.set(key, { attempt, note: errMsg });
+          console.warn(`[AI chat] ${key} 响应异常，自动重试（第 ${attempt} 次）：${errMsg}`);
+        },
+      },
     );
     await updateAiChatMessage(messageId, { content: markdown, status: 'completed', error: null });
     await touchAiChat(chatId);
@@ -339,5 +381,6 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     console.error(`[AI chat] 后台生成失败: ${msg}`);
   } finally {
     runningChats.delete(key);
+    chatProgress.delete(key);
   }
 }

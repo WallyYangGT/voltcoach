@@ -43,14 +43,16 @@ export interface AiRuntimeConfig {
  * 调用 chat/completions，返回完整文本。
  * 支持两种调用方式：传入单条字符串 prompt（单条 user 消息），或 messages 数组
  * （直接作为 chat/completions 的 messages 参数，用于追问多轮对话）。
+ * onRetry：传输级失败（空/破损正文、断连、429/5xx）触发自动重试时回调（UI 进度）。
  */
 export async function callAI(
   fetchImpl: FetchLike,
   cfg: AiRuntimeConfig,
   promptOrMessages: string | AgentMessage[],
-  { onChunk, onHeartbeat, timeoutMs, lang = 'zh' }: {
+  { onChunk, onHeartbeat, onRetry, timeoutMs, lang = 'zh' }: {
     onChunk?: (delta: string) => void;
     onHeartbeat?: () => void;
+    onRetry?: (nextAttempt: number, errMsg: string) => void;
     timeoutMs?: number;
     lang?: Lang;
   } = {},
@@ -84,6 +86,8 @@ export async function callAI(
   try {
     const result = await requestChatCompletion(fetchImpl, cfg.base_url, cfg.api_key, request, {
       signal: ctrl.signal,
+      onRetry,
+      lang,
       onStreamChunk: useStream
         ? (delta) => {
             resetStall();
@@ -116,6 +120,8 @@ export interface AgentLoopOpts {
   onHeartbeat?: () => void;
   onToolCall?: (name: string, args: object, result: string) => void;
   onDegrade?: (errMsg: string) => void;
+  /** 传输级失败触发自动重试时回调（nextAttempt 从 2 起），供 UI 展示进度 */
+  onRetry?: (nextAttempt: number, errMsg: string) => void;
   timeoutMs?: number;
   lang?: Lang;
 }
@@ -131,7 +137,7 @@ export async function runAgentLoop(
   messages: AgentMessage[],
   tools: object[],
   executeTool: (name: string, args: Record<string, unknown>) => Promise<string> | string,
-  { onHeartbeat, onToolCall, onDegrade, timeoutMs, lang = 'zh' }: AgentLoopOpts = {},
+  { onHeartbeat, onToolCall, onDegrade, onRetry, timeoutMs, lang = 'zh' }: AgentLoopOpts = {},
 ): Promise<string> {
   if (!cfg.api_key) throw new Error(t(lang, 'ai.no_key'));
   const effectiveTimeoutMs = timeoutMs ?? cfg.timeout_ms;
@@ -155,6 +161,8 @@ export async function runAgentLoop(
   const callOnce = (msgs: AgentMessage[], toolDefs?: object[]) =>
     requestChatCompletion(fetchImpl, cfg.base_url, cfg.api_key, buildRequest(msgs, toolDefs), {
       signal: ctrl.signal,
+      onRetry,
+      lang,
     });
 
   try {

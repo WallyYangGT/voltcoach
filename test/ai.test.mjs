@@ -289,9 +289,65 @@ test('runAgentLoop: tool arguments 非法 JSON 按空参数处理', async () => 
 
 const { requestChatCompletion: rcc } = await import('../src/ai/http.ts');
 
-test('requestChatCompletion: 非 JSON 响应体报解析失败', async () => {
+test('requestChatCompletion: 破损响应体给出可定位报错（自动重试后仍失败）', async () => {
   const f = async () => new Response('not-json{{', { status: 200 });
-  await assert.rejects(rcc(f, 'http://m/v1', 'k', {}), /AI API 响应解析失败/);
+  await assert.rejects(
+    rcc(f, 'http://m/v1', 'k', {}, { retryDelayMs: 1 }),
+    /AI 响应不是完整 JSON（HTTP 200，收到 10 字符）：not-json\{\{/,
+  );
+});
+
+test('requestChatCompletion: 空响应体（网关掐断的现场形态）自动重试一次即恢复', async () => {
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    return calls === 1
+      // 首次正文为空 —— 真机上 Hermes 在此抛 "JSON Parse error: Unexpected end of input"
+      ? new Response('', { status: 200 })
+      : new Response(JSON.stringify({ choices: [{ message: { content: '重试成功' } }] }), { status: 200 });
+  };
+  const retries = [];
+  const res = await rcc(f, 'http://m/v1', 'k', {}, {
+    retryDelayMs: 1,
+    onRetry: (attempt, errMsg) => retries.push({ attempt, errMsg }),
+  });
+  assert.equal(calls, 2); // 已自动补发
+  assert.equal(res.content, '重试成功');
+  assert.deepEqual(retries.map((r) => r.attempt), [2]);
+  assert.match(retries[0].errMsg, /AI 服务返回空响应（HTTP 200）/);
+});
+
+test('requestChatCompletion: 重试仍失败时消息标明已自动重试，且只重试一次', async () => {
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    return new Response('', { status: 200 });
+  };
+  await assert.rejects(rcc(f, 'http://m/v1', 'k', {}, { retryDelayMs: 1 }), /已自动重试 1 次/);
+  assert.equal(calls, 2); // 首次 + 1 次，封顶
+});
+
+test('requestChatCompletion: 400 属请求侧问题不重试（保住 agent 降级判定格式）', async () => {
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    return new Response('bad request', { status: 400 });
+  };
+  await assert.rejects(
+    rcc(f, 'http://m/v1', 'k', {}, { retryDelayMs: 1 }),
+    /AI API 返回 400: bad request/,
+  );
+  assert.equal(calls, 1);
+});
+
+test('requestChatCompletion: 5xx 属瞬时故障重试一次', async () => {
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    return new Response('boom', { status: 503 });
+  };
+  await assert.rejects(rcc(f, 'http://m/v1', 'k', {}, { retryDelayMs: 1 }), /AI API 返回 503/);
+  assert.equal(calls, 2);
 });
 
 test('requestChatCompletion: 空 choices 视为空响应', async () => {
@@ -302,9 +358,34 @@ test('requestChatCompletion: 空 choices 视为空响应', async () => {
 test('requestChatCompletion: SSE data 行为坏 JSON 时抛错并 cancel 流', async () => {
   const f = sseFetch(['data: {broken json\n\n']);
   await assert.rejects(
-    requestChatCompletion(f, 'http://m/v1', 'k', {}, { onStreamChunk: () => {} }),
-    SyntaxError,
+    requestChatCompletion(f, 'http://m/v1', 'k', {}, { onStreamChunk: () => {}, retryDelayMs: 1 }),
+    /AI 流式帧被截断/,
   );
+});
+
+test('requestChatCompletion: 流式已吐字后帧截断不重试（避免正文重复）', async () => {
+  const good = 'data: ' + JSON.stringify({ choices: [{ delta: { content: '前文' } }] }) + '\n\n';
+  const f = sseFetch([good, 'data: {broken json\n\n']);
+  const chunks = [];
+  await assert.rejects(
+    requestChatCompletion(f, 'http://m/v1', 'k', {}, {
+      onStreamChunk: (d) => chunks.push(d),
+      retryDelayMs: 1,
+    }),
+    /AI 流式帧被截断/,
+  );
+  assert.deepEqual(chunks, ['前文']);
+  assert.equal(f.seen.length, 1); // 已吐字的流不重发
+});
+
+test('requestChatCompletion: 空 data 帧（网关心跳）按忽略处理不报错', async () => {
+  const f = sseFetch([
+    'data:\n\n',
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: '正文' } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const text = await requestChatCompletion(f, 'http://m/v1', 'k', {}, { onStreamChunk: () => {} });
+  assert.equal(text, '正文');
 });
 
 test('requestChatCompletion: SSE 帧内 error 对象透出错误', async () => {
