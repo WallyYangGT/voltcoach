@@ -39,7 +39,6 @@ export class AiTransportError extends Error {
 const MAX_ATTEMPTS = 2;
 /** 重试前的等待：多数断连是瞬时的，稍等即可；同时避免立刻二次冲击网关 */
 const RETRY_DELAY_MS = 1200;
-
 /** 模型返回的单个工具调用 */
 export interface ToolCall {
   id: string;
@@ -141,10 +140,15 @@ function badBodyError(status: number, text: string, lang: Lang): AiTransportErro
  * 非 2xx 抛 `AI API 返回 {status}: {body 前 300 字}`（agent 循环的 tools 降级
  * 依据该格式识别 400，格式不可改）。
  *
- * 传输级失败（空/破损正文、连接中断、429/5xx）自动重试一次：这类失败是瞬时的，
- * 而长报告请求可能已经等了数分钟——不重试就意味着用户必须手动再来一遍。
- * 重试共用调用方的 signal（总超时预算不重置），且**已经吐过字**的流式响应不重试
- * （正文已交给调用方，重来会造成重复内容）。重试前经 onRetry 告知调用方（UI 进度）。
+ * 传输级失败（连接建立失败、空/破损正文、正文读取中断、429/5xx）自动重试一次：
+ * 长报告请求可能已经等了数分钟，不重试就等于让用户手动再来一遍。
+ * - **重试改用流式**（仅限不带 tools 的请求）：非流式长请求中途一行字节都不流动，
+ *   最容易撞上网关/NAT 的空闲超时——真机"等半天后 JSON 解析失败"的现场形态；
+ *   流式让字节持续流动，且正文边收边攒，被掐断时还能保住已收到的部分。
+ *   带 tools 的请求不切换（tool_calls 的增量帧与 SSE 组合解析复杂，保持非流式）。
+ * - 已吐过字的流式响应不重试（正文已交给调用方，重来会造成重复内容）。
+ * - 共用调用方的 signal：总超时预算不重置；等待期间被 abort 则不再补发。
+ * 重试前经 onRetry 告知调用方（UI 进度）。
  */
 export async function requestChatCompletion(
   fetchImpl: FetchLike,
@@ -161,11 +165,18 @@ export async function requestChatCompletion(
     retryDelayMs?: number;
   } = {},
 ): Promise<ChatMessage | string> {
+  // tools 请求不切换流式（见上方说明）；无 tools 的第二次尝试改走 SSE
+  const canStreamRetry = !(requestBody as { tools?: unknown[] }).tools?.length;
   let lastErr: unknown;
   let retried = 0;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      return await requestOnce(fetchImpl, baseUrl, apiKey, requestBody, { signal, onStreamChunk, lang });
+      return await requestOnce(fetchImpl, baseUrl, apiKey, requestBody, {
+        signal,
+        onStreamChunk,
+        lang,
+        forceStream: attempt > 1 && canStreamRetry,
+      });
     } catch (e) {
       lastErr = e;
       // 已 abort（总超时/调用方取消）或不是传输级失败或已吐字 → 收尾抛出，不重试
@@ -173,7 +184,7 @@ export async function requestChatCompletion(
         e instanceof AiTransportError && e.retryable && !signal?.aborted && attempt < MAX_ATTEMPTS;
       if (!canRetry) {
         // 重试过仍失败：消息里标明，避免用户以为是首次尝试（也便于回看定位网关/网络问题）
-        if (retried > 0 && e instanceof AiTransportError)
+        if (retried > 0 && e instanceof Error)
           throw new AiTransportError(e.message + t(lang, 'ai.retried_note', { n: retried }), false);
         throw e;
       }
@@ -181,6 +192,8 @@ export async function requestChatCompletion(
       retried += 1;
       onRetry?.(attempt + 1, msg);
       await new Promise((r) => setTimeout(r, retryDelayMs));
+      // 等待期间超时/取消：不再补发（否则白发一次请求，错误还更晦涩）
+      if (signal?.aborted) throw e;
     }
   }
   // 理论不可达（循环体内要么 return 要么 throw），保留兜底
@@ -193,35 +206,50 @@ async function requestOnce(
   baseUrl: string,
   apiKey: string,
   requestBody: object,
-  { signal, onStreamChunk, lang }: {
+  { signal, onStreamChunk, lang, forceStream = false }: {
     signal?: AbortSignal;
     onStreamChunk?: (delta: string) => void;
     lang: Lang;
+    /** 强制走流式（传输级重试时打开：见 requestChatCompletion 的说明） */
+    forceStream?: boolean;
   },
 ): Promise<ChatMessage | string> {
-  const res = await fetchImpl(`${baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(requestBody),
-    signal,
-  });
+  const streamMode = !!onStreamChunk || forceStream;
+  const body = streamMode && !onStreamChunk
+    ? { ...requestBody, stream: true } // 降级重试：改成流式请求，保持字节流动
+    : requestBody;
+  let res: Response;
+  try {
+    res = await fetchImpl(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (e) {
+    // 连接建立就失败（DNS/连接被拒/被网关掐断 → expo 抛 FetchError）：同样属传输级
+    if (signal?.aborted) throw signal.reason ?? e;
+    throw new AiTransportError(
+      t(lang, 'ai.network_failed', { msg: e instanceof Error ? e.message : String(e) }),
+    );
+  }
 
   if (!res.ok) {
-    let body = '';
+    let errBody = '';
     try {
-      body = await res.text();
+      errBody = await res.text();
     } catch {
       // 读错误体失败时只报状态码
     }
     // 429/5xx 属瞬时（限流、网关抖动），可重试；4xx 是请求本身的问题，重试无意义
     const retryable = res.status === 408 || res.status === 425 || res.status === 429 || res.status >= 500;
-    throw new AiTransportError(`AI API 返回 ${res.status}: ${body.slice(0, 300)}`, retryable);
+    throw new AiTransportError(`AI API 返回 ${res.status}: ${errBody.slice(0, 300)}`, retryable);
   }
 
-  if (!onStreamChunk) {
+  if (!streamMode) {
     // 非流式：先取正文再解析——正文为空/被截断时给出可定位的报错（而非裸的 JSON 语法错误）
     let text: string;
     try {
@@ -233,16 +261,7 @@ async function requestOnce(
       );
     }
     if (signal?.aborted) throw signal.reason ?? new Error('aborted');
-    let msg: ChatMessage | undefined;
-    try {
-      msg = (JSON.parse(text) as { choices?: { message?: ChatMessage }[] })?.choices?.[0]?.message;
-    } catch {
-      throw badBodyError(res.status, text, lang);
-    }
-    if (!msg || (msg.content == null && !msg.tool_calls?.length))
-      // 服务端给的是完整 JSON 但内容为空：属模型侧行为（非传输中断），重试无意义
-      throw new AiTransportError(t(lang, 'ai.empty'), false);
-    return msg;
+    return parseMessageBody(text, res.status, lang);
   }
 
   // 流式：SSE 字节流按 \n 切行，逐行解析 data: 帧，delta 回调并拼接
@@ -250,14 +269,21 @@ async function requestOnce(
   if (!reader) throw new AiTransportError(t(lang, 'ai.stream_empty'), true);
   let buffer: number[] = [];
   let fullText = '';
+  let rawText = ''; // 原始正文（无 data: 帧时按普通 JSON 响应兜底）
+  let sawFrame = false;
+  const emit = (delta: string) => {
+    fullText += delta;
+    onStreamChunk?.(delta);
+  };
   const handleLine = (line: string) => {
     const s = line.trim();
     if (!s.startsWith('data:')) return;
     const data = s.slice(5).trim();
+    sawFrame = true;
     if (!data || data === '[DONE]') return; // 空 data 帧是部分网关的心跳，非错误
     let obj: {
       error?: { message?: string };
-      choices?: { delta?: { content?: string } }[];
+      choices?: { delta?: { content?: string }; message?: ChatMessage }[];
     };
     try {
       obj = JSON.parse(data);
@@ -265,12 +291,11 @@ async function requestOnce(
       // 帧被截断（连接中断）→ 归为可重试的传输级错误
       throw new AiTransportError(t(lang, 'ai.bad_sse', { head: snippet(data) }));
     }
-    if (obj.error) throw new Error(obj.error.message || JSON.stringify(obj.error));
-    const delta = obj.choices?.[0]?.delta?.content;
-    if (delta) {
-      fullText += delta;
-      onStreamChunk(delta);
-    }
+    if (obj.error) throw new AiTransportError(obj.error.message || JSON.stringify(obj.error), false);
+    const choice = obj.choices?.[0];
+    // 兼容两种形态：增量 delta（标准流式）与整段 message（部分账号不真正流式）
+    const delta = choice?.delta?.content ?? choice?.message?.content;
+    if (delta) emit(delta);
   };
   try {
     for (;;) {
@@ -280,6 +305,7 @@ async function requestOnce(
         if (b === 10) {
           const line = decodeUtf8(buffer);
           buffer = [];
+          rawText += line + '\n';
           handleLine(line);
         } else if (b !== 13) {
           buffer.push(b); // 忽略 \r（CRLF 兼容）
@@ -287,9 +313,16 @@ async function requestOnce(
       }
     }
   } catch (e) {
-    // 已吐字的流不重试（重来会重复正文）：降级为不可重试错误原样抛出
-    if (e instanceof AiTransportError && fullText) throw new AiTransportError(e.message, false);
-    throw e;
+    if (e instanceof AiTransportError) {
+      // 已吐字的流不重试（重来会重复正文）；服务端明确报错本身已是 retryable=false
+      throw fullText ? new AiTransportError(e.message, false) : e;
+    }
+    if (signal?.aborted) throw signal.reason ?? e;
+    // 连接中途断掉（read 抛原生错误）：归传输级，未吐字时可重试
+    throw new AiTransportError(
+      t(lang, 'ai.read_failed', { msg: e instanceof Error ? e.message : String(e) }),
+      !fullText,
+    );
   } finally {
     // 解析出错/abort 中断时主动释放底层连接（未消费完的 body 不留挂起）
     try {
@@ -298,6 +331,29 @@ async function requestOnce(
       // 已结束的流 cancel 会拒绝，忽略
     }
   }
+  if (signal?.aborted) throw signal.reason ?? new Error('aborted');
+  if (!sawFrame) {
+    // 服务端无视 stream 直接回了整段 JSON：按非流式格式解析（否则会被误判成空响应）
+    const msg = parseMessageBody(rawText + decodeUtf8(buffer), res.status, lang);
+    const content = msg.content ?? '';
+    if (content) emit(content);
+    return onStreamChunk ? content : msg;
+  }
   if (!fullText) throw new AiTransportError(t(lang, 'ai.empty'), true);
-  return fullText;
+  // 调用方未要求增量（本次是降级重试）：按 message 对象返回，与它传 stream:false 的预期一致
+  return onStreamChunk ? fullText : { role: 'assistant', content: fullText };
+}
+
+/** 正文 → message 对象（非流式与非 SSE 兜底共用）：空/破损正文给出可定位的传输级报错 */
+function parseMessageBody(text: string, status: number, lang: Lang): ChatMessage {
+  let msg: ChatMessage | undefined;
+  try {
+    msg = (JSON.parse(text) as { choices?: { message?: ChatMessage }[] })?.choices?.[0]?.message;
+  } catch {
+    throw badBodyError(status, text, lang);
+  }
+  if (!msg || (msg.content == null && !msg.tool_calls?.length))
+    // 服务端给的是完整 JSON 但内容为空：属模型侧行为（非传输中断），重试无意义
+    throw new AiTransportError(t(lang, 'ai.empty'), false);
+  return msg;
 }

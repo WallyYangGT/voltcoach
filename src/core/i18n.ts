@@ -69,6 +69,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.bad_sse': 'AI 流式帧被截断（连接中断）：{head}',
     'ai.stream_empty': 'AI API 流返回为空',
     'ai.read_failed': 'AI 响应读取失败：{msg}',
+    'ai.network_failed': 'AI 连接失败：{msg}',
     'ai.retried_note': '（已自动重试 {n} 次）',
     // ---- 编排层消息（src/services/aiGenerate，M3 自 reference/src/i18n.js 逐字搬运） ----
     'srv.ai_key_missing': '未配置 AI 密钥（设置页可配），无法使用对话',
@@ -188,6 +189,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.bad_sse': 'AI stream frame truncated (connection cut): {head}',
     'ai.stream_empty': 'AI API stream returned empty',
     'ai.read_failed': 'Failed to read the AI response: {msg}',
+    'ai.network_failed': 'AI connection failed: {msg}',
     'ai.retried_note': ' (auto-retried {n}x)',
     'srv.ai_key_missing': 'No AI key configured (Settings page) — chat unavailable',
     'srv.mode_invalid': 'mode must be follow_up/chat',

@@ -370,6 +370,77 @@ test('requestChatCompletion: 正文读取中断报读取失败（非"解析失�
   assert.equal(calls, 2); // 断连属瞬时故障，重试一次
 });
 
+test('requestChatCompletion: 连接建立失败（fetch reject）归传输级并重试一次', async () => {
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    if (calls === 1) {
+      const err = new Error('fetch failed: fetch canceled');
+      err.name = 'FetchError';
+      throw err;
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { content: '连上了' } }] }), { status: 200 });
+  };
+  const res = await rcc(f, 'http://m/v1', 'k', {}, { retryDelayMs: 1 });
+  assert.equal(calls, 2);
+  assert.equal(res.content, '连上了');
+});
+
+test('requestChatCompletion: 无 tools 的请求重试时改走流式（长请求防网关空闲掐断）', async () => {
+  const enc = new TextEncoder();
+  const seenBodies = [];
+  let calls = 0;
+  const f = async (_url, init) => {
+    calls += 1;
+    seenBodies.push(JSON.parse(init.body));
+    if (calls === 1) return new Response('', { status: 200 }); // 首次空正文
+    // 重试改成流式请求：服务端按 SSE 吐字
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          enc.encode(
+            'data: ' + JSON.stringify({ choices: [{ delta: { content: '流式重试成功' } }] }) + '\n\n',
+          ),
+        );
+        controller.enqueue(enc.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200 });
+  };
+  const res = await rcc(f, 'http://m/v1', 'k', { stream: false, messages: [] }, { retryDelayMs: 1 });
+  assert.equal(seenBodies[0].stream, false); // 首次仍按调用方口径（非流式）
+  assert.equal(seenBodies[1].stream, true); // 重试改流式
+  assert.equal(res.content, '流式重试成功'); // 调用方没要增量 → 按 message 对象回
+});
+
+test('requestChatCompletion: 带 tools 的请求重试不改流式（tool_calls 增量帧不解析）', async () => {
+  const seenBodies = [];
+  let calls = 0;
+  const f = async (_url, init) => {
+    calls += 1;
+    seenBodies.push(JSON.parse(init.body));
+    if (calls === 1) return new Response('', { status: 200 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: '工具轮重试' } }] }), { status: 200 });
+  };
+  const body = { stream: false, messages: [], tools: [{ type: 'function', function: { name: 'x' } }] };
+  const res = await rcc(f, 'http://m/v1', 'k', body, { retryDelayMs: 1 });
+  assert.equal(seenBodies[0].stream, false);
+  assert.equal(seenBodies[1].stream, false); // 保持非流式
+  assert.equal(res.content, '工具轮重试');
+});
+
+test('requestChatCompletion: 流式请求收到整段 JSON（服务端无视 stream）按非流式解析', async () => {
+  const f = async () =>
+    new Response(JSON.stringify({ choices: [{ message: { content: '整段正文' } }] }), { status: 200 });
+  const chunks = [];
+  const text = await requestChatCompletion(f, 'http://m/v1', 'k', {}, {
+    onStreamChunk: (d) => chunks.push(d),
+  });
+  assert.equal(text, '整段正文');
+  assert.deepEqual(chunks, ['整段正文']);
+});
+
 test('requestChatCompletion: 空 choices 视为空响应', async () => {
   const f = jsonFetch(() => ({ status: 200, body: { choices: [] } }));
   await assert.rejects(rcc(f, 'http://m/v1', 'k', {}), /AI API 返回为空/);
