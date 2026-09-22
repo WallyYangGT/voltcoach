@@ -8,6 +8,7 @@
  */
 
 import { File } from 'expo-file-system';
+import { rollLocalSnapshotQuietly } from '@/backup/export';
 import { analyzeFile, type Summary } from '@/core/analyze';
 import { safeName } from '@/core/records';
 import { computeForm, getEffectiveAthlete, upsertActivity } from '@/db';
@@ -48,5 +49,8 @@ export async function importFitSource(uri: string, fileName: string): Promise<Su
   } catch (e) {
     console.warn(`records 落盘失败（详情页图表将无数据）: ${safe}:`, e);
   }
+
+  // §7.2 触发点：入库成功后静默滚一份本地快照（fire-and-forget 串行链，失败仅警告）
+  void rollLocalSnapshotQuietly();
   return summary;
 }

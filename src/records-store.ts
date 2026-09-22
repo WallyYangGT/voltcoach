@@ -46,3 +46,43 @@ export async function loadStoredRecords(fileName: string): Promise<SecRecord[] |
   const csv = ungzip(gz, { toText: true }); // pako 3：toText 解码为 UTF-8 文本
   return parseRecordsCsv(csv);
 }
+
+// ---------------- 备份打包/恢复支撑（M4，§7.2：records 整目录进出备份包） ----------------
+
+/** 列出已存储 records 的 base 名（备份打包用；目录不存在返回空表） */
+export async function listStoredRecordBases(): Promise<string[]> {
+  const dir = recordsDir();
+  if (!dir.exists) return [];
+  const bases: string[] = [];
+  for (const entry of dir.list()) {
+    if (!(entry instanceof File)) continue;
+    if (!entry.name.endsWith('.records.csv.gz')) continue;
+    const base = entry.name.slice(0, -'.records.csv.gz'.length);
+    if (safeName(base) === base) bases.push(base);
+  }
+  return bases.sort();
+}
+
+/** 读取已存储 records 的 gzip 原始字节（备份打包用，不解压；缺失返回 null） */
+export async function readStoredRecordGz(base: string): Promise<Uint8Array | null> {
+  const safe = safeName(base);
+  if (!safe || safe !== base) return null;
+  const file = new File(recordsDir(), `${safe}.records.csv.gz`);
+  if (!file.exists) return null;
+  return file.bytes();
+}
+
+/** 直写 gzip 字节（备份导入恢复用；不解压，base 过 safeName 防穿越） */
+export async function writeStoredRecordGz(base: string, gz: Uint8Array): Promise<void> {
+  const safe = safeName(base);
+  if (!safe) throw new Error(`非法文件名: ${base}`);
+  const dir = recordsDir();
+  if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
+  new File(dir, `${safe}.records.csv.gz`).write(gz as unknown as Uint8Array);
+}
+
+/** 清空 records 目录（备份导入整库替换用；目录不存在幂等） */
+export function clearStoredRecords(): void {
+  const dir = recordsDir();
+  if (dir.exists) dir.delete();
+}

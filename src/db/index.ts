@@ -32,12 +32,14 @@ export type { AiConfig };
 
 const DB_NAME = 'fitness.db';
 const DB_KEY_STORE = 'voltcoach.dbkey'; // SecureStore 键名（随 2026-09-19 更名用新前缀）
-const SCHEMA_VERSION = 1;
+/** 建库 schema 版本（备份包 manifest.schema_version 与导入迁移链共用此口径，M4 导出） */
+export const SCHEMA_VERSION = 1;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-/** 首启随机生成 32 字节 hex 密钥存 Keystore；已有则原样返回（SQLCipher 建库/开库用） */
-async function ensureDbKey(): Promise<string> {
+/** 首启随机生成 32 字节 hex 密钥存 Keystore；已有则原样返回（SQLCipher 建库/开库用）。
+ *  M4 导出给备份层：无口令导出时该 key 随包写入 manifest（§7.2 口径） */
+export async function getDbKey(): Promise<string> {
   const existing = await SecureStore.getItemAsync(DB_KEY_STORE);
   if (existing) return existing;
   const key = Crypto.getRandomBytes(32).reduce((s, b) => s + b.toString(16).padStart(2, '0'), '');
@@ -55,7 +57,7 @@ async function ensureDbKey(): Promise<string> {
 export function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = (async () => {
-      const key = await ensureDbKey();
+      const key = await getDbKey();
       const db = await SQLite.openDatabaseAsync(DB_NAME);
       await db.execAsync(`PRAGMA key = "${key}";`);
       await db.execAsync(`
@@ -135,6 +137,30 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
     })();
   }
   return dbPromise;
+}
+
+/**
+ * 关库并复位懒加载单例（备份导入的原子替换流程用：换文件前必须先关掉旧连接，
+ * 否则新文件改名后被旧句柄的 inode 占住）。从未开过库是幂等 no-op；
+ * 关闭失败也照常复位单例（下次 getDb 重新开库）。
+ */
+export async function closeDb(): Promise<void> {
+  if (!dbPromise) return;
+  const opening = dbPromise;
+  dbPromise = null;
+  try {
+    const db = await opening;
+    await db.closeAsync();
+  } catch (e) {
+    console.warn('db 关闭失败（单例已复位，忽略）:', e);
+  }
+}
+
+/** 活动总数（备份 manifest counts 与导入结果展示用） */
+export async function countActivities(): Promise<number> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ c: number }>('SELECT COUNT(*) AS c FROM activities;');
+  return row?.c ?? 0;
 }
 
 // ---------------- 骑手参数（存 settings 表，「我的」设置页维护，M2 接 UI） ----------------
