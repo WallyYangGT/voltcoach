@@ -22,7 +22,7 @@ export interface ImportOutcome {
   error?: string;
 }
 
-/** 读源 URI 字节 → 分析 → 入库 + records 落盘，返回 summary（失败抛 Error） */
+/** 读源 URI 字节 → 走 importFitBytes（来源：DocumentPicker file:// 或分享面板 content://） */
 export async function importFitSource(uri: string, fileName: string): Promise<Summary> {
   const safe = safeName(fileName);
   if (!safe) throw new Error(`非法文件名: ${fileName}`);
@@ -30,6 +30,18 @@ export async function importFitSource(uri: string, fileName: string): Promise<Su
 
   // File 构造器接受带 scheme 的绝对 URI（file:// / content:// 均可）
   const bytes = await new File(uri).bytes();
+  if (!bytes.length) throw new Error('文件为空');
+  return importFitBytes(bytes, safe);
+}
+
+/**
+ * FIT 字节 → 分析 → 入库 + records 落盘，返回 summary（失败抛 Error）。
+ * URI 与字节双入口共用本管线（顽鹿同步下载的字节不经落盘直接入，M4）。
+ */
+export async function importFitBytes(bytes: Uint8Array, fileName: string): Promise<Summary> {
+  const safe = safeName(fileName);
+  if (!safe) throw new Error(`非法文件名: ${fileName}`);
+  if (!safe.toLowerCase().endsWith('.fit')) throw new Error(`不是 .fit 文件: ${safe}`);
   if (!bytes.length) throw new Error('文件为空');
 
   const athlete = await getEffectiveAthlete(); // 骑手参数以训练库为准

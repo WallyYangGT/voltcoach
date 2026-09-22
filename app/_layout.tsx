@@ -8,10 +8,12 @@ import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { PaperProvider } from 'react-native-paper';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AppState, type AppStateStatus } from 'react-native';
 import { useEffect, useRef } from 'react';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { I18nProvider } from '@/i18n';
 import { queueShareFile } from '@/services/shareQueue';
+import { maybeAutoSync } from '@/services/syncOnelap';
 import { md3Dark, palette } from '@/theme';
 
 export default function RootLayout() {
@@ -22,12 +24,24 @@ export default function RootLayout() {
           <ShareIntentProvider>
             <StatusBar style="light" />
             <ShareIntentDispatcher />
+            <AutoSyncDispatcher />
             <RootStack />
           </ShareIntentProvider>
         </SafeAreaProvider>
       </PaperProvider>
     </I18nProvider>
   );
+}
+
+/** 前台自动同步（§10.4）：App 回前台触发 maybeAutoSync（未配置/节流不满足时内部静默跳过） */
+function AutoSyncDispatcher() {
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (status: AppStateStatus) => {
+      if (status === 'active') void maybeAutoSync();
+    });
+    return () => sub.remove();
+  }, []);
+  return null;
 }
 
 /** 监听分享面板送来的文件（.fit），入队并跳导入页；非 fit 文件忽略 */

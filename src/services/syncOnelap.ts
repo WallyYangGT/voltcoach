@@ -1,0 +1,175 @@
+/**
+ * syncOnelap.ts — 顽鹿云同步编排（MIGRATION_PLAN §10.4）
+ *
+ * 流程：读 SecureStore 账号 → 登录 → 云端列表（水位线增量：上次同步时间前移 24h
+ * 防边界漏拉，首次全量）→ 逐活动查 fileKey 算文件名，本地已有的跳过（upsert 幂等
+ * 去重口径的下载省略版）→ 未知活动下载 FIT 字节走 importFitBytes 入库 → 回写水位线
+ * 与结果到 settings.sync。
+ *
+ * 取舍：token 不做持久缓存（§10.4「令牌缓存」的简化）——低频个人同步每次全新登录
+ * 成本可忽略，免去 token 过期/失效分支；会话中途 401 视为账号失效终止本轮。
+ * 自动同步：前台 AppState 触发（国内 ROM 后台限制多，打开时拉最可靠，§10.4），
+ * 模块级 1h 节流；失败仅警告不中断应用。并发防双跑：进行中的同步共享同一 Promise。
+ */
+
+import * as Crypto from 'expo-crypto';
+import * as SecureStore from 'expo-secure-store';
+import { loadDefaultFetch } from '@/ai/http';
+import {
+  getSyncState,
+  listActivityFileNames,
+  setSyncState,
+  type SyncState,
+} from '@/db';
+import { importFitBytes } from './importFit';
+import { createOnelapClient, extractFitFileName, OnelapError, type OnelapSession } from '@/sync/onelap';
+
+// SecureStore 键名（与 dbkey/aikey 同前缀口径）
+const ONELAP_ACCOUNT_STORE = 'voltcoach.onelap.account';
+const ONELAP_PASSWORD_STORE = 'voltcoach.onelap.password';
+
+/** 前台自动同步的最小间隔（手动「立即同步」不受限） */
+const AUTO_THROTTLE_MS = 60 * 60 * 1000;
+
+export interface OnelapAccount {
+  account: string;
+  password: string;
+}
+
+/** 已配置账号则返回；未配置返回 null（UI 显示待配置态） */
+export async function getOnelapAccount(): Promise<OnelapAccount | null> {
+  const [account, password] = await Promise.all([
+    SecureStore.getItemAsync(ONELAP_ACCOUNT_STORE),
+    SecureStore.getItemAsync(ONELAP_PASSWORD_STORE),
+  ]);
+  return account && password ? { account, password } : null;
+}
+
+/** 保存/更新账号（password 传 null 表示清除整组凭据） */
+export async function setOnelapAccount(account: string, password: string | null): Promise<void> {
+  if (!account.trim() || !password) {
+    await Promise.all([
+      SecureStore.deleteItemAsync(ONELAP_ACCOUNT_STORE),
+      SecureStore.deleteItemAsync(ONELAP_PASSWORD_STORE),
+    ]);
+    return;
+  }
+  await SecureStore.setItemAsync(ONELAP_ACCOUNT_STORE, account.trim());
+  await SecureStore.setItemAsync(ONELAP_PASSWORD_STORE, password);
+}
+
+/** 单轮同步结果（UI 展示 imported/skipped/failed 三计数） */
+export interface SyncOutcome {
+  imported: number;
+  skipped: number;
+  failed: number;
+  /** 终止原因：null=正常跑完；'no_account'='auth'=未配置/凭据失效；'error'=运行错误 */
+  error: string | null;
+}
+
+let running: Promise<SyncOutcome> | null = null;
+
+/** 进行中的同步直接复用同一 Promise（前台自动与手动点击撞车时防双跑） */
+export function runOnelapSync(): Promise<SyncOutcome> {
+  if (!running) {
+    running = runSyncOnce().finally(() => {
+      running = null;
+    });
+  }
+  return running;
+}
+
+async function runSyncOnce(): Promise<SyncOutcome> {
+  const account = await getOnelapAccount();
+  if (!account) {
+    return { imported: 0, skipped: 0, failed: 0, error: 'no_account' };
+  }
+
+  const state = await getSyncState();
+  const outcome = await pullActivities(account, state);
+  // 水位线只在成功跑完时推进（部分失败下次重试窗口不变——前移 24h 缓冲兜底重复拉取）
+  const next: SyncState = {
+    ...state,
+    last_sync_at: outcome.error === 'auth' ? state.last_sync_at : new Date().toISOString(),
+    last_result: outcome.error ? 'error' : 'ok',
+    last_error: outcome.error,
+    last_counts: outcome.error ? state.last_counts : { imported: outcome.imported, skipped: outcome.skipped, failed: outcome.failed },
+  };
+  await setSyncState(next);
+  return outcome;
+}
+
+/** 登录 + 拉取 + 入库；逐活动失败仅计数不中断（§10.4 口径），鉴权失败终止本轮 */
+async function pullActivities(account: OnelapAccount, state: SyncState): Promise<SyncOutcome> {
+  const client = createOnelapClient({
+    fetchImpl: await loadDefaultFetch(),
+    md5Hex: (s) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.MD5, s),
+    randomBytes: (n) => Crypto.getRandomBytes(n),
+  });
+
+  let session: OnelapSession;
+  try {
+    session = await client.login(account.account, account.password);
+  } catch (e) {
+    return { imported: 0, skipped: 0, failed: 0, error: describeError(e) };
+  }
+
+  // 水位线：上次同步时间前移 24h（跨设备时区/时钟偏差缓冲）；首次同步全量
+  const since = state.last_sync_at
+    ? new Date(new Date(state.last_sync_at).getTime() - 24 * 3600 * 1000)
+    : null;
+
+  let cloudList;
+  try {
+    cloudList = await client.listSince(session, since);
+  } catch (e) {
+    return { imported: 0, skipped: 0, failed: 0, error: describeError(e) };
+  }
+
+  const existing = new Set(await listActivityFileNames());
+  const outcome: SyncOutcome = { imported: 0, skipped: 0, failed: 0, error: null };
+  for (const act of cloudList) {
+    try {
+      const key = await client.getFitKey(session, act.id);
+      const fileName = extractFitFileName(key, act.id);
+      if (existing.has(fileName)) {
+        outcome.skipped += 1;
+        continue;
+      }
+      const { bytes, fileName: normalized } = await client.downloadByKey(session, key, act.id);
+      await importFitBytes(bytes, normalized);
+      existing.add(normalized);
+      outcome.imported += 1;
+    } catch (e) {
+      if (e instanceof OnelapError && e.code === 'auth') {
+        return { ...outcome, error: describeError(e) };
+      }
+      outcome.failed += 1;
+      console.warn(`顽鹿活动 ${act.id} 同步失败（跳过继续）:`, e);
+    }
+  }
+  return outcome;
+}
+
+function describeError(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+let lastAutoAttempt = 0;
+
+/**
+ * 前台自动同步（根布局 AppState active 时调用）：已配置账号 + 开关开启 + 距上次
+ * 尝试 ≥1h 才拉；一切失败静默（console.warn），不影响应用使用。
+ */
+export async function maybeAutoSync(): Promise<void> {
+  try {
+    const [account, state] = await Promise.all([getOnelapAccount(), getSyncState()]);
+    if (!account || !state.auto) return;
+    if (state.last_sync_at && Date.now() - new Date(state.last_sync_at).getTime() < AUTO_THROTTLE_MS) return;
+    if (Date.now() - lastAutoAttempt < AUTO_THROTTLE_MS) return;
+    lastAutoAttempt = Date.now();
+    await runOnelapSync();
+  } catch (e) {
+    console.warn('顽鹿自动同步失败（忽略）:', e);
+  }
+}

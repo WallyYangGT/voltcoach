@@ -549,6 +549,57 @@ export async function setLang(lang: Lang): Promise<Lang> {
   return lang;
 }
 
+// ---------------- 顽鹿同步状态（settings 表 sync 键，M4） ----------------
+// 账号密码不进库（与 AI Key 同级敏感），存 SecureStore，由服务层管理。
+
+/** 同步配置与最近结果（单 JSON 行；auto 为前台自动同步开关） */
+export interface SyncState {
+  auto: boolean;
+  last_sync_at: string | null;
+  last_result: 'ok' | 'error' | null;
+  last_error: string | null;
+  last_counts: { imported: number; skipped: number; failed: number } | null;
+}
+
+export const DEFAULT_SYNC_STATE: SyncState = {
+  auto: true,
+  last_sync_at: null,
+  last_result: null,
+  last_error: null,
+  last_counts: null,
+};
+
+/** 当前同步状态（无行/行损坏回落默认值） */
+export async function getSyncState(): Promise<SyncState> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = 'sync'`,
+  );
+  if (!row) return { ...DEFAULT_SYNC_STATE };
+  try {
+    return { ...DEFAULT_SYNC_STATE, ...(JSON.parse(row.value) as Partial<SyncState>) };
+  } catch {
+    return { ...DEFAULT_SYNC_STATE };
+  }
+}
+
+/** 保存同步状态（调用方整行覆盖写） */
+export async function setSyncState(state: SyncState): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES ('sync', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    JSON.stringify(state),
+  );
+}
+
+/** 全部活动文件名（同步按文件名幂等去重的本地集合） */
+export async function listActivityFileNames(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ file_name: string }>('SELECT file_name FROM activities');
+  return rows.map((r) => r.file_name);
+}
+
 // ---------------- AI 服务配置（settings 表 ai 行 + SecureStore 存密钥，M3） ----------------
 
 // AI 密钥不进训练库（旧版明文入库）：存 SecureStore（Android Keystore），

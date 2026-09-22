@@ -75,6 +75,13 @@ export interface OnelapClient {
   listSince(session: OnelapSession, since: Date | null, maxPages?: number): Promise<OnelapActivity[]>;
   /** 下载活动原始 FIT 字节 + 规范化文件名（upsert 去重键） */
   downloadFit(session: OnelapSession, activityId: string): Promise<{ bytes: Uint8Array; fileName: string }>;
+  /**
+   * 查活动云端文件 key（fileKey，.st 日志类为 fitUrl）。同步编排先用它算文件名、
+   * 与本地集合比对跳过已知活动，再对未知活动 downloadByKey——省掉无谓下载。
+   */
+  getFitKey(session: OnelapSession, activityId: string): Promise<string>;
+  /** 按 getFitKey 拿到的 key 直接下载（跳过 analysis 往返） */
+  downloadByKey(session: OnelapSession, key: string, activityId: string): Promise<{ bytes: Uint8Array; fileName: string }>;
 }
 
 // ---------------- 纯函数（node:test 直接覆盖） ----------------
@@ -264,7 +271,11 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
     },
 
     async downloadFit(session, activityId) {
-      // ① 查分析记录拿 fileKey（.st 日志类拿 fitUrl；两者皆空则无法下载）
+      const key = await this.getFitKey(session, activityId);
+      return this.downloadByKey(session, key, activityId);
+    },
+
+    async getFitKey(session, activityId) {
       const analysis = (await getJson(`${rideBase}/analysis/${activityId}`, authHeaders(session))) as {
         code?: number;
         message?: string;
@@ -276,8 +287,11 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
       const rec = analysis.data?.ridingRecord;
       const key = rec?.fileKey || rec?.fitUrl || '';
       if (!key) throw new OnelapError('no_file', `活动 ${activityId} 云端无原始文件`);
+      return key;
+    },
 
-      // ② 下载 FIT 字节（fit_content 路径 = base64(key)）
+    async downloadByKey(session, key, activityId) {
+      // 下载 FIT 字节（fit_content 路径 = base64(key)）
       let res: Response;
       try {
         res = await doFetch(buildFitContentUrl(rideBase, key), { headers: authHeaders(session) });
