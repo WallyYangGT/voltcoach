@@ -22,7 +22,20 @@ import {
   type SyncState,
 } from '@/db';
 import { importFitBytes } from './importFit';
-import { createOnelapClient, extractFitFileName, OnelapError, parseRideTime, type OnelapSession } from '@/sync/onelap';
+import {
+  createOnelapClient,
+  extractFitFileName,
+  jitterDelayMs,
+  OnelapError,
+  parseRideTime,
+  syncWindowStart,
+  type OnelapSession,
+} from '@/sync/onelap';
+
+/** 同步节流用的等待（活动之间随机间隔，降低请求突发） */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // SecureStore 键名（与 dbkey/aikey 同前缀口径）
 const ONELAP_ACCOUNT_STORE = 'voltcoach.onelap.account';
@@ -143,10 +156,9 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
     return { imported: 0, skipped: 0, failed: 0, error: toError(e), failureFloor: null };
   }
 
-  // 水位线：上次同步时间前移 24h（跨设备时区/时钟偏差缓冲）；首次同步全量
-  const since = state.last_sync_at
-    ? new Date(new Date(state.last_sync_at).getTime() - 24 * 3600 * 1000)
-    : null;
+  // 窗口起点：水位线前移 24h 缓冲，但不早于「最近 SYNC_WINDOW_DAYS 天」（首次同步
+  // 与长期未同步都截断——只回溯 3 个月，降低抓取观感，见 onelap.syncWindowStart）
+  const since = syncWindowStart(state.last_sync_at);
 
   let cloudList;
   try {
@@ -157,7 +169,9 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
 
   const existing = new Set(await listActivityFileNames());
   const outcome: SyncOutcome = { imported: 0, skipped: 0, failed: 0, error: null, failureFloor: null };
-  for (const act of cloudList) {
+  for (const [i, act] of cloudList.entries()) {
+    // 活动之间随机等待 300–800ms：摊平请求突发（每个活动要发 2 个请求）
+    if (i > 0) await sleep(jitterDelayMs());
     try {
       const key = await client.getFitKey(session, act.id);
       const fileName = extractFitFileName(key, act.id);

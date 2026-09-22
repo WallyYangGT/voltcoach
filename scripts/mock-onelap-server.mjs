@@ -32,10 +32,11 @@ function fmt(d) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-/** 云端活动夹具：新→旧排列，fileKey 带 mock 厂商路径形状 */
-function makeActivities(count = 5) {
+/** 云端活动夹具：新→旧排列，fileKey 带 mock 厂商路径形状。
+ *  oldCount 追加「超过同步窗口（90 天）」的老活动，用于验证窗口截断——App 不应拉取它们 */
+function makeActivities(count = 5, oldCount = 0) {
   const now = Date.now();
-  return Array.from({ length: count }, (_, i) => ({
+  const recent = Array.from({ length: count }, (_, i) => ({
     id: 77000 + i,
     start_riding_time: fmt(new Date(now - (i + 1) * 24 * 3600 * 1000)),
     distance_km: 30 + i,
@@ -43,6 +44,15 @@ function makeActivities(count = 5) {
     fileKey: `geo/20260915/mock-ride-${77000 + i}.fit`,
     fitUrl: '',
   }));
+  const old = Array.from({ length: oldCount }, (_, i) => ({
+    id: 76000 + i,
+    start_riding_time: fmt(new Date(now - (120 + i * 30) * 24 * 3600 * 1000)),
+    distance_km: 20 + i,
+    time_seconds: 3600,
+    fileKey: `geo/20250101/mock-old-ride-${76000 + i}.fit`,
+    fitUrl: '',
+  }));
+  return [...recent, ...old]; // 新→旧：老活动排在后面，窗口外的项在翻页时才会遇到
 }
 
 /** 与客户端同口径的签名串（注意 ×tamp 的字面 U+00D7——改这里即 mock 全 401） */
@@ -68,12 +78,13 @@ function json(res, status, payload) {
   res.end(body);
 }
 
-export function createMockOnelapServer({ activityCount = 5, acceptPassword = null } = {}) {
+export function createMockOnelapServer({ activityCount = 5, oldActivityCount = 0, acceptPassword = null } = {}) {
   // acceptPassword：指定时校验密码（node:test 覆盖登录失败路径）；null 任意密码放行（模拟器联调）
+  // oldActivityCount：追加窗口外（>90 天）的老活动，验证同步窗口截断（默认关，不影响单测断言）
   const acceptPasswordMd5 = acceptPassword === null
     ? null
     : crypto.createHash('md5').update(acceptPassword, 'utf8').digest('hex');
-  const activities = makeActivities(activityCount);
+  const activities = makeActivities(activityCount, oldActivityCount);
   const fits = new Map(
     activities.map((a) => [a.id, buildRideFit({ durationSec: 60, power: 200 + (a.id % 7) * 10, heartRate: 150 })]),
   );
@@ -81,7 +92,10 @@ export function createMockOnelapServer({ activityCount = 5, acceptPassword = nul
   return http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
-    if (!process.env.NODE_TEST_CONTEXT) console.log(`[mock-onelap] ${req.method} ${path}`); // 单测下静默
+    if (!process.env.NODE_TEST_CONTEXT) {
+      // 带毫秒时间戳：便于核对客户端请求节流（活动之间应有 300–800ms 随机间隔）
+      console.log(`[mock-onelap] ${new Date().toISOString().slice(11, 23)} ${req.method} ${path}`);
+    }
 
     // ---------------- 登录：校验 nonce/timestamp/sign 三头 + 签名串 ----------------
     if (req.method === 'POST' && path === '/api/login') {
@@ -167,8 +181,9 @@ export function createMockOnelapServer({ activityCount = 5, acceptPassword = nul
 const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (isMain) {
   const port = Number(process.env.MOCK_ONELAP_PORT) || 8791;
-  createMockOnelapServer().listen(port, () => {
+  // 独立运行（模拟器联调）带 2 条窗口外老活动：应只见近期活动的 analysis/fit_content 请求
+  createMockOnelapServer({ oldActivityCount: 2 }).listen(port, () => {
     console.log(`[mock-onelap] listening on http://0.0.0.0:${port}（模拟器内用 http://10.0.2.2:${port}）`);
-    console.log('[mock-onelap] 登录账号任意、密码任意；活动夹具 5 条（默认）');
+    console.log('[mock-onelap] 登录账号任意、密码任意；活动 5 条近 5 天 + 2 条 120/150 天前（验证同步窗口截断）');
   });
 }

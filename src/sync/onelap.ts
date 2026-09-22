@@ -70,7 +70,8 @@ export interface OnelapClient {
   login(account: string, password: string): Promise<OnelapSession>;
   /**
    * 按 since 增量拉活动列表（新→旧翻页，遇早于 since 的记录停止）。
-   * since=null 全量拉取（首推），上限 maxPages 防失控（顽鹿接口无服务端时间过滤）。
+   * since=null 表示不设起点（全量，仅测试用）；生产路径由 syncWindowStart 恒传窗口起点，
+   * 上限 maxPages 防失控（顽鹿接口无服务端时间过滤，过滤在客户端做）。
    */
   listSince(session: OnelapSession, since: Date | null, maxPages?: number): Promise<OnelapActivity[]>;
   /** 下载活动原始 FIT 字节 + 规范化文件名（upsert 去重键） */
@@ -145,6 +146,45 @@ export function extractFitFileName(fileKey: string, activityId: string): string 
 /** 下载 URL：base64(UTF-8(key)) 拼进 fit_content 路径（对齐 Go base64.StdEncoding） */
 export function buildFitContentUrl(baseUrl: string, key: string): string {
   return `${baseUrl}/analysis/fit_content/${base64Encode(utf8ToBytesLocal(key))}`;
+}
+
+/**
+ * 同步窗口天数：只拉取最近 N 天的活动（2026-09-22 定，降低对非官方接口的抓取观感）。
+ * 首次同步与「超过 N 天没同步」的间隔都截到此窗口，历史更早的数据不再回溯。
+ */
+export const SYNC_WINDOW_DAYS = 90;
+
+/** 水位线前移缓冲：上次同步时间往前留 24h，吸收设备时钟/时区偏差导致的边界漏拉 */
+export const SYNC_WATERMARK_BUFFER_MS = 24 * 3600 * 1000;
+
+/**
+ * 本轮同步的窗口起点（列表按起骑时间新→旧，早于该点即停止翻页）：
+ *  - 首次同步（无水位线）：now − SYNC_WINDOW_DAYS；
+ *  - 有水位线：上次同步时间前移 24h 缓冲，但**不早于** now − SYNC_WINDOW_DAYS
+ *    （长时间未同步时截断，避免一次拉几百天的记录）。
+ * 水位线字符串非法（时钟回拨/脏数据）时回落到窗口起点。
+ */
+export function syncWindowStart(
+  lastSyncAt: string | null,
+  now: Date = new Date(),
+  windowDays: number = SYNC_WINDOW_DAYS,
+): Date {
+  const floor = new Date(now.getTime() - windowDays * 24 * 3600 * 1000);
+  if (!lastSyncAt) return floor;
+  const buffered = new Date(lastSyncAt).getTime() - SYNC_WATERMARK_BUFFER_MS;
+  if (!Number.isFinite(buffered)) return floor;
+  return new Date(Math.max(buffered, floor.getTime()));
+}
+
+/** 活动之间随机间隔的下界/上界（毫秒）：摊平同步时的请求突发 */
+export const PACE_MIN_MS = 300;
+export const PACE_MAX_MS = 800;
+
+/** [min, max] 闭区间内的整数毫秒（rand 可注入以便测试；越界/非数按 min 处理） */
+export function jitterDelayMs(rand: () => number = Math.random, min = PACE_MIN_MS, max = PACE_MAX_MS): number {
+  const r = rand();
+  if (!Number.isFinite(r) || r < 0) return min;
+  return min + Math.floor(Math.min(r, 0.999_999) * (max - min + 1));
 }
 
 // ---------------- 客户端 ----------------

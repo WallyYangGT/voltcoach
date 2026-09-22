@@ -19,10 +19,15 @@ import {
   createOnelapClient,
   extractFitFileName,
   isBeforeSince,
+  jitterDelayMs,
   nonceFromBytes,
   ONELAP_RIDE_RECORD_BASE,
   ONELAP_SECRET,
   parseRideTime,
+  PACE_MAX_MS,
+  PACE_MIN_MS,
+  SYNC_WINDOW_DAYS,
+  syncWindowStart,
 } from '../src/sync/onelap.ts';
 
 /** node:crypto 实现的环境注入（对齐 App 侧 expo-crypto 形状） */
@@ -92,6 +97,53 @@ test('buildFitContentUrl: fit_content 路径 = base64(UTF-8(fileKey))', () => {
     buildFitContentUrl(ONELAP_RIDE_RECORD_BASE, key),
     `${ONELAP_RIDE_RECORD_BASE}/analysis/fit_content/${Buffer.from(key, 'utf8').toString('base64')}`,
   );
+});
+
+test('syncWindowStart: 首次同步（无水位线）→ 最近 SYNC_WINDOW_DAYS 天（不回溯全部历史）', () => {
+  const now = new Date('2026-09-22T12:00:00Z');
+  const start = syncWindowStart(null, now);
+  assert.equal(start.toISOString(), '2026-06-24T12:00:00.000Z');
+  assert.equal((now.getTime() - start.getTime()) / 86400000, SYNC_WINDOW_DAYS);
+});
+
+test('syncWindowStart: 近期水位线 → 前移 24h 缓冲（取较晚者，窗口内正常增量）', () => {
+  const now = new Date('2026-09-22T12:00:00Z');
+  const last = '2026-09-21T12:00:00.000Z'; // 昨天
+  const start = syncWindowStart(last, now);
+  assert.equal(start.toISOString(), '2026-09-20T12:00:00.000Z'); // 水位线 −24h，晚于窗口下界
+});
+
+test('syncWindowStart: 长期未同步 → 截到窗口下界（不一次拉几百天）', () => {
+  const now = new Date('2026-09-22T12:00:00Z');
+  const last = '2025-01-01T00:00:00.000Z'; // 一年半前
+  assert.equal(syncWindowStart(last, now).toISOString(), '2026-06-24T12:00:00.000Z');
+});
+
+test('syncWindowStart: 水位线脏数据（时钟回拨/非法串）→ 回落窗口下界', () => {
+  const now = new Date('2026-09-22T12:00:00Z');
+  assert.equal(syncWindowStart('not-a-date', now).toISOString(), '2026-06-24T12:00:00.000Z');
+});
+
+test('syncWindowStart: 窗口天数可注入（测试/未来做成可配）', () => {
+  const now = new Date('2026-09-22T12:00:00Z');
+  assert.equal(syncWindowStart(null, now, 30).toISOString(), '2026-08-23T12:00:00.000Z');
+});
+
+test('jitterDelayMs: 落在 [PACE_MIN_MS, PACE_MAX_MS] 闭区间且随随机数变化', () => {
+  assert.equal(jitterDelayMs(() => 0), PACE_MIN_MS);
+  assert.equal(jitterDelayMs(() => 0.9999999), PACE_MAX_MS);
+  const mid = jitterDelayMs(() => 0.5);
+  assert.ok(mid >= PACE_MIN_MS && mid <= PACE_MAX_MS);
+  // 抽样 200 次：全部在区间内且不止一个取值（确实是抖动而非定值）
+  const samples = new Set(Array.from({ length: 200 }, () => jitterDelayMs()));
+  for (const v of samples) assert.ok(v >= PACE_MIN_MS && v <= PACE_MAX_MS);
+  assert.ok(samples.size > 1);
+});
+
+test('jitterDelayMs: 非法/越界随机数 → 回落下界（防御）', () => {
+  assert.equal(jitterDelayMs(() => Number.NaN), PACE_MIN_MS);
+  assert.equal(jitterDelayMs(() => -1), PACE_MIN_MS);
+  assert.equal(jitterDelayMs(() => 2), PACE_MAX_MS); // 越上界钳到 max
 });
 
 test('e2e: 登录（服务端校验签名）→ 增量列表 → 下载 FIT 全流程对 mock server', async () => {
