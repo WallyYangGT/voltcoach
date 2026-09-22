@@ -47,6 +47,10 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
   // ② staged 库开包验证：写临时文件 → 按包密钥策略打开试读。
   //    密钥顺序：用户口令 > manifest.db_key > 无 key 明文打开（旧 repo --export /
   //    iOS 导出）。验证失败映射稳定码——有 key 视为口令错误，无 key 视为需要口令。
+  //    非 SQLCipher 构建（iOS）带不动加密库：db_key != null 的包在此前置拒绝。
+  if (!(await hasSqlCipher()) && manifest.db_key !== null) {
+    throw new BackupError('no_sqlcipher', '当前构建无 SQLCipher，无法导入加密备份');
+  }
   const staged = new File(dir, `voltcoach-import-staged-${Date.now()}.db`);
   let conn: SQLite.SQLiteDatabase | null = null;
   try {
@@ -67,13 +71,17 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
   }
 
   // ④ 重加密到本机 key（staged → import_new），⑤ 关库原子替换，⑥ records 重写
-  const imported = new File(dir, `voltcoach-import-new-${Date.now()}.db`);
+  // 注意：File.move() 会原地改写实例 uri（指向改名后的 fitness.db），因此 finally
+  // 的临时文件清理必须用 importedTmp 指向原临时名（move 成功时该名字已不存在，
+  // cleanup 自然 no-op）——绝不能 cleanup 改名后的实例，否则成功路径会把刚换上的
+  // 新库当"临时文件"删掉（数据销毁且当次会话不可见）。
+  const importedTmp = new File(dir, `voltcoach-import-new-${Date.now()}.db`);
   try {
     if (await hasSqlCipher(conn)) {
       const localKey = await getDbKey();
       try {
         await conn.execAsync(
-          `ATTACH DATABASE ${sqlStr(fileUriToPath(imported))} AS import_new KEY ${sqlStr(localKey)};`,
+          `ATTACH DATABASE ${sqlStr(fileUriToPath(importedTmp))} AS import_new KEY ${sqlStr(localKey)};`,
         );
         await conn.execAsync(`SELECT sqlcipher_export('import_new');`);
         const uv = await conn.getFirstAsync<{ user_version: number }>('PRAGMA user_version;');
@@ -83,18 +91,16 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
       }
     } else {
       // 无 SQLCipher 构建（iOS）：staged 已验证为明文库，直接作为替换产物
-      imported.write(dbBytes);
+      importedTmp.write(dbBytes);
     }
     await closeQuietly(conn);
     conn = null;
+    if (!importedTmp.exists) throw new BackupError('missing_db', '重加密产物未生成，中止替换');
 
-    // 关库后删旧库（含 WAL 残留）→ 产物改名就位（改名是同目录原子操作）
+    // 关库后清 WAL 残留 → 产物改名就位（overwrite 直换，消除"删旧未换新"的进程被杀窗口）
     await closeDb();
     removeWalSiblings();
-    if (imported.exists) {
-      if (appDbFile().exists) appDbFile().delete();
-      await imported.move(appDbFile());
-    }
+    await importedTmp.move(appDbFile(), { overwrite: true });
 
     clearStoredRecords();
     let restored = 0;
@@ -110,7 +116,7 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
   } finally {
     await closeQuietly(conn);
     cleanup(staged);
-    cleanup(imported);
+    cleanup(importedTmp); // move 成功时该名字已不存在 → no-op；失败路径清理真临时文件
   }
 }
 
@@ -196,6 +202,11 @@ async function closeQuietly(conn: SQLite.SQLiteDatabase | null): Promise<void> {
 function cleanup(file: File): void {
   try {
     if (file.exists) file.delete();
+    // 临时库的 WAL/SHM 兄弟文件一并清（残留会永驻 SQLite 目录）
+    for (const suffix of ['-wal', '-shm', '-journal']) {
+      const f = new File(sqliteDir(), `${file.name}${suffix}`);
+      if (f.exists) f.delete();
+    }
   } catch (e) {
     console.warn('备份导入临时文件清理失败（忽略）:', file.name, e);
   }

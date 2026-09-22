@@ -112,19 +112,29 @@ export async function createLocalSnapshot(): Promise<SnapshotInfo> {
   return info;
 }
 
-let rolling: Promise<void> = Promise.resolve();
+let rolling = false;
+let rerollPending = false;
 
 /**
- * 静默滚动快照（§7.2 触发点：每次入库成功后调用）。串行链防同名文件并发写；
- * 失败仅警告——快照是便利性兜底，不得影响导入主流程结果。
+ * 静默滚动快照（§7.2 触发点：每次入库成功后调用）。失败仅警告——快照是便利性
+ * 兜底，不得影响导入主流程结果。并发合并：滚动进行中再有入库请求，只在链尾
+ * 补滚一次（批量导入/同步 N 个文件时避免 N 次全量打包，O(N×全库) → O(全库)）。
  */
 export function rollLocalSnapshotQuietly(): Promise<void> {
-  rolling = rolling
-    .then(async () => {
-      await createLocalSnapshot();
-    })
-    .catch((e) => console.warn('本地快照滚动失败（忽略）:', e));
-  return rolling;
+  if (rolling) {
+    rerollPending = true;
+    return Promise.resolve();
+  }
+  rolling = true;
+  return createLocalSnapshot()
+    .catch((e) => console.warn('本地快照滚动失败（忽略）:', e))
+    .then(() => {
+      rolling = false;
+      if (rerollPending) {
+        rerollPending = false;
+        return rollLocalSnapshotQuietly();
+      }
+    });
 }
 
 /** 读取最近本地快照状态（无快照/旁车文件损坏返回 null，UI 显示未创建态） */

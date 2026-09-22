@@ -128,6 +128,9 @@ export default function DataScreen() {
       } else if (outcome.error) {
         Alert.alert(t('data.err.generic'), outcome.error.message);
       }
+    } catch (e) {
+      // 编排层的 db 调用（读状态/写水位线）也可能抛错，不能让它静默逃逸
+      Alert.alert(t('data.err.generic'), String(e));
     } finally {
       setSyncing(false);
       load();
@@ -145,6 +148,12 @@ export default function DataScreen() {
     try {
       const { file } = await exportBackupToCache(pass1 ? pass1 : null);
       await Sharing.shareAsync(file.uri, { mimeType: 'application/zip', dialogTitle: t('data.backup.export') });
+      // 分享完成后顺手清理 cache 产物（分享面板已拿到内容；删除失败不影响）
+      try {
+        if (file.exists) file.delete();
+      } catch (e) {
+        console.warn('导出产物清理失败（忽略）:', e);
+      }
       Alert.alert(t('data.backup.exportDone'));
     } catch (e) {
       Alert.alert(t('data.err.generic'), describeError(e));

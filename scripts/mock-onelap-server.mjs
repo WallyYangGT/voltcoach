@@ -15,6 +15,7 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { pathToFileURL } from 'node:url';
 import { buildRideFit } from '../test/make_test_fit.mjs';
 
 /** 登录签名密钥（与 src/sync/onelap.ts / Go 实现三方一致的约定值） */
@@ -80,7 +81,7 @@ export function createMockOnelapServer({ activityCount = 5, acceptPassword = nul
   return http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
-    console.log(`[mock-onelap] ${req.method} ${path}`);
+    if (!process.env.NODE_TEST_CONTEXT) console.log(`[mock-onelap] ${req.method} ${path}`); // 单测下静默
 
     // ---------------- 登录：校验 nonce/timestamp/sign 三头 + 签名串 ----------------
     if (req.method === 'POST' && path === '/api/login') {
@@ -162,8 +163,8 @@ export function createMockOnelapServer({ activityCount = 5, acceptPassword = nul
   });
 }
 
-// 直接运行：前台起服务（模拟器联调入口）
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop());
+// 直接运行：前台起服务（模拟器联调入口）。标准 isMain 判定（pathToFileURL 消 Windows 路径歧义）
+const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (isMain) {
   const port = Number(process.env.MOCK_ONELAP_PORT) || 8791;
   createMockOnelapServer().listen(port, () => {

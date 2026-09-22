@@ -22,7 +22,7 @@ import {
   type SyncState,
 } from '@/db';
 import { importFitBytes } from './importFit';
-import { createOnelapClient, extractFitFileName, OnelapError, type OnelapSession } from '@/sync/onelap';
+import { createOnelapClient, extractFitFileName, OnelapError, parseRideTime, type OnelapSession } from '@/sync/onelap';
 
 // SecureStore 键名（与 dbkey/aikey 同前缀口径）
 const ONELAP_ACCOUNT_STORE = 'voltcoach.onelap.account';
@@ -67,6 +67,12 @@ export interface SyncOutcome {
   failed: number;
   /** null = 正常跑完；code 供 UI 双语化，message 为原始技术信息（存库并透出） */
   error: { code: SyncErrorCode; message: string } | null;
+  /**
+   * 最旧一条失败活动的起骑时间（ISO）。水位线推进锚点：failed>0 时推进到此时间
+   * （而非当前时刻）——下次窗口仍覆盖失败活动重试，成功项按文件名幂等跳过；
+   * 也不被永久性脏活动（如 no_file）钉死水位线。
+   */
+  failureFloor: string | null;
 }
 
 /** OnelapError → 稳定码（auth 单列供双语化，其余归 other 透出原始信息） */
@@ -94,16 +100,20 @@ export function runOnelapSync(): Promise<SyncOutcome> {
 async function runSyncOnce(): Promise<SyncOutcome> {
   const account = await getOnelapAccount();
   if (!account) {
-    return { imported: 0, skipped: 0, failed: 0, error: { ...NO_ACCOUNT } };
+    return { imported: 0, skipped: 0, failed: 0, error: { ...NO_ACCOUNT }, failureFloor: null };
   }
 
   const state = await getSyncState();
   const outcome = await pullActivities(account, state);
   const err = outcome.error;
-  // 水位线只在成功跑完时推进（部分失败下次重试窗口不变——前移 24h 缓冲兜底重复拉取）
+  // 水位线推进锚点：正常→当前时刻；有失败活动→最旧失败活动时间（下次窗口重试，
+  // 成功项按文件名幂等跳过）；本轮出错（未拉到列表）→不动
+  const nextSyncAt = err
+    ? state.last_sync_at
+    : outcome.failureFloor ?? new Date().toISOString();
   const next: SyncState = {
     ...state,
-    last_sync_at: err ? state.last_sync_at : new Date().toISOString(),
+    last_sync_at: nextSyncAt,
     last_result: err ? 'error' : 'ok',
     last_error: err?.message || null,
     last_counts: err ? state.last_counts : { imported: outcome.imported, skipped: outcome.skipped, failed: outcome.failed },
@@ -124,7 +134,7 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
   try {
     session = await client.login(account.account, account.password);
   } catch (e) {
-    return { imported: 0, skipped: 0, failed: 0, error: toError(e) };
+    return { imported: 0, skipped: 0, failed: 0, error: toError(e), failureFloor: null };
   }
 
   // 水位线：上次同步时间前移 24h（跨设备时区/时钟偏差缓冲）；首次同步全量
@@ -136,11 +146,11 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
   try {
     cloudList = await client.listSince(session, since);
   } catch (e) {
-    return { imported: 0, skipped: 0, failed: 0, error: toError(e) };
+    return { imported: 0, skipped: 0, failed: 0, error: toError(e), failureFloor: null };
   }
 
   const existing = new Set(await listActivityFileNames());
-  const outcome: SyncOutcome = { imported: 0, skipped: 0, failed: 0, error: null };
+  const outcome: SyncOutcome = { imported: 0, skipped: 0, failed: 0, error: null, failureFloor: null };
   for (const act of cloudList) {
     try {
       const key = await client.getFitKey(session, act.id);
@@ -158,6 +168,11 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
         return { ...outcome, error: toError(e) };
       }
       outcome.failed += 1;
+      // 记录最旧失败活动时间，作为本轮水位线锚点（下次窗口覆盖重试）
+      const failedAt = parseRideTime(act.start_riding_time);
+      if (failedAt && (!outcome.failureFloor || failedAt < new Date(outcome.failureFloor))) {
+        outcome.failureFloor = failedAt.toISOString();
+      }
       console.warn(`顽鹿活动 ${act.id} 同步失败（跳过继续）:`, e);
     }
   }
