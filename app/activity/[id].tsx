@@ -1,19 +1,23 @@
 /**
  * 训练详情页（M1）：summary 指标网格 + 时序多系列图 + 功率/心率分区 + 峰功率曲线
- * + 数据质量与异常标注。数据源：训练库 getActivitySummary + records gzip 落盘文件
- * （thinRecords ≤1400 抽稀口径）。指标网格内容（含 IF/W·kg⁻¹/VI/心率漂移/当日
- * CTL-ATL-TSB 小字注释）由 core/metrics.buildActivityMetrics 装配（逐条对齐 Web 版
- * views/activities.js），本页只做排版；系列切换沿用 chips。时序图由 ChartScroller
- * 承载横向滚动（900px 内容宽口径）。
+ * + 数据质量与异常标注 + AI 复盘面板（M4 后补：对齐 Web 版 views/activities.js——
+ * 顶部「AI 复盘」按钮 + 页尾内嵌报告，匹配本训练的最新 review 报告自动呈现，没有
+ * 则由按钮触发生成，完成态附追问线程与「重新生成」）。数据源：训练库
+ * getActivitySummary + records gzip 落盘文件（thinRecords ≤1400 抽稀口径）。指标
+ * 网格内容（含 IF/W·kg⁻¹/VI/心率漂移/当日 CTL-ATL-TSB 小字注释）由
+ * core/metrics.buildActivityMetrics 装配（逐条对齐 Web 版 views/activities.js），
+ * 本页只做排版；系列切换沿用 chips。时序图由 ChartScroller 承载横向滚动（900px
+ * 内容宽口径）。
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button, Chip, TextInput } from 'react-native-paper';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { HR_ZONE_COLORS, POWER_ZONE_COLORS, ZoneBars } from '@/charts/ZoneBars';
 import { PeakCurve } from '@/charts/PeakCurve';
 import { TimeSeriesChart, type SeriesSpec } from '@/charts/TimeSeriesChart';
+import { AiReviewPanel, type AiReviewPanelHandle } from '@/components/AiReviewPanel';
 import type { Summary } from '@/core/analyze';
 import { formatAnomaly } from '@/core/i18n';
 import { buildActivityMetrics, type MetricItem, type MetricText } from '@/core/metrics';
@@ -67,6 +71,13 @@ export default function ActivityDetailScreen() {
   // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
   const [note, setNote] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
+  // AI 复盘面板：顶部按钮触发生成/露出面板，panelY 记录面板位置供滚动定位
+  const scrollRef = useRef<ScrollView>(null);
+  const panelRef = useRef<AiReviewPanelHandle>(null);
+  const panelY = useRef(0);
+  const revealPanel = useCallback(() => {
+    scrollRef.current?.scrollTo({ y: Math.max(0, panelY.current - 12), animated: true });
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -169,8 +180,14 @@ export default function ActivityDetailScreen() {
           title={`${a.date} · ${t(`sport.${a.sport}` as never)}`}
           titleStyle={{ color: palette.text }}
         />
+        <Appbar.Action
+          icon="robot-outline"
+          color={palette.volt}
+          accessibilityLabel={t('btn.ai_review')}
+          onPress={() => panelRef.current?.analyze()}
+        />
       </Appbar.Header>
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.body}>
         {/* 概览指标网格（列数随屏宽 2–4；内容与小字注释对齐 Web 版 metric-grid） */}
         <MetricGrid items={metrics} />
 
@@ -296,6 +313,14 @@ export default function ActivityDetailScreen() {
               <Text style={styles.dqLine}>• {t('dq.clean')}</Text>
             )}
           </View>
+        </View>
+
+        {/* AI 复盘（页尾，位置对齐 Web 版 #aiPanel：有匹配报告直接呈现，无则按钮生成） */}
+        <View
+          onLayout={(e) => {
+            panelY.current = e.nativeEvent.layout.y;
+          }}>
+          <AiReviewPanel ref={panelRef} fileName={fileName} onReveal={revealPanel} />
         </View>
       </ScrollView>
     </View>

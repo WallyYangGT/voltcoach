@@ -844,7 +844,27 @@ export async function getAiReport(id: number): Promise<AiReportRow | null> {
   const row = await db.getFirstAsync<
     AiReportListItem & { prompt: string; markdown: string }
   >(`SELECT * FROM ai_reports WHERE id = ?`, id);
-  if (!row) return null;
+  return row ? toAiReportRow(row) : null;
+}
+
+/**
+ * 某次训练的最新 review 报告（训练详情页内嵌展示用，口径同 Web 版
+ * views/activities.js：按 file_name 过滤 review 列表取最新一条，含 pending/failed）。
+ */
+export async function getLatestReviewReport(fileName: string): Promise<AiReportRow | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<
+    AiReportListItem & { prompt: string; markdown: string }
+  >(
+    `SELECT * FROM ai_reports WHERE mode = 'review' AND file_name = ?
+     ORDER BY id DESC LIMIT 1`,
+    fileName,
+  );
+  return row ? toAiReportRow(row) : null;
+}
+
+/** ai_reports 行 → AiReportRow（SELECT * 或列裁剪结果皆可） */
+function toAiReportRow(row: AiReportListItem & { prompt: string; markdown: string }): AiReportRow {
   return {
     id: row.id,
     mode: row.mode,
