@@ -11,9 +11,15 @@
  *   import { createMockOnelapServer } from ...  # node:test 里起临时实例（端口 0）
  *
  * 模拟器内经 http://10.0.2.2:8791 访问宿主（Windows adb reverse 不可靠，§AGENTS 踩坑）。
+ *
+ * M5 追加：FIT 的起骑时刻按活动的 start_riding_time 生成（此前是固定常量 2024-01-15，
+ * 与列表元数据不符——内容指纹去重会把 5 条"同日期同时长"的活动误判成一趟骑行，
+ * 而真实场景里每条活动的时刻各不相同）；MOCK_FIT_FILE=<本地 .fit 路径> 时改用该文件
+ * 的字节服务所有活动，用于演练「同一趟骑行、不同文件名」的去重（手动导入 × 云同步）。
  */
 
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 import { buildRideFit } from '../test/make_test_fit.mjs';
@@ -36,22 +42,30 @@ function fmt(d) {
  *  oldCount 追加「超过同步窗口（90 天）」的老活动，用于验证窗口截断——App 不应拉取它们 */
 function makeActivities(count = 5, oldCount = 0) {
   const now = Date.now();
-  const recent = Array.from({ length: count }, (_, i) => ({
-    id: 77000 + i,
-    start_riding_time: fmt(new Date(now - (i + 1) * 24 * 3600 * 1000)),
-    distance_km: 30 + i,
-    time_seconds: 4500 + i * 60,
-    fileKey: `geo/20260915/mock-ride-${77000 + i}.fit`,
-    fitUrl: '',
-  }));
-  const old = Array.from({ length: oldCount }, (_, i) => ({
-    id: 76000 + i,
-    start_riding_time: fmt(new Date(now - (120 + i * 30) * 24 * 3600 * 1000)),
-    distance_km: 20 + i,
-    time_seconds: 3600,
-    fileKey: `geo/20250101/mock-old-ride-${76000 + i}.fit`,
-    fitUrl: '',
-  }));
+  const recent = Array.from({ length: count }, (_, i) => {
+    const start = new Date(now - (i + 1) * 24 * 3600 * 1000);
+    return {
+      id: 77000 + i,
+      start_riding_time: fmt(start),
+      distance_km: 30 + i,
+      time_seconds: 4500 + i * 60,
+      fileKey: `geo/20260915/mock-ride-${77000 + i}.fit`,
+      fitUrl: '',
+      startMs: start.getTime(), // FIT 内容的起骑时刻与元数据一致（见文件头 M5 说明）
+    };
+  });
+  const old = Array.from({ length: oldCount }, (_, i) => {
+    const start = new Date(now - (120 + i * 30) * 24 * 3600 * 1000);
+    return {
+      id: 76000 + i,
+      start_riding_time: fmt(start),
+      distance_km: 20 + i,
+      time_seconds: 3600,
+      fileKey: `geo/20250101/mock-old-ride-${76000 + i}.fit`,
+      fitUrl: '',
+      startMs: start.getTime(),
+    };
+  });
   return [...recent, ...old]; // 新→旧：老活动排在后面，窗口外的项在翻页时才会遇到
 }
 
@@ -83,17 +97,27 @@ export function createMockOnelapServer({
   oldActivityCount = 0,
   acceptPassword = null,
   revokeTokenOnce = false,
+  fitFile = process.env.MOCK_FIT_FILE ?? null,
 } = {}) {
   // acceptPassword：指定时校验密码（node:test 覆盖登录失败路径）；null 任意密码放行（模拟器联调）
   // oldActivityCount：追加窗口外（>90 天）的老活动，验证同步窗口截断（默认关，不影响单测断言）
   // revokeTokenOnce：首个带鉴权的请求回 401（模拟 token 过期），验证客户端自动重登一次
+  // fitFile：指定时所有活动都回该文件的字节（演练「同一趟骑行、不同文件名」的去重场景）
   const acceptPasswordMd5 = acceptPassword === null
     ? null
     : crypto.createHash('md5').update(acceptPassword, 'utf8').digest('hex');
   let revokePending = revokeTokenOnce;
   const activities = makeActivities(activityCount, oldActivityCount);
+  const fixedFit = fitFile ? fs.readFileSync(fitFile) : null;
+  if (fixedFit) {
+    console.log(`[mock-onelap] MOCK_FIT_FILE=${fitFile}：所有活动回同一份 FIT 字节（去重演练）`);
+  }
   const fits = new Map(
-    activities.map((a) => [a.id, buildRideFit({ durationSec: 60, power: 200 + (a.id % 7) * 10, heartRate: 150 })]),
+    activities.map((a) => [
+      a.id,
+      fixedFit ??
+        buildRideFit({ startMs: a.startMs, durationSec: 60, power: 200 + (a.id % 7) * 10, heartRate: 150 }),
+    ]),
   );
 
   return http.createServer(async (req, res) => {
@@ -196,12 +220,19 @@ if (isMain) {
   const port = Number(process.env.MOCK_ONELAP_PORT) || 8791;
   // 独立运行（模拟器联调）带 2 条窗口外老活动：应只见近期活动的 analysis/fit_content 请求
   // MOCK_REVOKE_ONCE=1 时首个鉴权请求回 401，用于验证客户端自动重登
+  // MOCK_FIT_FILE=<本地 .fit 路径>：所有活动回同一份字节 → 演练「同趟骑行、不同文件名」去重
+  const fitFile = process.env.MOCK_FIT_FILE ?? null;
   createMockOnelapServer({
+    activityCount: fitFile ? 1 : 5,
     oldActivityCount: 2,
     revokeTokenOnce: process.env.MOCK_REVOKE_ONCE === '1',
   }).listen(port, () => {
     console.log(`[mock-onelap] listening on http://0.0.0.0:${port}（模拟器内用 http://10.0.2.2:${port}）`);
-    console.log('[mock-onelap] 登录账号任意、密码任意；活动 5 条近 5 天 + 2 条 120/150 天前（验证同步窗口截断）');
+    console.log(
+      fitFile
+        ? `[mock-onelap] 单活动，FIT 取自 ${fitFile}——用于验证「库里已有同一趟骑行」时同步跳过重复`
+        : '[mock-onelap] 登录账号任意、密码任意；活动 5 条近 5 天 + 2 条 120/150 天前（验证同步窗口截断）',
+    );
     if (process.env.MOCK_REVOKE_ONCE === '1') console.log('[mock-onelap] 本实例首个鉴权请求将返回 401（验证令牌过期重登）');
   });
 }

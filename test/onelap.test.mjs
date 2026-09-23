@@ -12,6 +12,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { createMockOnelapServer } from '../scripts/mock-onelap-server.mjs';
+import { analyzeFile } from '../src/core/analyze.ts';
+import { findDuplicateGroups } from '../src/core/dedupe.ts';
 import {
   base64Encode,
   buildFitContentUrl,
@@ -257,6 +259,47 @@ test('e2e: 登录（服务端校验签名）→ 增量列表 → 下载 FIT 全�
       () => client.listSince({ token: 'bad', uid: '1' }, null),
       (e) => e.code === 'auth',
     );
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+/**
+ * mock 夹具回归（M5）：每条活动的 FIT 起骑时刻必须各不相同。
+ * 此前夹具把所有活动的 FIT 起始时间写成同一常量（2024-01-15 10:00），于是 5 条活动的
+ * 日期/时长/距离全同——内容指纹去重会把它们误判成同一趟骑行（模拟器同步只能导入 1 条）。
+ */
+test('mock 夹具: 各活动的 FIT 内容互不为同一趟骑行（内容指纹不误判）', async () => {
+  const server = createMockOnelapServer({ activityCount: 3 });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  try {
+    const client = createOnelapClient({
+      ...nodeDeps,
+      fetchImpl: fetch,
+      baseUrlOverrides: {
+        login: `http://127.0.0.1:${port}/api/login`,
+        rideRecord: `http://127.0.0.1:${port}/api/otm/ride_record`,
+      },
+    });
+    const session = await client.login('rider@example.com', 'any');
+    const list = await client.listSince(session, null);
+    assert.equal(list.length, 3);
+
+    const keys = [];
+    for (const act of list) {
+      const { bytes } = await client.downloadFit(session, String(act.id));
+      const { summary } = await analyzeFile({ bytes, fileName: `mock-${act.id}.fit` });
+      keys.push({
+        file_name: `mock-${act.id}.fit`,
+        date: summary.activity.date,
+        duration_sec: summary.activity.duration_sec,
+        distance_km: summary.activity.distance_km,
+      });
+    }
+    assert.equal(new Set(keys.map((k) => k.date)).size, 3, '每条活动的骑行日期应各不相同');
+    assert.deepEqual(findDuplicateGroups(keys), [], '不应被判为重复组');
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
