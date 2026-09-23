@@ -103,6 +103,8 @@ export default function ActivitiesScreen() {
         }
         renderItem={({ item }) => (
           <ReanimatedSwipeable
+            // ⚠️ 这个 ref 回调必须保持「返回 undefined」：返回清理函数时 React 19 不再以
+            // null 调用它，下面 Map 的失效清理就不会发生（失效引用残留 → closeOthers 崩）
             ref={(r) => {
               if (r) swipeRefs.current.set(item.file_name, r);
               else swipeRefs.current.delete(item.file_name);

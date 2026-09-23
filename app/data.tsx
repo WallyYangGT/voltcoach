@@ -245,6 +245,7 @@ export default function DataScreen() {
     setImporting(true);
     importBackupFile(uri, importPass || null)
       .then((outcome) => {
+        invalidateReportTitles(); // 整库被替换：活动行与 records 全变了，标题缓存必须全清
         Alert.alert(t('data.backup.confirmTitle'), t('data.backup.importDone', { acts: outcome.activities, recs: outcome.records }));
       })
       .catch((e) => {
@@ -287,14 +288,14 @@ export default function DataScreen() {
 
   // ---------------- 重复记录检查（M5） ----------------
 
-  /** 扫描：全表骑行键 → core/dedupe 分组，只留重复组 */
-  const scanDuplicates = async () => {
+  /** 扫描：全表骑行键 → core/dedupe 分组，只留重复组。silent=true 时不弹「没有重复」（供失败后静默刷新用） */
+  const scanDuplicates = async (silent = false) => {
     setScanning(true);
     try {
       const rows = await listActivityRideKeys();
       const groups = findDuplicateGroups(rows).sort((a, b) => (a[0].date < b[0].date ? 1 : -1));
       setDupGroups(groups);
-      if (!groups.length) Alert.alert(t('data.dupe.title'), t('data.dupe.none'));
+      if (!groups.length && !silent) Alert.alert(t('data.dupe.title'), t('data.dupe.none'));
     } catch (e) {
       Alert.alert(t('data.err.generic'), describeError(e));
     } finally {
@@ -338,8 +339,9 @@ export default function DataScreen() {
       setDupGroups(null);
       Alert.alert(t('data.dupe.title'), t('data.dupe.done', { groups, extra }));
     } catch (e) {
+      // 失败原因先弹（随后静默刷新现状，避免又一个 Alert 把它顶掉）
       Alert.alert(t('data.dupe.failed'), describeError(e));
-      void scanDuplicates(); // 部分成功时刷新现状，避免界面停留在过期分组
+      void scanDuplicates(true);
     } finally {
       invalidateReportTitles(); // 保留项可能接管了副本的逐秒数据/引用 → 标题缓存全清
       setMerging(false);
@@ -542,7 +544,7 @@ export default function DataScreen() {
             </View>
           ))}
           <View style={styles.row}>
-            <Button mode="outlined" compact onPress={scanDuplicates} disabled={scanning || merging} loading={scanning}>
+            <Button mode="outlined" compact onPress={() => void scanDuplicates()} disabled={scanning || merging} loading={scanning}>
               {scanning ? t('data.dupe.scanning') : t('data.dupe.scan')}
             </Button>
             {dupGroups != null && dupGroups.length > 0 && (

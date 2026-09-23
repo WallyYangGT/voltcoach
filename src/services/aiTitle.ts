@@ -45,9 +45,13 @@ export function invalidateReportTitles(fileName?: string): void {
   else startCache = new Map();
 }
 
-/** 标题键：只含影响标题的字段（轮询产生的同内容新对象命中同一键） */
+/**
+ * 标题键：只含影响标题的字段（轮询产生的同内容新对象命中同一键）。
+ * 含时区偏移——标题按本地时区格式化，进程存活期间改时区（罕见）要让键失效。
+ */
 function titleKeyOf(r: ReportTitleSource, lang: Lang): string {
-  return [lang, r.mode, r.file_name ?? '', r.race_date ?? '', r.compare_with ?? '', r.created_at].join('|');
+  const tz = new Date().getTimezoneOffset();
+  return [lang, tz, r.mode, r.file_name ?? '', r.race_date ?? '', r.compare_with ?? '', r.created_at].join('|');
 }
 
 /** 单个活动的骑行简报（活动不存在返回 null） */

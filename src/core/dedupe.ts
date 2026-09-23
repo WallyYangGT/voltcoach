@@ -50,7 +50,8 @@ export function isSameRide(a: RideKey, b: RideKey): boolean {
  * 库内记录按同趟骑行分组，返回**只含重复组**（每组 ≥2 条，组内保持入参顺序）。
  * 用并查集而非两两直接分组：容忍链式相等（A≈B、B≈C 视为一组）。
  */
-export function findDuplicateGroups<T extends RideKey>(rows: T[]): T[][] {  const parent = rows.map((_, i) => i);
+export function findDuplicateGroups<T extends RideKey>(rows: T[]): T[][] {
+  const parent = rows.map((_, i) => i);
   const find = (i: number): number => {
     let root = i;
     while (parent[root] !== root) root = parent[root];
@@ -89,8 +90,11 @@ export function findDuplicateGroups<T extends RideKey>(rows: T[]): T[][] {  cons
  * 命中同一趟骑行时返回**应让路的已有文件名**，否则 null（照常入库/更新）。
  *
  * 同名优先：库内已有同名行时直接返回 null —— 这是「重新导入同一文件」的更新路径，
- * 必须走 upsert 覆盖（口径与旧版一致）。否则「同名行 + 另一份云同步副本」并存时，
+ * 必须走 upsert 覆盖（口径与旧版一致）。否则「同名行 + 另一份云同步副本并存」时，
  * 再次导入该文件会被副本顶掉、同名行永远更新不到（2026-09-23 code-review 发现）。
+ *
+ * 已知边界（口径固有代价）：**同名但其实是两趟不同骑行时会被 upsert 覆盖**（本地那条
+ * 的逐秒数据随之更新）。要区分只能给本地行存内容指纹或外部 id，本轮明确不做（§9.10）。
  */
 export function findDuplicateOf(
   candidate: RideKey & { file_name: string },

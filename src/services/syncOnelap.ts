@@ -291,16 +291,21 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
       const key = await withAuthRetry((s) => client.getFitKey(s, act.id));
       const fileName = extractFitFileName(key, act.id);
       if (existing.has(fileName)) {
+        // 文件名预检命中即跳过（省下载）：绝大多数情况下就是本活动的历史副本。
+        // 已知边界：若「本地同名的其实是另一趟骑行」（云 fileKey 与手动命名的碰撞，
+        // 真实 fileKey 自带日期时间戳故概率极低），该云活动会被静默跳过——打日志留痕，
+        // 不做自动改名的导入（同名入库会 upsert 覆盖掉本地那条，宁可漏也不毁数据）。
+        console.warn(`顽鹿活动 ${act.id}：文件名 ${fileName} 本地已存在，按重复跳过（未校验内容）`);
         outcome.skipped += 1;
         continue;
       }
       const { bytes, fileName: normalized } = await withAuthRetry((s) => client.downloadByKey(s, key, act.id));
       const { duplicateOf } = await importFitBytes(bytes, normalized);
       if (duplicateOf) {
-        // 内容指纹命中（多为先前手动导入过同一趟骑行）：计重复，并把这个名字加入
-        // existing——它确实已成为「本次已确认存在」的文件名，否则同一活动在窗口内
-        // 每次同步都会重新下载 + 重新解析一遍
-        existing.add(normalized);
+        // 内容指纹命中（多为先前手动导入过同一趟骑行）：计重复。注意 existing 是每轮从库里
+        // 重建的，这里不能 add——那个名字并没有入库，add 到本轮集合只会让**同一轮里**
+        // 后续算出同名文件的另一个活动被上面那条预检静默跳过（跨轮去重只能靠内容指纹，
+        // 代价是该活动每次同步都重新下载 + 解析一次，换取不丢活动）
         outcome.duplicates += 1;
         continue;
       }
