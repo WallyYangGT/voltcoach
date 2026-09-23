@@ -232,7 +232,8 @@ export default function AiSessionScreen() {
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: palette.bg },
   header: { backgroundColor: palette.bg, borderBottomWidth: 1, borderBottomColor: palette.lineSoft },
-  headerTitle: { color: palette.text, fontSize: 15 },
+  // 标题含骑行日期/规划区间（可达 20+ 字），字号比默认小一档让长标题尽量不截断
+  headerTitle: { color: palette.text, fontSize: 14 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
   followUp: { gap: 8 },
