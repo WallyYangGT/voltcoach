@@ -499,14 +499,20 @@ export async function deleteActivity(fileName: string): Promise<number> {
 }
 
 /**
- * 合并重复记录时把 AI 引用改指保留项（报告与追问对话的 file_name 是无外键的松散
- * 引用）：不迁移的话，删掉副本会让原本挂在副本名下的报告变成"孤儿"。
+ * 合并重复记录时把 AI 引用改指保留项（报告与对话的 file_name、报告的第二趟
+ * compare_with 都是无外键的松散引用）：不迁移的话，删掉副本会让原本挂在副本名下的
+ * 报告变成"孤儿"——对比报告还会因 compare_with 指向已删训练而在重新生成时取不到数据。
  * 返回改动的报告数（对话引用一并改）。
  */
 export async function retargetActivityRefs(fromFileName: string, toFileName: string): Promise<number> {
   const db = await getDb();
   const reports = await db.runAsync(
     `UPDATE ai_reports SET file_name = ? WHERE file_name = ?`,
+    toFileName,
+    fromFileName,
+  );
+  await db.runAsync(
+    `UPDATE ai_reports SET compare_with = ? WHERE compare_with = ?`,
     toFileName,
     fromFileName,
   );

@@ -297,8 +297,10 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
       const { bytes, fileName: normalized } = await withAuthRetry((s) => client.downloadByKey(s, key, act.id));
       const { duplicateOf } = await importFitBytes(bytes, normalized);
       if (duplicateOf) {
-        // 文件名没撞上但内容指纹撞上（多为先前手动导入过同一趟骑行）：按重复计数，
-        // 不加入 existing——它不是这个名字，下次同步仍会走到这里按指纹再判一次
+        // 内容指纹命中（多为先前手动导入过同一趟骑行）：计重复，并把这个名字加入
+        // existing——它确实已成为「本次已确认存在」的文件名，否则同一活动在窗口内
+        // 每次同步都会重新下载 + 重新解析一遍
+        existing.add(normalized);
         outcome.duplicates += 1;
         continue;
       }

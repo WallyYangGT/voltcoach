@@ -133,11 +133,12 @@ export default function ImportScreen() {
           {outcomes.map((o, i) => (
             <Pressable
               key={`${o.fileName}-${i}`}
-              disabled={!o.ok || !!o.duplicateOf}
+              disabled={!o.ok}
               onPress={() =>
                 router.replace({
                   pathname: '/activity/[id]',
-                  params: { id: encodeURIComponent(o.fileName) },
+                  // 重复项跳的是库里已有的那条（本次文件没入库）
+                  params: { id: encodeURIComponent(o.duplicateOf ?? o.fileName) },
                 })
               }
               style={({ pressed }) => [
@@ -149,9 +150,9 @@ export default function ImportScreen() {
                 {o.fileName || '—'}
               </Text>
               {o.duplicateOf ? (
-                // 内容指纹命中：同一趟骑行已在库里（文件名不同），未重复入库
+                // 内容指纹命中：同一趟骑行已在库里（文件名不同），未重复入库；点击看已有那条
                 <Text style={styles.itemDupText} numberOfLines={2}>
-                  {t('import.item_dup', { name: o.duplicateOf })}
+                  {t('import.item_dup', { name: o.duplicateOf })} ›
                 </Text>
               ) : o.ok ? (
                 <Text style={styles.itemMeta}>

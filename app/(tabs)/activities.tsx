@@ -15,6 +15,7 @@ import { formatDuration } from '@/core/metrics';
 import { deleteActivity, listActivities, type ActivityListItem } from '@/db';
 import { useI18n } from '@/i18n';
 import { deleteStoredRecord } from '@/records-store';
+import { invalidateReportTitles } from '@/services/aiTitle';
 import { palette } from '@/theme';
 
 export default function ActivitiesScreen() {
@@ -59,12 +60,19 @@ export default function ActivitiesScreen() {
           void (async () => {
             try {
               await deleteActivity(fileName);
-              deleteStoredRecord(fileName); // 逐秒数据一并清（DB 与文件无事务，先删行后删文件）
-              await load();
             } catch (e) {
               console.warn('删除训练失败:', e);
               Alert.alert(t('data.err.generic'), e instanceof Error ? e.message : String(e));
+              return;
             }
+            // 逐秒数据清理失败不该让界面停在旧列表（行已删）：只记警告
+            try {
+              deleteStoredRecord(fileName);
+            } catch (e) {
+              console.warn('逐秒数据清理失败（训练已删除）:', e);
+            }
+            invalidateReportTitles(fileName);
+            await load();
           })();
         },
       },
@@ -104,7 +112,10 @@ export default function ActivitiesScreen() {
             overshootRight={false}
             containerStyle={styles.swipeContainer}
             onSwipeableWillOpen={(dir) => {
-              if (dir === 'right') closeOthers(item.file_name);
+              // 注意方向语义：库在「向左滑露出右侧面板」时回调 LEFT（内部按 translateX
+              // 正负派发，右侧面板的目标位移是 -rightWidth），见 ReanimatedSwipeable
+              // 的 dispatchImmediateEvents。这里只渲染右侧删除动作，故判 left。
+              if (dir === 'left') closeOthers(item.file_name);
             }}
             renderRightActions={() => (
               <Pressable

@@ -10,6 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   findDuplicateGroups,
+  findDuplicateOf,
   isSameRide,
   RIDE_DISTANCE_TOLERANCE_KM,
   RIDE_DURATION_TOLERANCE_SEC,
@@ -102,4 +103,25 @@ test('findDuplicateGroups: 多组重复分别成组且保持入参顺序', () =>
   assert.equal(groups.length, 2);
   assert.deepEqual(groups[0].map((r) => r.file_name), ['d1.fit', 'd2.fit', 'd3.fit']);
   assert.deepEqual(groups[1].map((r) => r.file_name), ['e1.fit', 'e2.fit']);
+});
+
+test('findDuplicateOf: 异名同指纹命中，返回库内已有的文件名', () => {
+  const rows = [{ file_name: '云端名.fit', ...ride() }];
+  assert.equal(findDuplicateOf({ file_name: '本地名.fit', ...ride() }, rows), '云端名.fit');
+  // 不同趟骑行（日期/时长/距离不在容差内）不拦
+  assert.equal(findDuplicateOf({ file_name: '新.fit', ...ride({ date: '2026-09-19' }) }, rows), null);
+  assert.equal(findDuplicateOf({ file_name: '新.fit', ...ride({ duration_sec: 1800 }) }, rows), null);
+  assert.equal(findDuplicateOf({ file_name: '新.fit', ...ride() }, []), null);
+});
+
+test('findDuplicateOf: 同名优先走 upsert 覆盖，不被异名副本顶掉', () => {
+  // 库里同时有手动导入的同名行与云同步副本（本 feature 要解决的并存态）
+  const rows = [
+    { file_name: 'ride.fit', ...ride() },
+    { file_name: 'mock-ride.fit', ...ride({ duration_sec: 3599 }) },
+  ];
+  // 再次导入 ride.fit：必须返回 null（走 upsert 更新），而不是指向 mock-ride.fit 被跳过
+  assert.equal(findDuplicateOf({ file_name: 'ride.fit', ...ride() }, rows), null);
+  // 导入第三个异名副本：仍按重复拦下（让用户去数据管理页合并，而不是越积越多）
+  assert.equal(findDuplicateOf({ file_name: 'third.fit', ...ride() }, rows), 'ride.fit');
 });

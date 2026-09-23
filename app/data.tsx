@@ -20,6 +20,7 @@ import { unpackBackup } from '@/backup/archive';
 import { findDuplicateGroups } from '@/core/dedupe';
 import { formatDuration } from '@/core/metrics';
 import { copyStoredRecord, deleteStoredRecord } from '@/records-store';
+import { invalidateReportTitles } from '@/services/aiTitle';
 import {
   SCHEMA_VERSION,
   deleteActivity,
@@ -340,6 +341,7 @@ export default function DataScreen() {
       Alert.alert(t('data.dupe.failed'), describeError(e));
       void scanDuplicates(); // 部分成功时刷新现状，避免界面停留在过期分组
     } finally {
+      invalidateReportTitles(); // 保留项可能接管了副本的逐秒数据/引用 → 标题缓存全清
       setMerging(false);
       load();
     }
@@ -347,7 +349,9 @@ export default function DataScreen() {
 
   const snapshotLine = snapshot
     ? `${snapshot.exported_at.slice(0, 16).replace('T', ' ')} · ${snapshot.counts.activities} · ${snapshot.counts.records}`
-    : t('data.snapshot.none');  const lastSyncLine = syncState?.last_sync_at
+    : t('data.snapshot.none');
+
+  const lastSyncLine = syncState?.last_sync_at
     ? `${syncState.last_sync_at.slice(0, 16).replace('T', ' ')} · ${
         syncState.last_result === 'ok' ? '✓' : `✗ ${syncState.last_error ?? ''}`
       }`
@@ -527,7 +531,8 @@ export default function DataScreen() {
             <View key={g[0].file_name} style={styles.dupGroup}>
               <Text style={styles.dupGroupHead}>
                 {g[0].date} · {formatDuration(g[0].duration_sec)} ·{' '}
-                {g[0].distance_km != null ? `${g[0].distance_km.toFixed(2)} km` : '—'}
+                {/* 距离口径与训练列表一致（先按 0.1km 取整再显示，避免列表 18.00 / 此处 17.99 打架） */}
+                {g[0].distance_km != null ? `${(Math.round(g[0].distance_km * 10) / 10).toFixed(2)} km` : '—'}
               </Text>
               {g.map((r, i) => (
                 <Text key={r.file_name} style={i === 0 ? styles.dupKeep : styles.dupDrop} numberOfLines={1}>

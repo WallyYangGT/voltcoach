@@ -63,12 +63,7 @@ export default function AiCenterScreen() {
       ]);
       setConfigured(cfg.configured);
       // 标题在渲染侧装配（M5）：review/compare 要查活动与 records 首帧，故先批量取
-      const titles = await buildReportTitles(
-        reports,
-        lang,
-        t,
-        (sport) => t(`sport.${sport}` as never),
-      );
+      const titles = await buildReportTitles(reports, lang, t);
       setEntries(mergeEntries(reports, chats, titles));
     } catch (e) {
       console.warn('会话中心加载失败:', e);

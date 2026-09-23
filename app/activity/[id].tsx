@@ -27,6 +27,7 @@ import { CATEGORY_KEYS, deleteActivity, getActivitySummary, setActivityCategory,
 import { useI18n, type DictKey } from '@/i18n';
 import { MetricGrid } from '@/components/MetricGrid';
 import { deleteStoredRecord, loadStoredRecords } from '@/records-store';
+import { invalidateReportTitles } from '@/services/aiTitle';
 import { palette } from '@/theme';
 
 /** 分区定义 × 基准值（FTP/最大心率）→ 各区范围文本（口径同 server.js zoneRanges） */
@@ -118,11 +119,18 @@ export default function ActivityDetailScreen() {
           void (async () => {
             try {
               await deleteActivity(fileName);
-              deleteStoredRecord(fileName);
-              router.back();
             } catch (e) {
               Alert.alert(t('data.err.generic'), e instanceof Error ? e.message : String(e));
+              return;
             }
+            // 删完就返回：逐秒数据清理失败不该让用户停在一条已删训练的页面上
+            try {
+              deleteStoredRecord(fileName);
+            } catch (e) {
+              console.warn('逐秒数据清理失败（训练已删除）:', e);
+            }
+            invalidateReportTitles(fileName);
+            router.back();
           })();
         },
       },

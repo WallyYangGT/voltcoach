@@ -14,10 +14,11 @@
 import { File } from 'expo-file-system';
 import { rollLocalSnapshotQuietly } from '@/backup/export';
 import { analyzeFile, type Summary } from '@/core/analyze';
-import { isSameRide } from '@/core/dedupe';
+import { findDuplicateOf } from '@/core/dedupe';
 import { safeName } from '@/core/records';
 import { computeForm, getEffectiveAthlete, listActivityRideKeys, upsertActivity } from '@/db';
 import { saveRecords } from '@/records-store';
+import { invalidateReportTitles } from './aiTitle';
 
 /** 单次导入结果（导入页逐文件进度展示） */
 export interface ImportOutcome {
@@ -48,18 +49,21 @@ export async function importFitSource(uri: string, fileName: string): Promise<Im
 }
 
 /**
- * 库内是否已有同一趟骑行（异名同指纹）：命中返回已有记录的文件名。
- * 同名不算重复——那是「重新导入同一文件」，走 upsert 覆盖更新（口径与旧版一致）。
+ * 库内是否已有同一趟骑行（异名同指纹）：命中返回已有记录的文件名；
+ * 同名行存在时返回 null（走 upsert 覆盖更新，口径见 core/dedupe.findDuplicateOf）。
  */
 async function findExistingRide(fileName: string, summary: Summary): Promise<string | null> {
   const a = summary.activity;
-  const candidate = {
-    date: a.date,
-    duration_sec: a.duration_sec ?? null,
-    distance_km: a.distance_km ?? null,
-  };
   const rows = await listActivityRideKeys();
-  return rows.find((r) => r.file_name !== fileName && isSameRide(r, candidate))?.file_name ?? null;
+  return findDuplicateOf(
+    {
+      file_name: fileName,
+      date: a.date,
+      duration_sec: a.duration_sec ?? null,
+      distance_km: a.distance_km ?? null,
+    },
+    rows,
+  );
 }
 
 /**
@@ -96,5 +100,6 @@ export async function importFitBytes(bytes: Uint8Array, fileName: string): Promi
 
   // §7.2 触发点：入库成功后静默滚一份本地快照（fire-and-forget 串行链，失败仅警告）
   void rollLocalSnapshotQuietly();
+  invalidateReportTitles(safe); // 同名重导入可能换了内容 → 起骑时刻缓存失效
   return { summary, duplicateOf: null };
 }
