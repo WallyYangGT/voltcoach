@@ -24,7 +24,8 @@ import {
   collectDeveloperFields,
   recordsToCsv,
 } from '../src/core/analyze.ts';
-import { parseRecordsCsv, thinRecords, safeName } from '../src/core/records.ts';
+import { gzip } from 'pako';
+import { parseRecordsCsv, thinRecords, safeName, firstTimestampFromCsvHead, firstRecordTimestampFromGz } from '../src/core/records.ts';
 import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '../src/core/form.ts';
 import { formNote, formatAnomaly } from '../src/core/i18n.ts';
 import { estimateFtpFromHistory } from '../src/core/ftp.ts';
@@ -335,6 +336,32 @@ test('safeName: 只取 basename，路径穿越拒绝', () => {
   assert.equal(safeName('dir\\a.fit'), null); // 含分隔符（Windows 反斜杠）拒绝
   assert.equal(safeName(''), null);
   assert.equal(safeName(null), null);
+});
+
+test('firstTimestampFromCsvHead: 取表头后首行的时间戳，形状不完整返回 null', () => {
+  const header = 'timestamp,power,heart_rate,cadence,altitude,speed,distance_m,temperature';
+  assert.equal(
+    firstTimestampFromCsvHead(`${header}\n2026-09-20T00:15:30.000Z,200,140,90,100,10.5,100,25\n`),
+    '2026-09-20T00:15:30.000Z',
+  );
+  // 末行缺换行（文件未以 \n 收尾）仍可取
+  assert.equal(firstTimestampFromCsvHead(`${header}\n2026-09-20T00:15:30.000Z,,,,,,,`), '2026-09-20T00:15:30.000Z');
+  assert.equal(firstTimestampFromCsvHead(header), null); // 只有表头
+  assert.equal(firstTimestampFromCsvHead(`${header}\n2026-09-20T00:1`), null); // 截断的半行
+  assert.equal(firstTimestampFromCsvHead(`${header}\n,200,140`), null); // 空时间戳
+  assert.equal(firstTimestampFromCsvHead(''), null);
+});
+
+test('firstRecordTimestampFromGz: gzip 往返取首帧时间戳，坏数据返回 null', () => {
+  const records = [rec(0, { power: 200 }), rec(1, { power: 201 })];
+  const gzipped = (text) => gzip(new TextEncoder().encode(text));
+  assert.equal(firstRecordTimestampFromGz(gzipped(recordsToCsv(records))), records[0].timestamp);
+  // 长记录（万行）同路径：只扫头部两行，结果不受篇幅影响
+  const longCsv = recordsToCsv(Array.from({ length: 10000 }, (_, i) => rec(i, { power: i })));
+  assert.equal(firstRecordTimestampFromGz(gzipped(longCsv)), records[0].timestamp);
+  assert.equal(firstRecordTimestampFromGz(new Uint8Array(0)), null); // 空文件
+  assert.equal(firstRecordTimestampFromGz(new Uint8Array([1, 2, 3, 4])), null); // 非 gzip 字节
+  assert.equal(firstRecordTimestampFromGz(gzipped('not a records csv')), null); // 非 records CSV
 });
 
 // ---------------- 本仓库新增：form 递推（CTL/ATL/TSB） ----------------

@@ -5,8 +5,11 @@
  * 「CSV 解析」与「时间窗截取 + 抽稀」两个纯函数——文件 IO（gzip 落盘/读取）由
  * src/records-store.ts 负责，抽稀口径（≤1400 点、先截取后抽稀）与旧版一致，
  * 详情页图表与 AI 工具（M3 get_activity_records）共用。
+ * M5 追加首帧时间戳读取（firstRecordTimestampFromGz）：AI 报告标题要显示起骑时刻，
+ * 解压后只扫头部两行，不解析整篇逐秒记录。
  */
 
+import { ungzip } from 'pako';
 import type { SecRecord } from './analyze.ts';
 
 /** 抽稀后的时序点（图表/AI 工具的消费格式，与旧版 /api/records 输出字段一致） */
@@ -104,4 +107,34 @@ export function safeName(name: unknown): string | null {
   if (!name || typeof name !== 'string') return null;
   const base = name.split(/[\\/]/).pop() ?? name;
   return base === name && !base.includes('..') && base.length > 0 ? base : null;
+}
+
+// ---------------- 首帧时间戳（起骑时刻，M5：AI 报告标题用） ----------------
+
+/**
+ * 从 records CSV 文本取首条数据行的时间戳（ISO UTC）。
+ * 只扫到第二个换行为止（不 split 整篇——万行 CSV 没必要为一行付分配的代价）；
+ * 表头之后没有完整数据行（空文件/被截断）返回 null。
+ */
+export function firstTimestampFromCsvHead(text: string): string | null {
+  if (!text) return null;
+  const headEnd = text.indexOf('\n');
+  if (headEnd < 0) return null;
+  const lineEnd = text.indexOf('\n', headEnd + 1);
+  const first = text.slice(headEnd + 1, lineEnd < 0 ? undefined : lineEnd).split(',')[0]?.trim() ?? '';
+  // 末行可能缺换行（文件未以 \n 收尾），因此不要求有第二个换行；但时间戳必须形状完整
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(first) ? first : null;
+}
+
+/**
+ * 从 records gzip 字节取首帧时间戳（ISO UTC）；无逐秒记录或数据损坏返回 null。
+ * 解压失败与解析失败同口径（null）——调用方（AI 报告标题）缺这一项时退回只显示日期。
+ */
+export function firstRecordTimestampFromGz(gz: Uint8Array): string | null {
+  if (!gz.length) return null;
+  try {
+    return firstTimestampFromCsvHead(ungzip(gz, { toText: true }));
+  } catch {
+    return null;
+  }
 }
