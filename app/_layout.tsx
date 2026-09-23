@@ -1,11 +1,15 @@
 /**
- * 根布局：i18n Provider → Paper 主题 → ShareIntentProvider（分享面板接收）→ 根 Stack
+ * 根布局：GestureHandlerRootView → i18n Provider → Paper 主题 → ShareIntentProvider
+ * （分享面板接收）→ 根 Stack
  * M1：训练详情（activity/[id]）与 FIT 导入（import 全屏模态）；
  * 分享面板的 ACTION_SEND 文件流由 expo-share-intent 捕获（RN Linking 只覆盖
  * VIEW/data URI，拿不到 EXTRA_STREAM），入队 shareQueue 后跳导入页消费。
+ * M5：最外层包 GestureHandlerRootView——训练列表的左滑删除（ReanimatedSwipeable）
+ * 依赖它，缺了手势会静默失效（库只打一行警告，不报错）。
  */
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppState, type AppStateStatus } from 'react-native';
@@ -18,18 +22,20 @@ import { md3Dark, palette } from '@/theme';
 
 export default function RootLayout() {
   return (
-    <I18nProvider>
-      <PaperProvider theme={md3Dark}>
-        <SafeAreaProvider>
-          <ShareIntentProvider>
-            <StatusBar style="light" />
-            <ShareIntentDispatcher />
-            <AutoSyncDispatcher />
-            <RootStack />
-          </ShareIntentProvider>
-        </SafeAreaProvider>
-      </PaperProvider>
-    </I18nProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <I18nProvider>
+        <PaperProvider theme={md3Dark}>
+          <SafeAreaProvider>
+            <ShareIntentProvider>
+              <StatusBar style="light" />
+              <ShareIntentDispatcher />
+              <AutoSyncDispatcher />
+              <RootStack />
+            </ShareIntentProvider>
+          </SafeAreaProvider>
+        </PaperProvider>
+      </I18nProvider>
+    </GestureHandlerRootView>
   );
 }
 

@@ -23,10 +23,10 @@ import { formatAnomaly } from '@/core/i18n';
 import { buildActivityMetrics, type MetricItem, type MetricText } from '@/core/metrics';
 import { thinRecords } from '@/core/records';
 import { HR_ZONES, POWER_ZONES, type Zone } from '@/core/settings';
-import { CATEGORY_KEYS, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
+import { CATEGORY_KEYS, deleteActivity, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import { MetricGrid } from '@/components/MetricGrid';
-import { loadStoredRecords } from '@/records-store';
+import { deleteStoredRecord, loadStoredRecords } from '@/records-store';
 import { palette } from '@/theme';
 
 /** 分区定义 × 基准值（FTP/最大心率）→ 各区范围文本（口径同 server.js zoneRanges） */
@@ -105,6 +105,28 @@ export default function ActivityDetailScreen() {
   const flashSaved = () => {
     setSavedFlash(true);
     setTimeout(() => setSavedFlash(false), 2000);
+  };
+
+  /** 删除本训练（含逐秒数据）；AI 报告保留，删完返回列表 */
+  const confirmDelete = () => {
+    Alert.alert(t('activities.deleteTitle'), t('activities.deleteMsg'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      {
+        text: t('common.delete'),
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            try {
+              await deleteActivity(fileName);
+              deleteStoredRecord(fileName);
+              router.back();
+            } catch (e) {
+              Alert.alert(t('data.err.generic'), e instanceof Error ? e.message : String(e));
+            }
+          })();
+        },
+      },
+    ]);
   };
 
   const changeCategory = async (cat: string) => {
@@ -186,6 +208,13 @@ export default function ActivityDetailScreen() {
           color={palette.volt}
           accessibilityLabel={t('btn.ai_review')}
           onPress={() => panelRef.current?.analyze()}
+        />
+        {/* 删除训练（M5）：与列表左滑删除同一口径，删完返回列表（useFocusEffect 自动重载） */}
+        <Appbar.Action
+          icon="delete-outline"
+          color={palette.muted}
+          accessibilityLabel={t('common.delete')}
+          onPress={confirmDelete}
         />
       </Appbar.Header>
       <ScrollView ref={scrollRef} contentContainerStyle={styles.body}>
