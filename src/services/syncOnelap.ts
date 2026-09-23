@@ -4,7 +4,8 @@
  * 流程：读 SecureStore 账号 → 取会话（缓存的 token 优先，无缓存或失效才用密码登录）
  * → 云端列表（窗口化增量：`syncWindowStart` = 上次同步时间前移 24h 与「最近 90 天」
  * 取较晚者，首次同步 90 天窗口）→ 逐活动查 fileKey 算文件名，本地已有的跳过
- * （upsert 幂等去重口径的下载省略版）→ 未知活动下载 FIT 字节走 importFitBytes 入库
+ * （按文件名的幂等去重：下载前的省流量预检）→ 未知活动下载 FIT 字节走 importFitBytes
+ * 入库（其内部再按内容指纹判一次「异名同趟骑行」，命中计 duplicates）
  * → 回写水位线与结果到 settings.sync。活动之间随机间隔（`jitterDelayMs`）摊平请求突发。
  *
  * 会话策略（2026-09-23 由「每次全新登录」改为令牌缓存）：token/uid 存 SecureStore
@@ -130,12 +131,15 @@ export async function clearCachedSession(): Promise<void> {
   }
 }
 
-/** 单轮同步结果（UI 展示 imported/skipped/failed 三计数；error 按稳定码映射 i18n） */
+/** 单轮同步结果（UI 展示 imported/skipped/duplicates/failed 四计数；error 按稳定码映射 i18n） */
 export type SyncErrorCode = 'no_account' | 'auth' | 'other';
 
 export interface SyncOutcome {
   imported: number;
+  /** 文件名命中（云端 fileKey 算出的文件名本地已有）——下载前即跳过，省流量 */
   skipped: number;
+  /** 内容指纹命中（文件名不同但库里已有同一趟骑行，多为先前手动导入过的）——下载解析后跳过 */
+  duplicates: number;
   failed: number;
   /** null = 正常跑完；code 供 UI 双语化，message 为原始技术信息（存库并透出） */
   error: { code: SyncErrorCode; message: string } | null;
@@ -172,7 +176,7 @@ export function runOnelapSync(): Promise<SyncOutcome> {
 async function runSyncOnce(): Promise<SyncOutcome> {
   const account = await getOnelapAccount();
   if (!account) {
-    return { imported: 0, skipped: 0, failed: 0, error: { ...NO_ACCOUNT }, failureFloor: null };
+    return { imported: 0, skipped: 0, duplicates: 0, failed: 0, error: { ...NO_ACCOUNT }, failureFloor: null };
   }
 
   const state = await getSyncState();
@@ -188,7 +192,14 @@ async function runSyncOnce(): Promise<SyncOutcome> {
     last_sync_at: nextSyncAt,
     last_result: err ? 'error' : 'ok',
     last_error: err?.message || null,
-    last_counts: err ? state.last_counts : { imported: outcome.imported, skipped: outcome.skipped, failed: outcome.failed },
+    last_counts: err
+      ? state.last_counts
+      : {
+          imported: outcome.imported,
+          skipped: outcome.skipped,
+          duplicates: outcome.duplicates,
+          failed: outcome.failed,
+        },
   };
   await setSyncState(next);
   return outcome;
@@ -243,7 +254,7 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
       await writeCachedSession(account.account.trim(), session);
     }
   } catch (e) {
-    return { imported: 0, skipped: 0, failed: 0, error: toError(e), failureFloor: null };
+    return { imported: 0, skipped: 0, duplicates: 0, failed: 0, error: toError(e), failureFloor: null };
   }
 
   /** 带一次自动重登的调用：仅在 auth 错误时清缓存重登重试，其余错误原样抛出 */
@@ -268,11 +279,11 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
   try {
     cloudList = await withAuthRetry((s) => client.listSince(s, since));
   } catch (e) {
-    return { imported: 0, skipped: 0, failed: 0, error: toError(e), failureFloor: null };
+    return { imported: 0, skipped: 0, duplicates: 0, failed: 0, error: toError(e), failureFloor: null };
   }
 
   const existing = new Set(await listActivityFileNames());
-  const outcome: SyncOutcome = { imported: 0, skipped: 0, failed: 0, error: null, failureFloor: null };
+  const outcome: SyncOutcome = { imported: 0, skipped: 0, duplicates: 0, failed: 0, error: null, failureFloor: null };
   for (const [i, act] of cloudList.entries()) {
     // 活动之间随机等待 300–800ms：摊平请求突发（每个活动要发 2 个请求）
     if (i > 0) await sleep(jitterDelayMs());
@@ -284,7 +295,13 @@ async function pullActivities(account: OnelapAccount, state: SyncState): Promise
         continue;
       }
       const { bytes, fileName: normalized } = await withAuthRetry((s) => client.downloadByKey(s, key, act.id));
-      await importFitBytes(bytes, normalized);
+      const { duplicateOf } = await importFitBytes(bytes, normalized);
+      if (duplicateOf) {
+        // 文件名没撞上但内容指纹撞上（多为先前手动导入过同一趟骑行）：按重复计数，
+        // 不加入 existing——它不是这个名字，下次同步仍会走到这里按指纹再判一次
+        outcome.duplicates += 1;
+        continue;
+      }
       existing.add(normalized);
       outcome.imported += 1;
     } catch (e) {

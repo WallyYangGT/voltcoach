@@ -17,7 +17,20 @@ import { createLocalSnapshot, deleteLocalSnapshot, exportBackupToCache, readLoca
 import { importBackupFile } from '@/backup/import';
 import { BackupError, checkSchemaVersion as gateVersion } from '@/backup/manifest';
 import { unpackBackup } from '@/backup/archive';
-import { SCHEMA_VERSION, getSyncState, setSyncState, type SyncState } from '@/db';
+import { findDuplicateGroups } from '@/core/dedupe';
+import { formatDuration } from '@/core/metrics';
+import { copyStoredRecord, deleteStoredRecord } from '@/records-store';
+import {
+  SCHEMA_VERSION,
+  deleteActivity,
+  getSyncState,
+  listActivityRideKeys,
+  mergeActivityExtras,
+  retargetActivityRefs,
+  setSyncState,
+  type ActivityRideKey,
+  type SyncState,
+} from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import {
   getOnelapAccount,
@@ -54,6 +67,11 @@ export default function DataScreen() {
   // —— 本地快照 ——
   const [snapshot, setSnapshot] = useState<SnapshotInfo | null>(null);
   const [snapshotting, setSnapshotting] = useState(false);
+
+  // —— 重复记录检查（M5） ——
+  const [dupGroups, setDupGroups] = useState<ActivityRideKey[][] | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [merging, setMerging] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -266,10 +284,70 @@ export default function DataScreen() {
     ]);
   };
 
+  // ---------------- 重复记录检查（M5） ----------------
+
+  /** 扫描：全表骑行键 → core/dedupe 分组，只留重复组 */
+  const scanDuplicates = async () => {
+    setScanning(true);
+    try {
+      const rows = await listActivityRideKeys();
+      const groups = findDuplicateGroups(rows).sort((a, b) => (a[0].date < b[0].date ? 1 : -1));
+      setDupGroups(groups);
+      if (!groups.length) Alert.alert(t('data.dupe.title'), t('data.dupe.none'));
+    } catch (e) {
+      Alert.alert(t('data.err.generic'), describeError(e));
+    } finally {
+      setScanning(false);
+    }
+  };
+
+  const confirmMerge = () => {
+    if (!dupGroups?.length) return;
+    const extra = dupGroups.reduce((n, g) => n + g.length - 1, 0);
+    Alert.alert(
+      t('data.dupe.confirmTitle'),
+      t('data.dupe.confirmMsg', { extra }),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        { text: t('data.dupe.merge'), style: 'destructive', onPress: () => void mergeDuplicates(extra) },
+      ],
+    );
+  };
+
+  /**
+   * 合并：每组保留最早入库的一条（listActivityRideKeys 按 id 升序，g[0] 即保留项），
+   * 副本的用户数据与 AI 引用先迁到保留项，再删行 + 删逐秒数据。
+   * 不滚本地快照——保留删除前的快照才有误删可恢复性（与导入后滚快照的口径相反）。
+   */
+  const mergeDuplicates = async (extra: number) => {
+    setMerging(true);
+    let groups = 0;
+    try {
+      for (const g of dupGroups ?? []) {
+        const keep = g[0];
+        for (const drop of g.slice(1)) {
+          await mergeActivityExtras(keep.file_name, drop.file_name);
+          await retargetActivityRefs(drop.file_name, keep.file_name);
+          await copyStoredRecord(drop.file_name, keep.file_name); // 保留项缺逐秒数据时接管
+          await deleteActivity(drop.file_name);
+          deleteStoredRecord(drop.file_name);
+        }
+        groups += 1;
+      }
+      setDupGroups(null);
+      Alert.alert(t('data.dupe.title'), t('data.dupe.done', { groups, extra }));
+    } catch (e) {
+      Alert.alert(t('data.dupe.failed'), describeError(e));
+      void scanDuplicates(); // 部分成功时刷新现状，避免界面停留在过期分组
+    } finally {
+      setMerging(false);
+      load();
+    }
+  };
+
   const snapshotLine = snapshot
     ? `${snapshot.exported_at.slice(0, 16).replace('T', ' ')} · ${snapshot.counts.activities} · ${snapshot.counts.records}`
-    : t('data.snapshot.none');
-  const lastSyncLine = syncState?.last_sync_at
+    : t('data.snapshot.none');  const lastSyncLine = syncState?.last_sync_at
     ? `${syncState.last_sync_at.slice(0, 16).replace('T', ' ')} · ${
         syncState.last_result === 'ok' ? '✓' : `✗ ${syncState.last_error ?? ''}`
       }`
@@ -359,7 +437,14 @@ export default function DataScreen() {
           </View>
           {lastOutcome && !lastOutcome.error && (
             <Text style={styles.note}>
-              {[t('data.sync.imported', { n: lastOutcome.imported }), t('data.sync.skipped', { n: lastOutcome.skipped }), t('data.sync.failed', { n: lastOutcome.failed })].join(' · ')}
+              {[
+                t('data.sync.imported', { n: lastOutcome.imported }),
+                t('data.sync.skipped', { n: lastOutcome.skipped }),
+                ...(lastOutcome.duplicates > 0
+                  ? [t('data.sync.duplicates', { n: lastOutcome.duplicates })]
+                  : []),
+                t('data.sync.failed', { n: lastOutcome.failed }),
+              ].join(' · ')}
             </Text>
           )}
         </View>
@@ -422,6 +507,46 @@ export default function DataScreen() {
             )}
           </View>
         </View>
+
+        {/* 重复记录检查（M5）：手动导入 × 云同步同一趟骑行会因文件名不同而两条 */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>{t('data.dupe.title')}</Text>
+          <Text style={styles.note}>{t('data.dupe.desc')}</Text>
+          {dupGroups != null && (
+            <Text style={dupGroups.length ? styles.warn : styles.note}>
+              {dupGroups.length
+                ? t('data.dupe.found', {
+                    groups: dupGroups.length,
+                    extra: dupGroups.reduce((n, g) => n + g.length - 1, 0),
+                  })
+                : t('data.dupe.none')}
+            </Text>
+          )}
+          {/* 逐组列出重复项：让用户在合并前看清保留谁、删谁 */}
+          {dupGroups?.map((g) => (
+            <View key={g[0].file_name} style={styles.dupGroup}>
+              <Text style={styles.dupGroupHead}>
+                {g[0].date} · {formatDuration(g[0].duration_sec)} ·{' '}
+                {g[0].distance_km != null ? `${g[0].distance_km.toFixed(2)} km` : '—'}
+              </Text>
+              {g.map((r, i) => (
+                <Text key={r.file_name} style={i === 0 ? styles.dupKeep : styles.dupDrop} numberOfLines={1}>
+                  {i === 0 ? `✓ ${t('data.dupe.keep')}` : `✗ ${t('common.delete')}`} · {r.file_name}
+                </Text>
+              ))}
+            </View>
+          ))}
+          <View style={styles.row}>
+            <Button mode="outlined" compact onPress={scanDuplicates} disabled={scanning || merging} loading={scanning}>
+              {scanning ? t('data.dupe.scanning') : t('data.dupe.scan')}
+            </Button>
+            {dupGroups != null && dupGroups.length > 0 && (
+              <Button mode="contained" compact buttonColor={palette.red} textColor={palette.text} onPress={confirmMerge} disabled={merging} loading={merging}>
+                {t('data.dupe.merge')}
+              </Button>
+            )}
+          </View>
+        </View>
       </ScrollView>
     </View>
   );
@@ -449,4 +574,8 @@ const styles = StyleSheet.create({
   rowLabel: { color: palette.text, fontSize: 13 },
   rowValue: { color: palette.muted, fontSize: 12, flexShrink: 1, textAlign: 'right' },
   divider: { backgroundColor: palette.lineSoft },
+  dupGroup: { backgroundColor: palette.panel2, borderRadius: 8, padding: 10, gap: 4 },
+  dupGroupHead: { color: palette.text, fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  dupKeep: { color: palette.green, fontSize: 11 },
+  dupDrop: { color: palette.muted, fontSize: 11 },
 });

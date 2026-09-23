@@ -2,6 +2,7 @@
  * FIT 导入页（M1）：FAB 触发的全屏模态。
  * 流程：DocumentPicker 多选 .fit → 逐文件 importFitSource（解析+入库+records 落盘）
  * → 结果列表（成功项可跳详情）。支持带 uri 参数进入（安卓分享面板接收，M1）。
+ * M5：与库内已有记录同趟骑行（内容指纹命中）的文件标为橙条「已跳过」，不计入成功。
  */
 import * as DocumentPicker from 'expo-document-picker';
 import { useRouter } from 'expo-router';
@@ -39,8 +40,12 @@ export default function ImportScreen() {
       setProgress(i / sources.length);
       const { uri, fileName } = sources[i];
       try {
-        const summary = await importFitSource(uri, fileName);
-        results.push({ fileName, ok: true, summary });
+        const { summary, duplicateOf } = await importFitSource(uri, fileName);
+        results.push(
+          duplicateOf
+            ? { fileName, ok: true, summary, duplicateOf }
+            : { fileName, ok: true, summary },
+        );
       } catch (e) {
         results.push({
           fileName,
@@ -81,7 +86,8 @@ export default function ImportScreen() {
     if (shared) queueMicrotask(() => runImport([shared]));
   }, []);
 
-  const okCount = outcomes.filter((o) => o.ok).length;
+  const okCount = outcomes.filter((o) => o.ok && !o.duplicateOf).length;
+  const dupCount = outcomes.filter((o) => o.duplicateOf).length;
 
   return (
     <View style={styles.page}>
@@ -116,7 +122,10 @@ export default function ImportScreen() {
 
         {!running && outcomes.length > 0 && (
           <Text style={styles.doneLine}>
-            {t('import.done', { ok: okCount, fail: outcomes.length - okCount })}
+            {t('import.done', { ok: okCount, fail: outcomes.length - okCount - dupCount })}
+            {dupCount > 0 && (
+              <Text style={styles.doneDup}>{` · ${t('import.done_dup', { dup: dupCount })}`}</Text>
+            )}
           </Text>
         )}
 
@@ -124,7 +133,7 @@ export default function ImportScreen() {
           {outcomes.map((o, i) => (
             <Pressable
               key={`${o.fileName}-${i}`}
-              disabled={!o.ok}
+              disabled={!o.ok || !!o.duplicateOf}
               onPress={() =>
                 router.replace({
                   pathname: '/activity/[id]',
@@ -133,13 +142,18 @@ export default function ImportScreen() {
               }
               style={({ pressed }) => [
                 styles.item,
-                o.ok ? styles.itemOk : styles.itemFail,
+                o.duplicateOf ? styles.itemDup : o.ok ? styles.itemOk : styles.itemFail,
                 pressed && { opacity: 0.7 },
               ]}>
               <Text style={styles.itemName} numberOfLines={1}>
                 {o.fileName || '—'}
               </Text>
-              {o.ok ? (
+              {o.duplicateOf ? (
+                // 内容指纹命中：同一趟骑行已在库里（文件名不同），未重复入库
+                <Text style={styles.itemDupText} numberOfLines={2}>
+                  {t('import.item_dup', { name: o.duplicateOf })}
+                </Text>
+              ) : o.ok ? (
                 <Text style={styles.itemMeta}>
                   {t('import.item_ok', {
                     np: o.summary?.power?.normalized_power ?? '—',
@@ -179,7 +193,10 @@ const styles = StyleSheet.create({
   },
   itemOk: { borderLeftColor: palette.green, borderLeftWidth: 3 },
   itemFail: { borderLeftColor: palette.red, borderLeftWidth: 3 },
+  itemDup: { borderLeftColor: palette.orange, borderLeftWidth: 3 },
   itemName: { color: palette.text, fontSize: 13, fontWeight: '600' },
   itemMeta: { color: palette.muted, fontSize: 12, fontVariant: ['tabular-nums'] },
   itemError: { color: palette.red, fontSize: 12 },
+  itemDupText: { color: palette.orange, fontSize: 12 },
+  doneDup: { color: palette.orange },
 });
