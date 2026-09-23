@@ -7,13 +7,14 @@
  * 逐字一致，解压后即旧版格式），压缩/解压用 pako（纯 JS，Hermes 可跑）。
  *
  * 文件布局：documentDirectory/records/<base>.records.csv.gz
+ * M5 追加单条删除/接管/首帧时间读取（删除训练与合并重复、AI 报告标题用）。
  */
 
 import { Directory, File, Paths } from 'expo-file-system';
 // pako 3 只有命名导出（无 default export），default 导入在 Metro 下为 undefined
 import { gzip, ungzip } from 'pako';
 import { recordsToCsv, type SecRecord } from '@/core/analyze';
-import { parseRecordsCsv, safeName } from '@/core/records';
+import { firstRecordTimestampFromGz, parseRecordsCsv, safeName } from '@/core/records';
 
 /** records 存放目录（注意：目录用 Directory.create()——File.create() 建的是文件） */
 function recordsDir(): Directory {
@@ -85,4 +86,45 @@ export async function writeStoredRecordGz(base: string, gz: Uint8Array): Promise
 export function clearStoredRecords(): void {
   const dir = recordsDir();
   if (dir.exists) dir.delete();
+}
+
+// ---------------- 单条删除/接管（M5：删除训练与合并重复） ----------------
+
+/** 该训练是否有落盘的逐秒数据（合并重复时判断保留项是否缺数据） */
+export function hasStoredRecord(fileName: string): boolean {
+  const file = recordsFile(fileName);
+  return !!file && file.exists;
+}
+
+/** 删除单条训练的逐秒数据（不存在幂等，不抛错）；文件名非法直接返回 */
+export function deleteStoredRecord(fileName: string): void {
+  const file = recordsFile(fileName);
+  if (file && file.exists) file.delete();
+}
+
+/**
+ * 把 to 的逐秒数据接管自 from（合并重复：保留项没有 records、副本有时用）。
+ * 返回是否真的复制了；to 已有数据时不覆盖。
+ */
+export async function copyStoredRecord(fromFileName: string, toFileName: string): Promise<boolean> {
+  if (hasStoredRecord(toFileName)) return false;
+  const src = recordsFile(fromFileName);
+  const dst = recordsFile(toFileName);
+  if (!src || !dst || !src.exists) return false;
+  const dir = recordsDir();
+  if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
+  dst.write(await src.bytes());
+  return true;
+}
+
+/** 读取首帧时间戳（起骑时刻，ISO UTC；AI 报告标题用）；无文件/数据异常返回 null */
+export async function readStoredRecordStart(fileName: string): Promise<string | null> {
+  const file = recordsFile(fileName);
+  if (!file || !file.exists) return null;
+  try {
+    return firstRecordTimestampFromGz(await file.bytes());
+  } catch (e) {
+    console.warn(`records 首帧时间读取失败: ${fileName}:`, e);
+    return null;
+  }
 }

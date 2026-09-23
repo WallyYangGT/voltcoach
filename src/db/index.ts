@@ -441,6 +441,104 @@ export async function setActivityNote(fileName: string, note: string, lang: Lang
   if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
 }
 
+// ---------------- 训练记录的去重 / 删除（M5） ----------------
+
+/**
+ * 全表骑行键（含用户数据列）：三处共用——导入查重（core/dedupe 判定）、
+ * 数据管理页的重复检查、AI 报告标题取骑行信息。表规模为个人训练量（数百行），
+ * 一次全量取回后在内存里比对，比在 SQL 里表达带容差的指纹简洁得多。
+ */
+export interface ActivityRideKey {
+  id: number;
+  file_name: string;
+  date: string;
+  sport: string;
+  duration_sec: number | null;
+  distance_km: number | null;
+  category: string;
+  note: string | null;
+}
+
+/** 全部训练的骑行键（按 id 升序 = 入库先后，合并重复时以最先入库者为保留项） */
+export async function listActivityRideKeys(): Promise<ActivityRideKey[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    id: number;
+    file_name: string;
+    date: string;
+    sport: string | null;
+    duration_sec: number | null;
+    distance_km: number | null;
+    category: string | null;
+    note: string | null;
+  }>(
+    `SELECT id, file_name, date, sport, duration_sec, distance_km, category, note
+     FROM activities ORDER BY id ASC`,
+  );
+  return rows.map((r) => ({
+    id: r.id,
+    file_name: r.file_name,
+    date: r.date,
+    sport: r.sport ?? 'unknown',
+    duration_sec: r.duration_sec,
+    distance_km: r.distance_km,
+    category: r.category ?? 'training',
+    note: r.note,
+  }));
+}
+
+/**
+ * 删除单条训练（行 + 分类/备注随之消失），返回删除条数（0 = 不存在）。
+ * 逐秒 records 文件与 AI 引用不在本层处理——前者由 records-store 删，后者按
+ * 「报告保留」口径原样留着（引用指向已删训练时标题会退化为「训练已删除」）。
+ */
+export async function deleteActivity(fileName: string): Promise<number> {
+  const db = await getDb();
+  const info = await db.runAsync(`DELETE FROM activities WHERE file_name = ?`, fileName);
+  return info.changes;
+}
+
+/**
+ * 合并重复记录时把 AI 引用改指保留项（报告与追问对话的 file_name 是无外键的松散
+ * 引用）：不迁移的话，删掉副本会让原本挂在副本名下的报告变成"孤儿"。
+ * 返回改动的报告数（对话引用一并改）。
+ */
+export async function retargetActivityRefs(fromFileName: string, toFileName: string): Promise<number> {
+  const db = await getDb();
+  const reports = await db.runAsync(
+    `UPDATE ai_reports SET file_name = ? WHERE file_name = ?`,
+    toFileName,
+    fromFileName,
+  );
+  await db.runAsync(`UPDATE ai_chats SET file_name = ? WHERE file_name = ?`, toFileName, fromFileName);
+  return reports.changes;
+}
+
+/**
+ * 合并重复前把副本上的用户数据补给保留项：仅在保留项仍为默认值时才接管
+ * （分类仍为 training、备注为空），不覆盖用户已经设过的值。
+ */
+export async function mergeActivityExtras(keepFileName: string, dropFileName: string): Promise<void> {
+  const db = await getDb();
+  const drop = await db.getFirstAsync<{ category: string | null; note: string | null }>(
+    `SELECT category, note FROM activities WHERE file_name = ?`,
+    dropFileName,
+  );
+  if (!drop) return;
+  await db.runAsync(
+    `UPDATE activities SET
+       category = CASE WHEN ? <> 'training' AND category = 'training' THEN ? ELSE category END,
+       note     = CASE WHEN ? IS NOT NULL AND (note IS NULL OR note = '') THEN ? ELSE note END
+     WHERE file_name = ?`,
+    drop.category ?? 'training',
+    drop.category ?? 'training',
+    drop.note,
+    drop.note,
+    keepFileName,
+  );
+}
+
+
 // ---------------- CTL/ATL/TSB（递推在 core/form，本层查询注入） ----------------
 
 /** [起始, endDate] 范围内逐日 TSS（按天聚合，缺天补 0）→ 连续逐日序列 */
@@ -558,7 +656,11 @@ export interface SyncState {
   last_sync_at: string | null;
   last_result: 'ok' | 'error' | null;
   last_error: string | null;
-  last_counts: { imported: number; skipped: number; failed: number } | null;
+  /**
+   * 最近一轮计数。duplicates 为 M5 新增（内容指纹命中：库里已有同一趟骑行但文件名
+   * 不同）——旧版本写的状态行没有该字段，故可选，读侧按 `?? 0` 兜底。
+   */
+  last_counts: { imported: number; skipped: number; failed: number; duplicates?: number } | null;
 }
 
 export const DEFAULT_SYNC_STATE: SyncState = {
