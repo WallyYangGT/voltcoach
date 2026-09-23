@@ -26,6 +26,7 @@ import {
   runChatGeneration,
   submitChatMessage,
 } from '@/services/aiGenerate';
+import { useReportTitle } from '@/services/aiTitle';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -94,11 +95,11 @@ export default function AiSessionScreen() {
   );
 
   const report = ai.report;
+  // 报告标题（M5）：装配完成前回退到模式名（「复盘」），避免闪一下空标题
+  const reportTitleText = useReportTitle(kind === 'report' ? report : null);
   const title =
     kind === 'report'
-      ? report
-        ? t(`ai.mode.${report.mode}` as never)
-        : t('ai.title')
+      ? reportTitleText || (report ? t(`ai.mode.${report.mode}` as never) : t('ai.title'))
       : t('session.chatTitle');
 
   /** 重试追问/对话消息：以同一条消息重跑生成（运行中注册表防双跑） */

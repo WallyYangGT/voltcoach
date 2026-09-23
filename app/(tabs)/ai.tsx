@@ -20,6 +20,7 @@ import { Button, Chip, Icon, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getAiConfig, listActivities, listAiChats, listAiReports, deleteAiChat, type AiChatListItem, type AiReportListItem, type AiReportMode } from '@/db';
 import { buildReportPrompt, createReportDraft, generateReport } from '@/services/aiGenerate';
+import { buildReportTitles } from '@/services/aiTitle';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -61,11 +62,18 @@ export default function AiCenterScreen() {
         getAiConfig(),
       ]);
       setConfigured(cfg.configured);
-      setEntries(mergeEntries(reports, chats));
+      // 标题在渲染侧装配（M5）：review/compare 要查活动与 records 首帧，故先批量取
+      const titles = await buildReportTitles(
+        reports,
+        lang,
+        t,
+        (sport) => t(`sport.${sport}` as never),
+      );
+      setEntries(mergeEntries(reports, chats, titles));
     } catch (e) {
       console.warn('会话中心加载失败:', e);
     }
-  }, []);
+  }, [t, lang]);
 
   useFocusEffect(
     useCallback(() => {
@@ -408,7 +416,11 @@ function ActivityPicker({
 }
 
 /** 报告 + 对话合并为统一列表（时间倒序；报告时间取 created_at、对话取 updated_at） */
-function mergeEntries(reports: AiReportListItem[], chats: AiChatListItem[]): CenterEntry[] {
+function mergeEntries(
+  reports: AiReportListItem[],
+  chats: AiChatListItem[],
+  titles: Map<number, string>,
+): CenterEntry[] {
   const ms = (s: string) => Date.parse(s.replace(' ', 'T') + 'Z') || 0;
   const entries: CenterEntry[] = [];
   for (const r of reports) {
@@ -417,7 +429,7 @@ function mergeEntries(reports: AiReportListItem[], chats: AiChatListItem[]): Cen
       id: r.id,
       mode: r.mode,
       status: r.status,
-      title: reportTitle(r),
+      title: titles.get(r.id) ?? '',
       time: fmtTime(r.created_at),
       sortMs: ms(r.created_at),
     });
@@ -433,13 +445,6 @@ function mergeEntries(reports: AiReportListItem[], chats: AiChatListItem[]): Cen
     });
   }
   return entries.sort((a, b) => b.sortMs - a.sortMs);
-}
-
-/** 报告卡标题：review 用文件名 / taper 用比赛日期 / compare 用 A vs B / plan 用模式名 */
-function reportTitle(r: AiReportListItem): string {
-  if (r.mode === 'taper') return r.race_date ?? '';
-  if (r.mode === 'compare') return `${r.file_name ?? ''} vs ${r.compare_with ?? ''}`;
-  return r.file_name ?? '';
 }
 
 /** sqlite UTC 时间（YYYY-MM-DD HH:MM:SS）→ 本地 MM-DD HH:mm */
