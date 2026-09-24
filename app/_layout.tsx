@@ -10,6 +10,7 @@
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { PaperProvider } from 'react-native-paper';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AppState, type AppStateStatus } from 'react-native';
@@ -26,12 +27,16 @@ export default function RootLayout() {
       <I18nProvider>
         <PaperProvider theme={md3Dark}>
           <SafeAreaProvider>
-            <ShareIntentProvider>
-              <StatusBar style="light" />
-              <ShareIntentDispatcher />
-              <AutoSyncDispatcher />
-              <RootStack />
-            </ShareIntentProvider>
+            {/* edge-to-edge 下系统 adjustResize 不再缩放窗口（键盘直接盖住内容），
+                键盘 insets 统一交给 react-native-keyboard-controller 接管（M5） */}
+            <KeyboardProvider>
+              <ShareIntentProvider>
+                <StatusBar style="light" />
+                <ShareIntentDispatcher />
+                <AutoSyncDispatcher />
+                <RootStack />
+              </ShareIntentProvider>
+            </KeyboardProvider>
           </SafeAreaProvider>
         </PaperProvider>
       </I18nProvider>

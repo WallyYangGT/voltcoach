@@ -12,8 +12,9 @@
  * 报告状态机与三态正文抽到 useAiReport / AiReportBody（与训练详情页 AI 面板共用）。
  */
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, ScrollView, Share, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller';
 import { Appbar } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AiReportBody } from '@/components/AiReportBody';
@@ -44,6 +45,11 @@ export default function AiSessionScreen() {
   const isNewChat = raw === 'chat-new';
 
   const [sending, setSending] = useState(false);
+
+  // 键盘浮起（M5）：edge-to-edge 下系统 adjustResize 失效，由 KeyboardProvider +
+  // KeyboardAvoidingView 接管——输入行跟随键盘上移，用户能看到正在输入的内容
+  const scrollRef = useRef<ScrollView>(null);
+  const kbVisible = useKeyboardState((s) => s.isVisible);
 
   // 报告分支：状态机与三态正文由共用 hook 提供（含"重试中继续轮询"的修正）
   const ai = useAiReport(kind === 'report' ? entityId : null, lang);
@@ -79,6 +85,23 @@ export default function AiSessionScreen() {
 
   // 报告页的追问线程与对话页的消息流统一成一个变量（重试逻辑随之共用）
   const chat = kind === 'report' ? ai.chat : chatRow;
+  const chatMessages = chat?.messages ?? [];
+
+  // 新消息到达（含自己发送的）→ 滚到底：键盘浮起后可视区变矮，最新气泡容易落在折叠线下
+  const lastMsgCountRef = useRef(0);
+  useEffect(() => {
+    if (chatMessages.length > lastMsgCountRef.current) {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }
+    lastMsgCountRef.current = chatMessages.length;
+  }, [chatMessages.length]);
+
+  // 键盘弹出 → 滚到底：等 KeyboardAvoidingView 的 padding 动画落位后再滚
+  useEffect(() => {
+    if (!kbVisible) return;
+    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 260);
+    return () => clearTimeout(timer);
+  }, [kbVisible]);
 
   // 对话 pending 轮询（报告页轮询在 useAiReport 内）。
   // chatRunning：失败气泡点重试时库状态仍是 failed、只有进程内有任务——不轮询就永远停在失败态
@@ -172,10 +195,8 @@ export default function AiSessionScreen() {
     }
   };
 
-  const chatMessages = chat?.messages ?? [];
-
   return (
-    <View style={styles.page}>
+    <KeyboardAvoidingView style={styles.page} behavior="padding">
       <Appbar.Header style={styles.header} statusBarHeight={insets.top}>
         <Appbar.BackAction onPress={() => router.back()} />
         <Appbar.Content title={title} titleStyle={styles.headerTitle} />
@@ -216,16 +237,17 @@ export default function AiSessionScreen() {
         )}
       </ScrollView>
 
-      {/* 输入行：report 页仅 completed 后开放追问；chat 页常开 */}
+      {/* 输入行：report 页仅 completed 后开放追问；chat 页常开。
+          键盘可见时 KeyboardAvoidingView 已垫起整个页面，再保留 insets.bottom 会双重垫高 */}
       {(kind === 'chat' || report?.status === 'completed') && (
         <AskInput
           placeholder={kind === 'report' ? t('session.followUp.hint') : t('session.chat.hint')}
           sending={sending}
           onSend={send}
-          style={[styles.inputRow, { paddingBottom: insets.bottom + 10 }]}
+          style={[styles.inputRow, { paddingBottom: (kbVisible ? 0 : insets.bottom) + 10 }]}
         />
       )}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
