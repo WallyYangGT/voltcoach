@@ -987,6 +987,19 @@ function toAiReportRow(row: AiReportListItem & { prompt: string; markdown: strin
   };
 }
 
+/**
+ * 待恢复的报告占位（status=pending 的 id + created_at）。只读轻查询，供根布局
+ * 回前台/冷启动时的自动续跑扫描用（进程内是否已在跑由编排层注册表判断）。
+ */
+export async function listPendingAiReportRefs(): Promise<
+  { id: number; created_at: string }[]
+> {
+  const db = await getDb();
+  return db.getAllAsync<{ id: number; created_at: string }>(
+    `SELECT id, created_at FROM ai_reports WHERE status = 'pending' ORDER BY id`,
+  );
+}
+
 // ---------------- AI 对话（ai_chats / ai_chat_messages，追问与直接对话统一，M3） ----------------
 
 export type AiChatMode = 'follow_up' | 'chat';
@@ -1104,6 +1117,20 @@ export async function updateAiChatMessage(
 export async function touchAiChat(chatId: number): Promise<void> {
   const db = await getDb();
   await db.runAsync(`UPDATE ai_chats SET updated_at = datetime('now') WHERE id = ?`, chatId);
+}
+
+/**
+ * 待恢复的对话占位消息（status=pending 的 chat_id/message_id + created_at）。
+ * 只读轻查询，供根布局回前台/冷启动时的自动续跑扫描用（同 listPendingAiReportRefs）。
+ */
+export async function listPendingChatMessageRefs(): Promise<
+  { chat_id: number; message_id: number; created_at: string }[]
+> {
+  const db = await getDb();
+  return db.getAllAsync<{ chat_id: number; message_id: number; created_at: string }>(
+    `SELECT chat_id, id AS message_id, created_at
+     FROM ai_chat_messages WHERE status = 'pending' ORDER BY id`,
+  );
 }
 
 /** 某 mode 的对话列表（按 updated_at 倒序，附消息条数与 pending 标记，不含正文） */

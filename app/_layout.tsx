@@ -18,6 +18,7 @@ import { useEffect, useRef } from 'react';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { I18nProvider } from '@/i18n';
 import { queueShareFile } from '@/services/shareQueue';
+import { resumeInterruptedGenerations } from '@/services/aiGenerate';
 import { maybeAutoSync } from '@/services/syncOnelap';
 import { md3Dark, palette } from '@/theme';
 
@@ -34,6 +35,7 @@ export default function RootLayout() {
                 <StatusBar style="light" />
                 <ShareIntentDispatcher />
                 <AutoSyncDispatcher />
+                <GenerationResumeDispatcher />
                 <RootStack />
               </ShareIntentProvider>
             </KeyboardProvider>
@@ -51,6 +53,30 @@ function AutoSyncDispatcher() {
       if (status === 'active') void maybeAutoSync();
     });
     return () => sub.remove();
+  }, []);
+  return null;
+}
+
+/**
+ * AI 生成自愈（M5）：生成中切后台进程被杀只留 pending 占位，此前唯一恢复路径是
+ * 重进 AI 页面补跑。这里冷启动（延迟 3s，避开开库与首帧渲染）+ 每次 background→active
+ * 各扫一次，窗口内的残留自动续跑；未配密钥/已在跑/超窗时编排层内部跳过（见
+ * resumeInterruptedGenerations），重复调度无副作用。
+ */
+function GenerationResumeDispatcher() {
+  useEffect(() => {
+    const run = () =>
+      void resumeInterruptedGenerations().catch((e) =>
+        console.warn('AI 残留续跑调度失败:', e),
+      );
+    const timer = setTimeout(run, 3000);
+    const sub = AppState.addEventListener('change', (status: AppStateStatus) => {
+      if (status === 'active') run();
+    });
+    return () => {
+      clearTimeout(timer);
+      sub.remove();
+    };
   }, []);
   return null;
 }

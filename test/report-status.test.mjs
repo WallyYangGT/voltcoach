@@ -1,14 +1,17 @@
 /**
- * report-status.test.mjs — 报告轮询判定（src/core/report-status.ts）的回归断言。
+ * report-status.test.mjs — AI 生成状态纯判定（src/core/report-status.ts）的回归断言。
  *
- * 守住 2026-09-22 真机事故：失败后在页内点重试，重试成功也不刷新界面（必须退出重进）。
- * 轮询条件必须覆盖"库状态仍是 failed、但进程内有任务在跑"这一段。
+ * 1) shouldPollReport：守住 2026-09-22 真机事故——失败后在页内点重试，重试成功也不
+ *    刷新界面（必须退出重进）。轮询条件必须覆盖"库状态仍是 failed、但进程内有任务在跑"。
+ * 2) parseDbUtcTimestamp / withinResumeWindow：M5 回前台自动续跑窗口的判定。
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { shouldPollReport } = await import('../src/core/report-status.ts');
+const { shouldPollReport, parseDbUtcTimestamp, withinResumeWindow } = await import(
+  '../src/core/report-status.ts'
+);
 
 /** 默认全 false 的输入（各用例只覆盖关心的位） */
 const base = {
@@ -42,4 +45,37 @@ test('shouldPollReport: 追问消息重试中也要轮询（库状态仍是 fail
 test('shouldPollReport: 完成且无任务无追问 → 停止轮询（不空转）', () => {
   assert.equal(shouldPollReport(base), false);
   assert.equal(shouldPollReport({ ...base, status: null }), false);
+});
+
+// ---------------- parseDbUtcTimestamp：SQLite datetime('now') 的 UTC 无时区串 ----------------
+
+const NOW = Date.parse('2026-09-24T08:00:00Z');
+
+test('parseDbUtcTimestamp: datetime(\'now\') 格式补 Z 按 UTC 解析', () => {
+  assert.equal(parseDbUtcTimestamp('2026-09-24 08:00:00'), NOW);
+  assert.equal(parseDbUtcTimestamp('2026-09-24 07:59:59'), NOW - 1000);
+});
+
+test('parseDbUtcTimestamp: ISO 带 T 的串原样兼容；非法/空值为 null', () => {
+  assert.equal(parseDbUtcTimestamp('2026-09-24T08:00:00Z'), NOW);
+  assert.equal(parseDbUtcTimestamp(''), null);
+  assert.equal(parseDbUtcTimestamp(null), null);
+  assert.equal(parseDbUtcTimestamp(undefined), null);
+  assert.equal(parseDbUtcTimestamp('not-a-date'), null);
+});
+
+// ---------------- withinResumeWindow：残留自动续跑窗口 ----------------
+
+const HOUR = 3600_000;
+
+test('withinResumeWindow: 刚打断与窗口边界内为 true', () => {
+  assert.equal(withinResumeWindow('2026-09-24 08:00:00', NOW, HOUR), true);
+  assert.equal(withinResumeWindow('2026-09-24 07:00:00', NOW, HOUR), true); // 恰好等于窗口
+});
+
+test('withinResumeWindow: 超窗 / 未来时刻 / 空值为 false', () => {
+  assert.equal(withinResumeWindow('2026-09-24 06:59:59', NOW, HOUR), false);
+  assert.equal(withinResumeWindow('2026-09-24 08:00:01', NOW, HOUR), false); // 时钟回拨
+  assert.equal(withinResumeWindow('', NOW, HOUR), false);
+  assert.equal(withinResumeWindow(null, NOW, HOUR), false);
 });

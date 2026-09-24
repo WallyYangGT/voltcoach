@@ -29,16 +29,15 @@ import {
   submitChatMessage,
   type GenProgress,
 } from '@/services/aiGenerate';
-import { shouldPollReport } from '@/core/report-status';
+import { parseDbUtcTimestamp, shouldPollReport } from '@/core/report-status';
 import type { Lang } from '@/core/i18n';
 
 const POLL_MS = 1500; // 生成中轮询节奏（对齐旧 Web 版 pollAiChat 间隔）
 
-/** 报告创建时刻起的已等待秒数（created_at 是 UTC 的 datetime('now')，需补 Z 解析） */
+/** 报告创建时刻起的已等待秒数（created_at 是 UTC 的 datetime('now')，解析口径在 core） */
 function elapsedFrom(createdAt: string | null | undefined, now: number): number | null {
-  if (!createdAt) return null;
-  const started = Date.parse(createdAt.replace(' ', 'T') + 'Z');
-  if (!Number.isFinite(started)) return null;
+  const started = parseDbUtcTimestamp(createdAt);
+  if (started == null) return null;
   return Math.max(0, Math.round((now - started) / 1000));
 }
 

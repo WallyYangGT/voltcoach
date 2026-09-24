@@ -34,6 +34,8 @@ import {
   updateAiChatMessage,
   updateAiReport,
   getActivitySummary,
+  listPendingAiReportRefs,
+  listPendingChatMessageRefs,
   saveMemory,
   type AiChatMode,
   type AiConfig,
@@ -43,6 +45,7 @@ import {
 import { loadDefaultFetch } from '@/ai/http';
 import { callAI, runAgentLoop } from '@/ai/agent';
 import { t, type Lang } from '@/core/i18n';
+import { withinResumeWindow } from '@/core/report-status';
 import { safeName, thinRecords } from '@/core/records';
 
 import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildMemorySection } from '@/prompts/prompts';
@@ -389,4 +392,37 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     chatProgress.delete(key);
   }
   return { started: true };
+}
+
+// ---------------- 残留恢复：回前台自动续跑（M5） ----------------
+
+/** 自动续跑窗口：只恢复「刚被进程死亡打断」的生成（切后台被杀的典型时间窗） */
+const RESUME_WINDOW_MS = 30 * 60_000;
+
+/**
+ * 恢复被进程死亡打断的生成（根布局在冷启动 + 每次 background→active 时调度）：
+ * - 未配置 AI 密钥时整体跳过（不把 pending 扫成 failed，等用户进页面自行处理）；
+ * - 只补跑窗口内的 pending——窗口外的维持"进 AI 页面时补跑"的现状（此前唯一恢复
+ *   路径），避免为用户早已放弃的任务重复消耗 token；SSE 无法续传，续跑 = 整份
+ *   重新生成，token 重复消耗已知并接受（MIGRATION_PLAN §9）；
+ * - 进程内已在跑的任务由 generateReport/runChatGeneration 的注册表防双跑，无需在此判断。
+ */
+export async function resumeInterruptedGenerations(lang: Lang = 'zh'): Promise<void> {
+  const { config, configured } = await getAiConfig();
+  if (!configured || !config.api_key) return;
+  const now = Date.now();
+  const [reports, messages] = await Promise.all([
+    listPendingAiReportRefs(),
+    listPendingChatMessageRefs(),
+  ]);
+  for (const r of reports) {
+    if (!withinResumeWindow(r.created_at, now, RESUME_WINDOW_MS)) continue;
+    void generateReport(r.id, lang).catch((e) => console.warn('报告残留续跑失败:', e));
+  }
+  for (const m of messages) {
+    if (!withinResumeWindow(m.created_at, now, RESUME_WINDOW_MS)) continue;
+    void runChatGeneration(m.chat_id, m.message_id, lang).catch((e) =>
+      console.warn('对话残留续跑失败:', e),
+    );
+  }
 }
