@@ -235,9 +235,11 @@ export function getChatProgress(chatId: number, messageId: number): GenProgress 
  * 函数即可（系统段与提示词均已落库，无会话态丢失）。
  * 传输级失败（空/破损正文、断连、429/5xx）由传输层自动重试一次，重试进度经
  * getReportProgress 透出（长请求被网关掐断是 2026-09-22 真机事故的现场形态）。
+ * 返回 started：同一报告已有任务在跑时为 false（M5 起调用方可感知，不再静默吞掉；
+ * UI 按钮的禁用态以 isReportGenerating 为准）。
  */
-export async function generateReport(reportId: number, lang: Lang = 'zh'): Promise<void> {
-  if (runningReports.has(reportId)) return; // 同一报告不重复 fire
+export async function generateReport(reportId: number, lang: Lang = 'zh'): Promise<{ started: boolean }> {
+  if (runningReports.has(reportId)) return { started: false }; // 同一报告不重复 fire
   runningReports.add(reportId);
   try {
     const config = await requireAiConfig(lang);
@@ -269,6 +271,7 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     runningReports.delete(reportId);
     reportProgress.delete(reportId);
   }
+  return { started: true };
 }
 
 // ---------------- 对话：提交与后台生成 ----------------
@@ -347,10 +350,12 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
  * 对话后台生成任务：系统段每轮重拼（首条 user 消息注入），历史只带 completed
  * 正文（排除 pending 占位与失败消息），结果回写占位消息 completed/failed。
  * 应用中途被杀留下的 pending 占位，重进会话页时以同一 messageId 重跑本函数即可。
+ * 返回 started：同一消息已有任务在跑时为 false（M5 起调用方可感知；UI 按钮的
+ * 禁用态以 isChatGenerating 为准）。
  */
-export async function runChatGeneration(chatId: number, messageId: number, lang: Lang = 'zh'): Promise<void> {
+export async function runChatGeneration(chatId: number, messageId: number, lang: Lang = 'zh'): Promise<{ started: boolean }> {
   const key = `${chatId}:${messageId}`;
-  if (runningChats.has(key)) return; // 同一消息不重复 fire
+  if (runningChats.has(key)) return { started: false }; // 同一消息不重复 fire
   runningChats.add(key);
   try {
     const config = await requireAiConfig(lang);
@@ -383,4 +388,5 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     runningChats.delete(key);
     chatProgress.delete(key);
   }
+  return { started: true };
 }

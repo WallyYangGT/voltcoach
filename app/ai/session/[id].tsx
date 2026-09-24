@@ -125,19 +125,19 @@ export default function AiSessionScreen() {
       ? reportTitleText || (report ? t(`ai.mode.${report.mode}` as never) : t('ai.title'))
       : t('session.chatTitle');
 
-  /** 重试追问/对话消息：以同一条消息重跑生成（运行中注册表防双跑） */
+  /** 重试追问/对话消息：以指定消息重跑生成（运行中注册表防双跑，按钮侧已禁用） */
   const reloadReport = ai.reload;
-  const retryChat = useCallback(() => {
-    if (!chat) return;
-    const target = chat.messages.find((m) => m.status === 'failed' || m.status === 'pending');
-    if (target) {
-      void runChatGeneration(chat.id, target.id, lang).catch((e) =>
+  const retryChat = useCallback(
+    (messageId: number) => {
+      if (!chat) return;
+      void runChatGeneration(chat.id, messageId, lang).catch((e) =>
         console.warn('对话重试失败:', e),
       );
-    }
-    if (kind === 'report') void reloadReport();
-    else void loadChat();
-  }, [chat, lang, kind, reloadReport, loadChat]);
+      if (kind === 'report') void reloadReport();
+      else void loadChat();
+    },
+    [chat, lang, kind, reloadReport, loadChat],
+  );
 
   /** 重新生成报告：新建一份（旧报告留在历史列表里），随后路由切到新报告 */
   const regenerate = useCallback(() => {
@@ -217,7 +217,7 @@ export default function AiSessionScreen() {
             report={report}
             progress={ai.progress}
             elapsedSec={ai.elapsedSec}
-            retrying={ai.retrying}
+            generating={ai.generating}
             onRetry={ai.retry}
           />
         )}

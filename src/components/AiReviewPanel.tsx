@@ -106,11 +106,13 @@ export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
     })();
   }, [regenerateReport]);
 
-  const retryFollowUp = useCallback(() => {
-    const chat = ai.chat;
-    const target = chat?.messages.find((m) => m.status === 'failed' || m.status === 'pending');
-    if (chat && target) retryChatMessage(chat.id, target.id);
-  }, [ai.chat, retryChatMessage]);
+  const retryFollowUp = useCallback(
+    (messageId: number) => {
+      const chat = ai.chat;
+      if (chat) retryChatMessage(chat.id, messageId);
+    },
+    [ai.chat, retryChatMessage],
+  );
 
   const send = useCallback(
     async (text: string) => {
@@ -192,7 +194,7 @@ export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
             report={report}
             progress={ai.progress}
             elapsedSec={ai.elapsedSec}
-            retrying={ai.retrying}
+            generating={ai.generating}
             onRetry={ai.retry}
           />
           {report.status === 'completed' && (

@@ -3,12 +3,14 @@
  *
  * 三态口径同 M3：pending 显示"生成中…"（有传输级自动重试时附重试进度）、failed
  * 显示错误 + 重试、completed 渲染 Markdown。user 消息右对齐、AI 左对齐。
+ * M5：重试按消息逐条生效（此前固定重跑第一条失败消息，点第 3 条实际重试第 1 条）；
+ * 该消息在跑时重试按钮禁用（此前无 disabled，「实际在重试还能点」即此）。
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import type { AiChatMessageRow } from '@/db';
-import { getChatProgress } from '@/services/aiGenerate';
+import { getChatProgress, isChatGenerating } from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiMarkdown } from './AiMarkdown';
@@ -16,8 +18,8 @@ import { AiMarkdown } from './AiMarkdown';
 interface Props {
   chatId: number;
   messages: AiChatMessageRow[];
-  /** 失败气泡上的重试：以同一条消息重跑生成 */
-  onRetry: () => void;
+  /** 失败气泡上的重试：以该条消息重跑生成 */
+  onRetry: (messageId: number) => void;
 }
 
 export function ChatBubbles({ chatId, messages, onRetry }: Props) {
@@ -25,7 +27,9 @@ export function ChatBubbles({ chatId, messages, onRetry }: Props) {
   return (
     <View style={styles.list}>
       {messages.map((m) => {
-        // pending（生成中）与 failed（重试中）都可能带传输级自动重试进度
+        // pending（生成中）与 failed（重试中）都可能带传输级自动重试进度；
+        // 在跑判定看进程内注册表（手动重试/残留补跑时库状态仍是 failed）
+        const running = m.status !== 'completed' && isChatGenerating(chatId, m.id);
         const progress = m.status === 'pending' || m.status === 'failed'
           ? getChatProgress(chatId, m.id)
           : null;
@@ -47,8 +51,13 @@ export function ChatBubbles({ chatId, messages, onRetry }: Props) {
               <View style={{ gap: 6 }}>
                 <Text style={styles.failedText}>{t('session.failed')}</Text>
                 {!!m.error && <Text style={styles.failedErr}>{m.error}</Text>}
-                <Button compact mode="outlined" textColor={palette.volt} onPress={onRetry}>
-                  {progress ? t('ai.retrying') : t('session.retry')}
+                <Button
+                  compact
+                  mode="outlined"
+                  textColor={palette.volt}
+                  disabled={running}
+                  onPress={() => onRetry(m.id)}>
+                  {running || progress ? t('ai.retrying') : t('session.retry')}
                 </Button>
                 {/* 重试期间库状态仍是 failed：自动重试进度要在这里也可见（同 AiReportBody） */}
                 {!!progress && (
