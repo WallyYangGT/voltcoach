@@ -18,6 +18,9 @@
  *   MOCK_CUT_AFTER=N  —— 流式请求推 N 帧后 `res.destroy()` 掐断连接（演练"已吐字的流
  *   不重试"与读取中断归传输级）。
  *   MOCK_DELAY_MS=N   —— 正文请求前等待 N 毫秒，模拟长报告（观察"生成中"状态与已等待时长）。
+ *   MOCK_TOOL_SCRIPT=ftp —— M5 FTP 剧本：estimate_ftp → update_ftp → reanalyze_activity
+ *   （目标文件用 MOCK_REANALYZE_FILE=<file_name> 指定）三轮工具后回正文，
+ *   用于「AI 更新 FTP + 重新分析」端到端冒烟。
  */
 import http from 'node:http';
 
@@ -31,6 +34,14 @@ const FAIL_EMPTY = Number(process.env.MOCK_FAIL_EMPTY || 0); // 前 N 次正文�
 const TRUNCATE = Number(process.env.MOCK_TRUNCATE || 0); // 前 N 次正文请求注入截半正文
 const CUT_AFTER = Number(process.env.MOCK_CUT_AFTER || 0); // 流式推 N 帧后掐断连接
 const DELAY_MS = Number(process.env.MOCK_DELAY_MS || 0); // 正文请求前的模拟等待
+// MOCK_TOOL_SCRIPT=ftp —— M5 FTP 剧本：按历史中 tool 消息数推进
+// estimate_ftp → update_ftp → reanalyze_activity（MOCK_REANALYZE_FILE 指定文件名），
+// 三轮后回正文。用于「AI 更新 FTP + 重新分析」端到端冒烟。
+const TOOL_SCRIPT = process.env.MOCK_TOOL_SCRIPT || '';
+const REANALYZE_FILE = process.env.MOCK_REANALYZE_FILE || '';
+const FTP_REPLY =
+  '已检查你的 FTP 数据：窗口内骑行功率-心率交叉验证通过，' +
+  'FTP 已按当前最佳估算更新，并已对目标训练按新参数重新分析，TSS 与区间分布已对齐。';
 let contentCalls = 0; // 正文请求计数（tool_call 演练轮不计入）
 
 const server = http.createServer((req, res) => {
@@ -77,6 +88,56 @@ const server = http.createServer((req, res) => {
               finish_reason: 'tool_calls',
             },
           ],
+        }),
+      );
+      return;
+    }
+
+    // FTP 剧本（MOCK_TOOL_SCRIPT=ftp）：按历史中 role:"tool" 消息数确定轮次
+    if (!stream && TOOL_SCRIPT === 'ftp' && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+      const toolMsgCount = (parsed.messages ?? []).filter((m) => m.role === 'tool').length;
+      const plan = [
+        { name: 'estimate_ftp', args: {} },
+        { name: 'update_ftp', args: {} },
+        { name: 'reanalyze_activity', args: { file_name: REANALYZE_FILE } },
+      ];
+      if (toolMsgCount < plan.length) {
+        const step = plan[toolMsgCount];
+        console.log(`  -> mock script ftp: issue ${step.name} (round ${toolMsgCount + 1})`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            id: `mock-ftp-${toolMsgCount}`,
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: `mock-ftp-call-${toolMsgCount}`,
+                      type: 'function',
+                      function: { name: step.name, arguments: JSON.stringify(step.args) },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      // 三轮工具用尽 → 落到下方正文回复（FTP_REPLY）
+      console.log('  -> mock script ftp: final reply');
+      contentCalls += 1;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          id: 'mock-ftp-final',
+          choices: [{ index: 0, message: { role: 'assistant', content: FTP_REPLY }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
         }),
       );
       return;
