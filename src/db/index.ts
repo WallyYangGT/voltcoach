@@ -199,11 +199,45 @@ const ATHLETE_LIMITS = {
   weight_kg: [30, 200] as const,
 };
 
+/** FTP 更新来源（溯源戳随 athlete JSON 落库；UI「我的」页手动保存为缺省 manual） */
+export type FtpSource = 'manual' | 'estimate' | 'ai_coach';
+
+/** FTP 溯源戳：最近一次 FTP 值实际变更的时间与来源（值未变不刷新时间戳） */
+export interface FtpMeta {
+  updated_at: string | null;
+  source: FtpSource | null;
+}
+
+/** 读 FTP 溯源戳（athlete 行 JSON 的扩展字段；无行/损坏/旧数据返回全 null） */
+export async function getFtpMeta(): Promise<FtpMeta> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = 'athlete'`,
+  );
+  if (!row) return { updated_at: null, source: null };
+  try {
+    const p = JSON.parse(row.value);
+    return {
+      updated_at: typeof p.ftp_updated_at === 'string' ? p.ftp_updated_at : null,
+      source: (p.ftp_source ?? null) as FtpSource | null,
+    };
+  } catch {
+    return { updated_at: null, source: null };
+  }
+}
+
 /**
  * 更新骑手参数（允许只给部分字段）：校验 → 合并当前值写库。
  * 非法值抛 Error（message 按 lang 双语，界面直接透传展示）。
+ * opts.source：FTP 值实际变更时在 athlete JSON 上盖溯源戳（ftp_updated_at/ftp_source），
+ * 供「AI 已代为更新」的追溯与后续展示； athlete JSON 的扩展字段经 getEffectiveAthlete
+ * 的 Object.assign 天然保活（不加列、不动 SCHEMA_VERSION）。
  */
-export async function setAthlete(partial: Partial<AthleteParams>, lang: Lang = 'zh'): Promise<AthleteParams> {
+export async function setAthlete(
+  partial: Partial<AthleteParams>,
+  lang: Lang = 'zh',
+  opts?: { source?: FtpSource },
+): Promise<AthleteParams> {
   const updates: Record<string, number> = {};
   for (const key of Object.keys(ATHLETE_LIMITS) as (keyof typeof ATHLETE_LIMITS)[]) {
     if (partial?.[key] == null) continue;
@@ -214,7 +248,15 @@ export async function setAthlete(partial: Partial<AthleteParams>, lang: Lang = '
     updates[key] = v;
   }
   if (!Object.keys(updates).length) throw new Error(t(lang, 'athlete.none'));
-  const merged = { ...(await getEffectiveAthlete()), ...updates };
+  const current = await getEffectiveAthlete();
+  const merged: AthleteParams & { ftp_updated_at?: string; ftp_source?: FtpSource } = {
+    ...current,
+    ...updates,
+  };
+  if (updates.ftp_watts != null && updates.ftp_watts !== current.ftp_watts) {
+    merged.ftp_updated_at = new Date().toISOString();
+    merged.ftp_source = opts?.source ?? 'manual';
+  }
   const db = await getDb();
   await db.runAsync(
     `INSERT INTO settings (key, value) VALUES ('athlete', ?)

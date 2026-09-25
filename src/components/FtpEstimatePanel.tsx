@@ -92,7 +92,7 @@ export function FtpEstimatePanel({ onApplied }: { onApplied: () => void }) {
   const apply = async () => {
     setApplying(true);
     try {
-      await setAthlete({ ftp_watts: e.ftp_w }, lang);
+      await setAthlete({ ftp_watts: e.ftp_w }, lang, { source: 'estimate' });
       setApplied(true);
       onApplied();
     } catch (err) {

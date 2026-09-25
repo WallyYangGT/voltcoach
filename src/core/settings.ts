@@ -95,6 +95,7 @@ export const FTP_ESTIMATION = {
   coggan_factor: 0.95, // Coggan 口径：20 分钟峰功率 × 该系数 ≈ FTP
   apply_min_w: 50, // 「采纳写回」时可接受的 FTP 下限（W）
   apply_max_w: 500, // 「采纳写回」时可接受的 FTP 上限（W）
+  freshness_days: 7, // AI 自动采纳的新鲜度门槛（天）：窗口内最近一次骑行距今天不超过该值才允许写回
 };
 
 // ============ 踏频-功率联合分析阈值 ============
