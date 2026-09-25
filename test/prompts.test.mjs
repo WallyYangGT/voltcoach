@@ -2,7 +2,7 @@
  * prompts.test.mjs — src/prompts 提示词层回归测试。
  * 自 reference/test（web.test.mjs 提示词相关断言 + skills/ai 测试中的拼装口径）
  * 同源搬运：四场景拼装结构、数据整形压缩、时间戳本地化、记忆段、对话系统段。
- * zh 文案与旧版逐字一致（回归断言依赖）。
+ * zh 文案 2026-09-25 客观性修正起与旧 repo 逐字同步（回归断言依赖）。
  */
 
 import { test } from 'node:test';
@@ -41,14 +41,24 @@ test('复盘提示词：角色 + 口径 + 当前时间 + 数据段 + 编号问�
   const now = new Date('2026-03-26T10:00:00');
   const p = buildReviewPrompt(sampleSummary(), ATHLETE, null, null, 'zh', now);
   assert.match(p, /^## 角色\n\n你是一位严谨、务实的自行车教练/);
+  // 客观性修正（2026-09-25）：评价平衡口径与数据口径注意钉死
+  assert.match(p, /评价客观平衡——做得好的地方（有数据支撑）明确肯定，存在的问题也直接指出，不回避不美化/);
   assert.match(p, /## 指标口径与骑手参数/);
   assert.match(p, new RegExp(`骑手参数：FTP ${ATHLETE.ftp_watts}W，最大心率 ${ATHLETE.max_hr}bpm，体重 ${ATHLETE.weight_kg}kg`));
+  assert.match(p, /数据口径注意：/);
+  assert.match(p, /0W（滑行、下坡、停车但计时未停）也计入 Z1，Z1 占比高不等于没有踩踏输出/);
+  assert.match(p, /timer_pause 条目的 at 为暂停起始时刻/);
   assert.match(p, /## 当前时间/);
   assert.match(p, /今天是 2026-03-26/);
   assert.match(p, /## 训练数据（单次骑行汇总）/);
   assert.match(p, /用户已将本次记录分类为：\*\*训练\*\*/);
   assert.match(p, /```json/);
   assert.match(p, /## 请回答\n\n1\. 参考用户标记的分类/);
+  // 强度分布题：基线结合分类与场景（通勤/热身 Z1–Z2 为主属正常）
+  assert.match(p, /基线结合用户标记的分类与场景判断（如通勤\/热身\/恢复骑以 Z1–Z2 为主属正常）/);
+  // anomalies 题：先按 at 时间戳定位暂停环节，不凭推测安放到发力段
+  assert.match(p, /先按 timer_pause 的 at 时间戳对照时间线定位暂停发生的环节/);
+  assert.match(p, /不要凭推测把暂停安放到某个发力段/);
   // 无 skills 段（传 null 不注入）
   assert.doesNotMatch(p, /专业知识库/);
 });
@@ -131,6 +141,43 @@ test('compactSummaryForPrompt：anomalies 聚合 / segments 首尾省略 / climb
   // 少于阈值时原样保留
   const few = compactSummaryForPrompt(sampleSummary({ anomalies: [{ type: 'power_gap', duration_sec: 5, at: 'x' }] }), 'zh');
   assert.equal(few.anomalies.length, 1);
+});
+
+test('compactSummaryForPrompt：timer_pause 不参与聚合、逐条保留位置证据', () => {
+  // 暂停的 at 是判断其落在哪个环节（热身/通勤/间歇之间）的唯一位置证据，
+  // 聚合丢失会迫使 AI 凭叙述需要"安放"暂停——热身段暂停被归因为冲刺段没出力
+  const anomalies = [
+    { type: 'timer_pause', duration_sec: 45, at: '2026-03-25T05:40:00.000Z' },
+    { type: 'timer_pause', duration_sec: 30, at: '2026-03-25T05:52:00.000Z' },
+    { type: 'power_gap', duration_sec: 78, at: '2026-03-25T05:43:40.000Z' },
+    { type: 'power_gap', duration_sec: 65, at: '2026-03-25T06:36:53.000Z' },
+    { type: 'record_gap', duration_sec: 25, at: '2026-03-25T05:54:16.000Z' },
+    { type: 'hr_jump', at: '2026-03-25T06:05:00.000Z' },
+  ];
+  const out = compactSummaryForPrompt(sampleSummary({ anomalies }), 'zh');
+  assert.equal(out.anomalies.length, 2);
+  assert.ok(out.anomalies.every((a) => a.type === 'timer_pause'));
+  assert.equal(out.anomalies[0].duration_sec, 45);
+  assert.equal(new Date(out.anomalies[0].at).getTime(), Date.parse('2026-03-25T05:40:00.000Z'));
+  assert.equal(new Date(out.anomalies[1].at).getTime(), Date.parse('2026-03-25T05:52:00.000Z'));
+  const byType = Object.fromEntries(out.anomalies_summary.map((g) => [g.type, g]));
+  assert.equal(byType.power_gap.count, 2);
+  assert.equal(byType.power_gap.total_sec, 143);
+  assert.equal(byType.record_gap.count, 1);
+  assert.equal(byType.hr_jump.count, 1);
+  assert.equal(byType.hr_jump.total_sec, undefined); // 无 duration_sec 的异常不写 total_sec
+  assert.equal(byType.timer_pause, undefined);
+});
+
+test('compactSummaryForPrompt：全部为 timer_pause 时逐条保留、不产生空聚合', () => {
+  const anomalies = Array.from({ length: 7 }, (_, i) => ({
+    type: 'timer_pause',
+    duration_sec: 20 + i,
+    at: `2026-03-25T0${i}:00:00.000Z`,
+  }));
+  const out = compactSummaryForPrompt(sampleSummary({ anomalies }), 'zh');
+  assert.equal(out.anomalies.length, 7);
+  assert.equal(out.anomalies_summary, undefined);
 });
 
 test('localizeTimestamps：UTC 时间戳改写为本地偏移（时刻不变），用户自填字段不改写', () => {
@@ -254,6 +301,11 @@ test('对话系统段：agentic 关闭时无工具指引与记忆段', () => {
 test('英文复盘提示词：角色/口径/时间/问题全英', () => {
   const p = buildReviewPrompt(sampleSummary(), ATHLETE, null, null, 'en', new Date('2026-03-26T10:00:00'));
   assert.match(p, /^## Role\n\nYou are a rigorous, pragmatic cycling coach/);
+  // 客观性修正：en 口径注意与评价平衡同步钉死
+  assert.match(p, /Be objective and balanced: explicitly acknowledge what the data shows was done well/);
+  assert.match(p, /a high Z1 share does not mean the rider was not pedaling/);
+  assert.match(p, /judging the baseline against the user-assigned category and context/);
+  assert.match(p, /do not place a pause into a hard segment by guesswork/);
   assert.match(p, /## Metrics & Athlete Parameters/);
   assert.match(p, new RegExp(`FTP ${ATHLETE.ftp_watts} W, max HR ${ATHLETE.max_hr} bpm, weight ${ATHLETE.weight_kg} kg`));
   assert.match(p, /## Current Date & Time/);
