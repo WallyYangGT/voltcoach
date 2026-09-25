@@ -67,6 +67,10 @@ export async function reanalyzeActivity(fileName: string, lang: Lang = 'zh'): Pr
 
   const athlete = await getEffectiveAthlete();
   const rebuilt = rebuildSummaryFromRecords(records, prev, athlete);
+  // category/note 是 activities 列属数据（读取时由 db 层合并回填），不落 summary_json——
+  // prev 取自 getActivitySummary 已合并列值，原样写回会把用户随后清除的备注"复活"
+  delete rebuilt.activity.category;
+  delete rebuilt.activity.note;
 
   // 入库 + 注入当日 CTL/ATL/TSB 后终版再入库（两段式，口径同 importFit）
   await upsertActivity(fileName, rebuilt);

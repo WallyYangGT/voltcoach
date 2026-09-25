@@ -584,10 +584,36 @@ test('evaluateFtpApply: 估算与当前一致（diff=0）→ 无需更新', () =
   assert.equal(evaluateFtpApply(r, '2026-07-05', '2026-07-10').reason_key, 'ftp.apply.no_change');
 });
 
+test('evaluateFtpApply: 单一方法（仅 Coggan）降级的 medium → 放行（样本量已由 min_rides 把关）', () => {
+  const r = estimateFtpFromHistory(threeRides({ p5: null }), FTP_ATHLETE);
+  assert.equal(r.estimate.methods.cp_model, null);
+  assert.equal(r.estimate.confidence, 'medium');
+  assert.deepEqual(evaluateFtpApply(r, '2026-07-05', '2026-07-10'), { ok: true, reason_key: null });
+});
+
+test('evaluateFtpApply: 两法一致性分母与估算器同口径（取整均值）', () => {
+  const r = baseApplyResult();
+  // coggan 101 / cp 98：未取整均值 99.5 → 估算器口径取整 100，差 3% 恰在线上判"一致"
+  r.estimate.methods.cp_model.ftp_w = 98;
+  r.estimate.methods.coggan_20min.ftp_w = 101;
+  r.estimate.ftp_w = 100;
+  assert.deepEqual(evaluateFtpApply(r, '2026-07-05', '2026-07-10'), { ok: true, reason_key: null });
+});
+
+test('evaluateFtpApply: 估值超采纳上界 → 拒绝', () => {
+  const r = baseApplyResult();
+  r.estimate.ftp_w = 600;
+  r.estimate.diff_w = 482;
+  assert.equal(evaluateFtpApply(r, '2026-07-05', '2026-07-10').reason_key, 'ftp.apply.range');
+});
+
 test('evaluateFtpApply: 估值越采纳范围 → 拒绝', () => {
   const r = baseApplyResult();
   r.estimate.ftp_w = 30;
   r.estimate.diff_w = -94;
+  // 两法同步改为 30/30，避免一致性检查（分母为估值）先于范围检查触发
+  r.estimate.methods.cp_model.ftp_w = 30;
+  r.estimate.methods.coggan_20min.ftp_w = 30;
   const check = evaluateFtpApply(r, '2026-07-05', '2026-07-10');
   assert.equal(check.reason_key, 'ftp.apply.range');
   assert.equal(check.reason_vars.w, 30);

@@ -76,8 +76,14 @@ export async function importFitBytes(bytes: Uint8Array, fileName: string): Promi
   if (!safe.toLowerCase().endsWith('.fit')) throw new Error(`不是 .fit 文件: ${safe}`);
   if (!bytes.length) throw new Error('文件为空');
 
-  const athlete = await getEffectiveAthlete(); // 骑手参数以训练库为准
-  const { records, summary } = await analyzeFile({ bytes, fileName: safe, athlete });
+  // 骑手参数以训练库为准；只解构三个数值参数——getEffectiveAthlete 运行时携带的
+  // FTP 溯源戳（ftp_updated_at/ftp_source）不进 analyzeFile，避免泄入 summary.athlete_context
+  const { ftp_watts, max_hr, weight_kg } = await getEffectiveAthlete();
+  const { records, summary } = await analyzeFile({
+    bytes,
+    fileName: safe,
+    athlete: { ftp_watts, max_hr, weight_kg },
+  });
 
   // 查重放在入库之前：命中即整体跳过（含 records 落盘与快照滚动，避免留下孤儿文件）
   const duplicateOf = await findExistingRide(safe, summary);

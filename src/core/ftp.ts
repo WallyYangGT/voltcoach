@@ -393,17 +393,18 @@ export function evaluateFtpApply(
   if (result.sample.usable_power_rides < cfg.min_rides)
     return applyReject('ftp.apply.few_rides', { min: cfg.min_rides });
   if (e.confidence === 'low') return applyReject('ftp.apply.low_confidence');
-  // 两法互斥：CP 模型可用时与 Coggan 法差超一致性阈值 → 估值本身不可信
-  // （口径同 estimateFtpFromHistory 的 consistent 判定：差值 / 两法均值）
+  // 两法互斥：CP 模型可用时与 Coggan 法差超一致性阈值 → 估值本身不可信。
+  // 分母与估算器 consistent 判定同口径（两法取整均值，即 e.ftp_w）
   const cp = e.methods.cp_model;
-  if (cp) {
-    const mean = (cp.ftp_w + e.methods.coggan_20min.ftp_w) / 2;
+  if (cp && e.ftp_w > 0) {
     if (
-      Math.abs(cp.ftp_w - e.methods.coggan_20min.ftp_w) / mean >
+      Math.abs(cp.ftp_w - e.methods.coggan_20min.ftp_w) / e.ftp_w >
       cfg.consistency_pct / 100
     )
       return applyReject('ftp.apply.inconsistent', { pct: cfg.consistency_pct });
   }
+  // single_method（缺 5min 峰、仅 Coggan 法）放行：样本量已由 min_rides 把关，
+  // 20min×0.95 单法估值仍可信（与"配置漂移"类信号同属可放行的 medium，测试钉住）
   // 锚点"明确非全力"（有合格心率且未达全力线）才拦；无心率（null）不拦——
   // 峰值法只依赖功率，缺心率只是无法交叉验证（estimateFtpFromHistory 同口径）
   if (e.methods.hr_check.maximal_effort === false)

@@ -37,8 +37,14 @@ export async function applyAiFtpUpdate(lang: Lang = 'zh'): Promise<AiFtpUpdateRe
   const { athlete } = await getAthleteState();
   const result: FtpEstimationResult = estimateFtpFromHistory(rides, athlete, FTP_ESTIMATION, lang);
 
-  // 新鲜度依据：窗口内最近一次骑行的日期（无骑行为 null → 门槛拒）
-  const latestRideDate = rides.reduce<string | null>(
+  // 新鲜度依据：与估算器同款"可用"口径（有功率且覆盖率达标的骑行）中最近一次的日期
+  // ——无功率的新骑行不能证明估值所依据的数据新鲜；无可用骑行为 null → 门槛拒
+  const usableRides = rides.filter(
+    (r) =>
+      r.summary?.power &&
+      (r.summary.data_quality?.power_coverage_pct ?? 100) >= FTP_ESTIMATION.min_coverage_pct,
+  );
+  const latestRideDate = usableRides.reduce<string | null>(
     (max, r) => (r.date > (max ?? '') ? r.date : max),
     null,
   );
