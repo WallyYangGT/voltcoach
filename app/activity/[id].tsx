@@ -21,7 +21,7 @@ import { TimeSeriesChart, type SeriesSpec } from '@/charts/TimeSeriesChart';
 import { AiReviewPanel, type AiReviewPanelHandle } from '@/components/AiReviewPanel';
 import type { Summary } from '@/core/analyze';
 import { formatAnomaly } from '@/core/i18n';
-import { buildActivityMetrics, type MetricItem, type MetricText } from '@/core/metrics';
+import { buildActivityMetrics, buildCadenceMetrics, type MetricItem, type MetricText } from '@/core/metrics';
 import { thinRecords } from '@/core/records';
 import { HR_ZONES, POWER_ZONES, type Zone } from '@/core/settings';
 import { CATEGORY_KEYS, deleteActivity, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
@@ -179,6 +179,13 @@ export default function ActivityDetailScreen() {
     return buildActivityMetrics(summary, tMetric, lang);
   }, [summary, t, lang]);
 
+  // 踏频-功率分析卡指标格（cadence_power 非骑行/发力样本 <60s 时 analyze 不产出，此为空）
+  const cadenceMetrics = useMemo<MetricItem[]>(() => {
+    if (!summary?.cadence_power) return [];
+    const tMetric: MetricText = (key, vars) => t(key as DictKey, vars);
+    return buildCadenceMetrics(summary.cadence_power, tMetric);
+  }, [summary, t]);
+
   if (summary === undefined) return <View style={styles.page} />;
   if (!summary) {
     return (
@@ -325,6 +332,18 @@ export default function ActivityDetailScreen() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>{t('chart.peak_curve')}</Text>
             <PeakCurve curve={p.peak_curve} ftp={ac.ftp_watts} />
+          </View>
+        )}
+
+        {/* 踏频-功率分析（M5 回补：数据 M1 起随 summary 入库、仅 UI 缺失；位置在
+            数据质量与异常卡上方，对齐 Web 版 cadencePowerHtml → anomaliesHtml 顺序） */}
+        {summary.cadence_power && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{t('cad.title')}</Text>
+            <MetricGrid items={cadenceMetrics} />
+            <Text style={styles.dqLine}>
+              {t(`cad.style.${summary.cadence_power.style}` as never)}
+            </Text>
           </View>
         )}
 

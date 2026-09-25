@@ -32,8 +32,10 @@ import { estimateFtpFromHistory } from '../src/core/ftp.ts';
 import { monthlySummaryFromRows } from '../src/core/monthly.ts';
 import {
   buildActivityMetrics,
+  buildCadenceMetrics,
   formatNum,
   formatDuration,
+  formatDurationClock,
   formatPace,
   metricColumns,
 } from '../src/core/metrics.ts';
@@ -674,4 +676,34 @@ test('formatNum/formatDuration/formatPace: 数值口径与边界（同 Web 版 c
   assert.equal(metricColumns(360), 2); // 窄屏两列（同 Web 版窄屏）
   assert.equal(metricColumns(720), 4);
   assert.equal(metricColumns(1280), 4); // 上限 4 列
+});
+
+test('formatDurationClock: Web fmtDur 同口径（秒先四舍五入，≥1h → h:mm:ss）', () => {
+  assert.equal(formatDurationClock(null), '-');
+  assert.equal(formatDurationClock(0), '0:00');
+  assert.equal(formatDurationClock(59.4), '0:59'); // 秒先四舍五入
+  assert.equal(formatDurationClock(59.6), '1:00');
+  assert.equal(formatDurationClock(3599.49), '59:59');
+  assert.equal(formatDurationClock(3600), '1:00:00'); // 恰 1 小时进位
+  assert.equal(formatDurationClock(3661), '1:01:01');
+});
+
+test('buildCadenceMetrics: 五格顺序与取值对齐 Web cadencePowerHtml（corr 缺失兜底 "-"）', () => {
+  const t = (key) => key; // 取词桩：只验证 key 透传与数值格式化
+  const items = buildCadenceMetrics(
+    { sample_sec: 3661, avg_cadence: 88, pct_low_cadence: 30, pct_high_cadence: 45.5, cadence_power_corr: 0.5 },
+    t,
+  );
+  assert.deepEqual(items, [
+    { label: 'cad.effort', value: '1:01:01', sub: 'cad.effort_sub' },
+    { label: 'cad.avg', value: '88', unit: 'rpm' },
+    { label: 'cad.low', value: '30', unit: '%', sub: 'cad.low_sub' },
+    { label: 'cad.high', value: '45.5', unit: '%', sub: 'cad.high_sub' },
+    { label: 'cad.corr', value: '0.5' },
+  ]);
+  const missingCorr = buildCadenceMetrics(
+    { sample_sec: 120, avg_cadence: 90.2, pct_low_cadence: 10, pct_high_cadence: 20, cadence_power_corr: null },
+    t,
+  );
+  assert.equal(missingCorr[4].value, '-'); // 相关系数分母为 0 时 analyze 产出 null
 });

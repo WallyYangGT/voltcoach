@@ -8,7 +8,7 @@
  * 本模块只负责「什么条件下出哪一格、值怎么格式化」，因此可在 node:test 直接断言。
  */
 
-import type { Summary } from './analyze.ts';
+import type { CadencePower, Summary } from './analyze.ts';
 import type { DictKey } from '../i18n/dict.ts';
 import { formNote, type Lang } from './i18n.ts';
 
@@ -50,6 +50,36 @@ export function formatPace(minPerKm: number | null | undefined): string {
     s = 0;
   }
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/** 时长钟面格式（口径同 Web 版 common.js fmtDur：秒先四舍五入，≥1h → h:mm:ss，否则 m:ss） */
+export function formatDurationClock(sec: number | null | undefined): string {
+  if (sec == null) return '-';
+  const s = Math.round(sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h > 0
+    ? `${h}:${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+    : `${m}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/**
+ * summary.cadence_power → 踏频-功率分析卡指标格（M5 回补，顺序与小字注释逐字对齐
+ * Web 版 views/activities.js cadencePowerHtml）。数值 analyze 侧已按口径舍入
+ * （踏频 1 位 / 占比 1 位 / 相关系数 2 位），这里直出字符串保持与 Web 渲染一致；
+ * 相关系数缺失（分母为 0）显示 "-"。
+ */
+export function buildCadenceMetrics(cp: CadencePower, t: MetricText): MetricItem[] {
+  return [
+    { label: t('cad.effort'), value: formatDurationClock(cp.sample_sec), sub: t('cad.effort_sub') },
+    { label: t('cad.avg'), value: String(cp.avg_cadence), unit: 'rpm' },
+    { label: t('cad.low'), value: String(cp.pct_low_cadence), unit: '%', sub: t('cad.low_sub') },
+    { label: t('cad.high'), value: String(cp.pct_high_cadence), unit: '%', sub: t('cad.high_sub') },
+    {
+      label: t('cad.corr'),
+      value: cp.cadence_power_corr == null ? '-' : String(cp.cadence_power_corr),
+    },
+  ];
 }
 
 /**
