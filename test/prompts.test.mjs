@@ -222,13 +222,22 @@ test('记忆段：id DESC 反转为时间正序、#id 标注、空态句', () =>
   assert.match(empty, /（暂无记忆——这是你第一次积累对用户的了解/);
 });
 
-test('agentic 工具指引段：9 个工具与 4 条规则', () => {
+test('agentic 工具指引段：11 个工具与 6 条规则（含 FTP 更新/重新分析）', () => {
   const s = buildAgenticSection('zh');
-  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout']) {
+  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity']) {
     assert.ok(s.includes(`- ${name}：`), name);
   }
   assert.match(s, /1\. 只在上方预装数据不足以回答时才调用工具/);
   assert.match(s, /4\. 需要先调用工具时，中间轮只写简短过渡语/);
+  // 新增规则：主动更新须在回答中指出旧值→新值；重新分析后说明指标变化
+  assert.match(s, /5\. FTP 自动更新/);
+  assert.match(s, /「FTP 已由 X 更新为 Y」/);
+  assert.match(s, /引导其到「我的」页手动设置/);
+  assert.match(s, /6\. 重新分析/);
+  const en = buildAgenticSection('en');
+  assert.match(en, /5\. FTP auto-update/);
+  assert.match(en, /"FTP has been updated from X to Y"/);
+  assert.match(en, /6\. Re-analysis/);
 });
 
 test('对话指令与当前时间段：双语切换', () => {
