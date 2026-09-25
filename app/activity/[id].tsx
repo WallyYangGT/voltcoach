@@ -341,9 +341,8 @@ export default function ActivityDetailScreen() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>{t('cad.title')}</Text>
             <MetricGrid items={cadenceMetrics} />
-            <Text style={styles.dqLine}>
-              {t(`cad.style.${summary.cadence_power.style}` as never)}
-            </Text>
+            {/* 不用 as never：模板字面量类型恰为三个 DictKey 成员，style 扩枚举而未补词典时 tsc 直接报错 */}
+            <Text style={styles.dqLine}>{t(`cad.style.${summary.cadence_power.style}`)}</Text>
           </View>
         )}
 
@@ -428,6 +427,12 @@ const styles = StyleSheet.create({
   emptySmall: { color: palette.muted, textAlign: 'center', paddingVertical: 24 },
   dqList: { gap: 4 },
   dqLine: { color: palette.muted, fontSize: 12.5, lineHeight: 19 },
-  dqToggle: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: -4 },
+  dqToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginLeft: -10,
+    paddingVertical: 6, // 触控目标 ≥48dp 无障碍建议（行高约 19px + 上下 6px）
+  },
   dqToggleText: { color: palette.muted, fontSize: 12.5 },
 });

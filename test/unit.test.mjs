@@ -28,6 +28,7 @@ import { gzip } from 'pako';
 import { parseRecordsCsv, thinRecords, safeName, firstTimestampFromCsvHead, firstRecordTimestampFromGz } from '../src/core/records.ts';
 import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '../src/core/form.ts';
 import { formNote, formatAnomaly } from '../src/core/i18n.ts';
+import { DICT } from '../src/i18n/dict.ts';
 import { estimateFtpFromHistory } from '../src/core/ftp.ts';
 import { monthlySummaryFromRows } from '../src/core/monthly.ts';
 import {
@@ -706,4 +707,10 @@ test('buildCadenceMetrics: 五格顺序与取值对齐 Web cadencePowerHtml（co
     t,
   );
   assert.equal(missingCorr[4].value, '-'); // 相关系数分母为 0 时 analyze 产出 null
+});
+
+test('词典 zh/en key 集合一致（en 缺 key 时 t() 兜底会向英文用户渲染裸 key）', () => {
+  const zh = Object.keys(DICT.zh).sort();
+  const en = Object.keys(DICT.en).sort();
+  assert.deepEqual(en, zh);
 });
