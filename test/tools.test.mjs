@@ -45,16 +45,29 @@ function fakeIo(overrides = {}) {
       io._savedMemory = input; // 供断言 source 标记
       return 42;
     },
+    applyFtpUpdate: async (lang) => {
+      io._ftpUpdateLang = lang;
+      return { applied: true, old_ftp_w: 210, new_ftp_w: 224, updated_at: '2026-03-25T10:00:00.000Z' };
+    },
+    reanalyzeActivity: async (name, lang) => {
+      if (name !== 'a.fit') throw new Error(`训练库中找不到: ${name}`);
+      io._reanalyze = { name, lang };
+      return {
+        ok: true, file_name: name, date: '2026-03-25', sport: 'cycling',
+        ftp_used: 224, max_hr_used: 190, weight_used: 65,
+        changes: { tss: { old: 120, new: 128 } }, form: { ctl: 55, atl: 48, tsb: 7 },
+      };
+    },
     ...overrides,
   };
   return io;
 }
 
-test('toolDefs：10 个工具、双语描述、schema 关键字段', () => {
+test('toolDefs：12 个工具、双语描述、schema 关键字段', () => {
   const zh = toolDefs('zh');
-  assert.equal(zh.length, 10);
+  assert.equal(zh.length, 12);
   const names = zh.map((d) => d.function.name);
-  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory']) {
+  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'update_ftp', 'reanalyze_activity']) {
     assert.ok(names.includes(n), n);
   }
   assert.equal(zh.every((d) => d.type === 'function'), true);
@@ -64,8 +77,11 @@ test('toolDefs：10 个工具、双语描述、schema 关键字段', () => {
   // limit 描述注入 AGENTIC.list_limit
   const listDef = zh[0].function.parameters.properties.limit;
   assert.match(listDef.description, new RegExp(`最大 ${AGENTIC.list_limit}`));
-  // save_memory 必填 content；simulate_form 必填 plan
-  assert.deepEqual(zh.at(-1).function.parameters.required, ['content']);
+  // save_memory 必填 content；simulate_form 必填 plan；reanalyze_activity 必填 file_name
+  const byName = Object.fromEntries(zh.map((d) => [d.function.name, d]));
+  assert.deepEqual(byName.save_memory.function.parameters.required, ['content']);
+  assert.deepEqual(byName.reanalyze_activity.function.parameters.required, ['file_name']);
+  assert.deepEqual(Object.keys(byName.update_ftp.function.parameters.properties), []); // 零参
 });
 
 test('list_activities：日期范围/运动/分类过滤 + limit 截断 + 非法日期报错', async () => {
@@ -176,6 +192,36 @@ test('save_memory：source 场景标记写入、错误兜 {error} 不抛异常',
   assert.equal(io._savedMemory.source, 'chat'); // 场景标记随 ctx 注入
   const empty = JSON.parse(await exec('save_memory', { content: '' }));
   assert.match(empty.error, /记忆内容不能为空/); // db 层双语 Error 被兜为 {error}
+});
+
+test('update_ftp：零参透传编排层结果，lang 随 ctx 注入；en 场景同构', async () => {
+  const io = fakeIo();
+  const exec = createExecuteTool(io, { lang: 'zh' });
+  const ok = JSON.parse(await exec('update_ftp', {}));
+  assert.equal(ok.applied, true);
+  assert.equal(ok.new_ftp_w, 224);
+  assert.equal(io._ftpUpdateLang, 'zh');
+  const ioEn = fakeIo();
+  await createExecuteTool(ioEn, { lang: 'en' })('update_ftp', {});
+  assert.equal(ioEn._ftpUpdateLang, 'en');
+  // 传了参数也不影响（零参工具，多余键被忽略）
+  const ignored = JSON.parse(await exec('update_ftp', { ftp_watts: 999 }));
+  assert.equal(ignored.applied, true);
+});
+
+test('reanalyze_activity：file_name 校验/路径穿越拒绝；不存在兜 {error}；成功返回新旧对比', async () => {
+  const io = fakeIo();
+  const exec = createExecuteTool(io, { lang: 'zh' });
+  const ok = JSON.parse(await exec('reanalyze_activity', { file_name: 'a.fit' }));
+  assert.equal(ok.ok, true);
+  assert.equal(ok.ftp_used, 224);
+  assert.equal(ok.changes.tss.old, 120);
+  assert.equal(ok.changes.tss.new, 128);
+  assert.equal(io._reanalyze.lang, 'zh');
+  const missing = JSON.parse(await exec('reanalyze_activity', { file_name: 'x.fit' }));
+  assert.match(missing.error, /工具执行失败: 训练库中找不到: x\.fit/);
+  const evil = JSON.parse(await exec('reanalyze_activity', { file_name: '../etc/passwd' }));
+  assert.match(evil.error, /file_name 非法/);
 });
 
 test('executeTool：未知工具与执行异常均返回 {error}', async () => {

@@ -53,6 +53,8 @@ import { buildSkillsSection } from '@/prompts/skills';
 import { buildChatSystemSection } from '@/prompts/chat';
 import { toolDefs, createExecuteTool, type ToolIo } from '@/tools';
 import { loadStoredRecords } from '@/records-store';
+import { applyAiFtpUpdate } from './ftp-apply';
+import { reanalyzeActivity } from './reanalyze';
 
 // ---------------- ToolIo 绑定（db + records-store → 工具层数据访问） ----------------
 
@@ -72,6 +74,8 @@ function buildToolIo(): ToolIo {
     cyclingSummariesSince: (days) => cyclingSummariesSince(days),
     computeForm: (date) => computeForm(date, 'zh'),
     saveMemory: (input, lang) => saveMemory(input, lang),
+    applyFtpUpdate: (lang) => applyAiFtpUpdate(lang),
+    reanalyzeActivity: (name, lang) => reanalyzeActivity(name, lang),
   };
 }
 

@@ -133,7 +133,7 @@ export const AI_CONFIG: AiConfig = {
 
 // Agentic 工具调用参数（M3 src/ai / src/tools）
 export const AGENTIC = {
-  max_rounds: 6, // 最大工具调用轮数，超出后强制模型直接作答
+  max_rounds: 8, // 最大工具调用轮数，超出后强制模型直接作答（M5 扩到 8：估算→更新 FTP→重算数次训练→汇总作答）
   tool_result_max_chars: 4000, // 单个工具结果截断上限（超出附"（结果已截断）"标记）
   records_max_points: 600, // get_activity_records 时序抽稀点数上限
   list_limit: 50, // list_activities 返回条数上限

@@ -43,6 +43,9 @@ const TOOL_TEXT: Record<Lang, Record<string, string>> = {
     'save_memory.content': '记忆内容：带主语的完整陈述，≤500 字',
     'save_memory.category': '分类：general 通用 / injury 伤病 / schedule 日程 / goal 目标 / preference 偏好',
     'save_memory.supersedes_id': '取代某条旧记忆的 id（注入的记忆清单中有 #id 标注），同主题更新时使用',
+    update_ftp: '按当前最佳科学估算更新用户的 FTP 配置（无需参数，数值始终来自估算器而非模型自拟）。工具内部重新估算并硬校验数据量、两法一致性、全力锚点与数据新鲜度，不满足时返回拒绝原因与数据需求清单。',
+    reanalyze_activity: '按当前骑手参数（FTP/最大心率/体重）重新分析一次训练并写回训练库：从已存逐秒数据重算 IF/TSS/功率心率区间/间歇识别等并覆盖该训练的分析结果，返回新旧指标对比。FTP 更新后可对受影响的训练（如估算锚点骑行）或用户指名的训练使用。',
+    'reanalyze_activity.file_name': '训练文件名（list_activities 返回的 file_name）',
   },
   en: {
     list_activities: "Query the brief activity list (catalog page): date/type/category/duration/distance/TSS/NP/IF. Use it first to find the target activity's file_name, then dig into a single one with get_activity_summary or get_activity_records.",
@@ -77,6 +80,9 @@ const TOOL_TEXT: Record<Lang, Record<string, string>> = {
     'save_memory.content': 'Memory content: a complete statement with a subject, ≤500 chars',
     'save_memory.category': 'Category: general / injury / schedule / goal / preference',
     'save_memory.supersedes_id': "id of an old memory to supersede (ids are #annotated in the injected memory list); use when updating the same topic",
+    update_ftp: "Update the user's FTP configuration from the current best scientific estimate (no arguments; the value always comes from the estimator, never invented by the model). The tool re-estimates internally and hard-validates data volume, method consistency, all-out anchor and data freshness; when unmet it returns the refusal reason and data-needs list.",
+    reanalyze_activity: "Re-analyze one activity with the current athlete parameters (FTP/max HR/weight) and write it back to the library: recomputes IF/TSS/power-HR zones/interval detection etc. from stored per-second data, overwrites that activity's analysis results, and returns an old-vs-new metrics diff. Use after an FTP update for affected rides (e.g. the anchor ride) or rides the user names.",
+    'reanalyze_activity.file_name': 'Activity file name (file_name from list_activities)',
   },
 };
 
@@ -262,6 +268,29 @@ export function toolDefs(lang: Lang = 'zh'): ToolDef[] {
             },
           },
           required: ['content'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_ftp',
+        description: L('update_ftp'),
+        // 零参：数值只来自估算器，模型没有自定 FTP 的入口
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'reanalyze_activity',
+        description: L('reanalyze_activity'),
+        parameters: {
+          type: 'object',
+          properties: {
+            file_name: { type: 'string', description: L('reanalyze_activity.file_name') },
+          },
+          required: ['file_name'],
         },
       },
     },

@@ -3,8 +3,9 @@
  *
  * 三类工具：只读查询（数据经 ToolIo 注入，不重复实现查询逻辑）、纯计算
  * （simulate_form / generate_workout → src/planning 纯函数，simulate_form 未显式给
- * 起始 CTL/ATL 时经 ToolIo 读一次训练库当前值）、写（save_memory 只写 ai_memories，
- * 带 source 场景标记，不触碰 activities/settings）。
+ * 起始 CTL/ATL 时经 ToolIo 读一次训练库当前值）、写（save_memory 写 ai_memories，
+ * 带 source 场景标记；M5 追加 update_ftp——数值只来自估算器、采纳门槛在 core/ftp
+ * 硬校验；reanalyze_activity 重算写回单次训练。两者编排均在 services 层，本层薄壳）。
  *
  * 与旧版的差异（其余逐字平移）：旧版直接调 db.js 同步查询并读全局同步过的 ATHLETE；
  * App 版所有 IO 异步、生效骑手参数显式注入——由 createExecuteTool(io) 工厂闭包持有，
@@ -62,6 +63,16 @@ export interface ToolIo {
   computeForm(date: string): Promise<{ ctl: number; atl: number } | null>;
   /** 保存 AI 记忆，返回 id（非法输入抛双语 Error，本层兜为 {error}） */
   saveMemory(input: { content?: unknown; category?: unknown; source?: string | null; supersedes_id?: unknown }, lang: Lang): Promise<number>;
+  /**
+   * AI 触发的 FTP 更新（估算 → 采纳门槛 → 写回，编排见 services/ftp-apply）。
+   * 拒绝不抛错，返回 {applied:false, reason, estimate}；成功返回 {applied:true, ...}。
+   */
+  applyFtpUpdate(lang: Lang): Promise<unknown>;
+  /**
+   * 按当前骑手参数重新分析一次训练并写回（编排见 services/reanalyze）。
+   * 活动不存在/缺逐秒数据抛双语 Error，本层兜为 {error}。
+   */
+  reanalyzeActivity(fileName: string, lang: Lang): Promise<unknown>;
 }
 
 /** 执行上下文：source 场景标记（save_memory 写入 ai_memories.source），lang 消息语言 */
@@ -244,6 +255,20 @@ const toolSaveMemory: ToolImpl = async (args, ctx, io) => {
   );
 };
 
+/** update_ftp：AI 教练按当前最佳估算更新 FTP（零参——数值只来自估算器，模型无自定数值入口） */
+const toolUpdateFtp: ToolImpl = async (_args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  return toResult(await io.applyFtpUpdate(lang), lang);
+};
+
+/** reanalyze_activity：按当前骑手参数重算一次训练并写回，返回新旧指标对比 */
+const toolReanalyzeActivity: ToolImpl = async (args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  const name = safeName(String(args?.file_name ?? ''));
+  if (!name) return errResult(t(lang, 'tool.name_invalid'));
+  return toResult(await io.reanalyzeActivity(name, lang), lang);
+};
+
 const TOOL_IMPL: Record<string, ToolImpl> = {
   list_activities: toolListActivities,
   get_activity_summary: toolGetActivitySummary,
@@ -255,6 +280,8 @@ const TOOL_IMPL: Record<string, ToolImpl> = {
   simulate_form: toolSimulateForm,
   generate_workout: toolGenerateWorkout,
   save_memory: toolSaveMemory,
+  update_ftp: toolUpdateFtp,
+  reanalyze_activity: toolReanalyzeActivity,
 };
 
 export type ExecuteTool = (name: string, args: Record<string, unknown> | null) => Promise<string>;
