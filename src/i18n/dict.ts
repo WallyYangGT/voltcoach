@@ -320,7 +320,8 @@ export const DICT = {
     'me.about': '关于',
     'me.soon': '（后续里程碑开放）',
 
-    // ---- M4：数据管理（备份导出导入 / 本地快照 / 顽鹿同步） ----
+    // ---- M4：数据管理（备份导出导入 / 本地快照 / 重复记录检查）；顽鹿同步（data.sync.*）
+    //      卡片 M5 收尾后挪至「我的」页 AI 服务下方（src/components/OnelapSyncCard.tsx），键名沿用此命名空间 ----
     'data.title': '数据管理',
     'data.sub': '备份迁移（数据全部在本机）',
     'data.sync.title': '顽鹿同步',

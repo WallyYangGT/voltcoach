@@ -7,13 +7,13 @@
   },
   {
     "id": "kimi",
-    "label": "Kimi（月之暗面）",
+    "label": "Kimi",
     "baseUrl": "https://api.moonshot.cn/v1",
-    "models": ["kimi-k3", "kimi-k2.6", "kimi-k2.7-code"]
+    "models": ["kimi-k2.6", "kimi-k3", "kimi-k2.7-code"]
   },
   {
     "id": "glm",
-    "label": "智谱 GLM",
+    "label": "GLM",
     "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
     "models": ["glm-5", "glm-4.7", "glm-4.6"]
   },

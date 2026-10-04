@@ -38,7 +38,9 @@ export function OnelapSyncCard() {
     try {
       const [acct, state] = await Promise.all([getOnelapAccount(), getSyncState()]);
       setHasAccount(Boolean(acct));
-      if (acct) setAccount(acct.account); // 只回填账号，密码保持密文位不回显
+      // 只回填账号且仅在输入框为空时（卡片在 tab 页，聚焦频繁，避免覆盖编辑中的草稿）；
+      // 密码保持密文位不回显
+      if (acct) setAccount((cur) => (cur.trim() === '' ? acct.account : cur));
       setSyncStateLocal(state);
     } catch (e) {
       console.warn('顽鹿同步卡加载失败:', e);

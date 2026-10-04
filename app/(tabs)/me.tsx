@@ -160,11 +160,16 @@ export default function MeScreen() {
   // 当前接口地址命中的预设（回显下拉选中态用；null = 自定义）
   const matchedPreset = matchPresetByBaseUrl(aiBaseUrl);
 
-  // 选中预设：回填接口地址 + 第一个建议模型（两项随后仍可手改；密钥不跟随变动）
+  // 选中预设：回填接口地址；模型仅在为空、或当前值属于其它预设清单（=换厂商）时
+  // 回填本预设推荐默认——用户已手填的自定义模型不被静默覆盖
   const pickProvider = (p: AiProviderPreset) => {
     setProviderMenu(false);
     setAiBaseUrl(p.baseUrl);
-    if (p.models.length > 0) setAiModel(p.models[0]);
+    const current = aiModel.trim();
+    const shouldFillModel =
+      current === '' ||
+      AI_PROVIDER_PRESETS.some((x) => x.id !== p.id && x.models.includes(current));
+    if (shouldFillModel && p.models.length > 0) setAiModel(p.models[0]);
   };
 
   const form = data?.form ?? null;
@@ -314,7 +319,13 @@ export default function MeScreen() {
               showSoftInputOnFocus={false}
               caretHidden
               onPressIn={() => setProviderMenu(true)}
-              right={<TextInput.Icon icon="menu-down" onPress={() => setProviderMenu(true)} />}
+              right={
+                <TextInput.Icon
+                  icon="menu-down"
+                  forceTextInputFocus={false}
+                  onPress={() => setProviderMenu(true)}
+                />
+              }
               style={styles.input}
             />
           }>
@@ -378,7 +389,11 @@ export default function MeScreen() {
               autoCorrect={false}
               right={
                 matchedPreset ? (
-                  <TextInput.Icon icon="menu-down" onPress={() => setModelMenu(true)} />
+                  <TextInput.Icon
+                    icon="menu-down"
+                    forceTextInputFocus={false}
+                    onPress={() => setModelMenu(true)}
+                  />
                 ) : undefined
               }
               style={styles.input}

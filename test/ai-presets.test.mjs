@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { matchPresetByBaseUrl, normalizeBaseUrl } from '../src/ai/providerMatch.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const presets = JSON.parse(readFileSync(join(root, 'src', 'ai', 'providers.json'), 'utf8'));
@@ -53,4 +54,21 @@ test('服务商预设：至少包含 deepseek / kimi / glm / openai 四家', () 
   for (const required of ['deepseek', 'kimi', 'glm', 'openai']) {
     assert.ok(ids.has(required), `缺少必备服务商: ${required}`);
   }
+});
+
+test('地址匹配：命中与归一化（大小写/尾斜杠/空白/空串）——回显「选中服务商」的口径', () => {
+  const fixtures = [
+    { id: 'a', baseUrl: 'https://api.example.com/v1' },
+    { id: 'b', baseUrl: 'https://api.b.com' },
+  ];
+  assert.equal(matchPresetByBaseUrl('https://api.example.com/v1', fixtures)?.id, 'a');
+  assert.equal(matchPresetByBaseUrl('https://api.example.com/v1/', fixtures)?.id, 'a');
+  assert.equal(matchPresetByBaseUrl('  HTTPS://API.EXAMPLE.COM/V1 ', fixtures)?.id, 'a');
+  assert.equal(matchPresetByBaseUrl('https://api.b.com/', fixtures)?.id, 'b');
+  // 非预设地址（含 mock 联调端点）→ 自定义
+  assert.equal(matchPresetByBaseUrl('http://10.0.2.2:8787/v1', fixtures), undefined);
+  assert.equal(matchPresetByBaseUrl('https://api.example.com/v1/x', fixtures), undefined);
+  assert.equal(matchPresetByBaseUrl('', fixtures), undefined);
+  assert.equal(matchPresetByBaseUrl('   ', fixtures), undefined);
+  assert.equal(normalizeBaseUrl('https://A.com///'), 'https://a.com');
 });

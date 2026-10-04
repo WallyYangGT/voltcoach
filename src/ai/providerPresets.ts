@@ -6,34 +6,31 @@
  * 口径约束：
  * - baseUrl 必须不带末尾斜杠——src/ai/http.ts 按 `${baseUrl}/chat/completions` 拼
  *   完整端点，带斜杠会出现双斜杠；
- * - 模型列表是"常见可选值"而非完整清单，模型名始终以厂商账号实际可用为准
- *   （设置页 note 已说明），用户可随时手改；
+ * - label 必须是语言中性的拉丁品牌名——JSON 数据不进 i18n 词典，含中文会原样漏给
+ *   英文用户；
+ * - models[0] 是推荐默认（选预设且模型为空/换厂商时回填它），列表顺序即推荐顺序；
+ *   模型名始终以厂商账号实际可用为准（设置页 note 已说明），用户可随时手改；
  * - JSON 不被 node:test 直接 import（Node ESM 需要 import attributes，Metro 无此
- *   要求），数据形状由 test/ai-presets.test.mjs 用 fs 读取校验。
+ *   要求），本文件因此也进不了 node 的覆盖率报告——匹配纯逻辑拆在 providerMatch.ts
+ *   （可被 node:test 直测），数据形状由 test/ai-presets.test.mjs 用 fs 读取校验。
  */
 import presetsJson from './providers.json';
+import { matchPresetByBaseUrl as matchByList } from './providerMatch.ts';
 
 export interface AiProviderPreset {
   /** 稳定标识（菜单 key / 回显比对用），不参与请求 */
   id: string;
-  /** 菜单展示名（品牌名，语言中性） */
+  /** 菜单展示名（语言中性的拉丁品牌名，见文件头口径） */
   label: string;
   /** OpenAI 兼容接口地址（不带末尾斜杠，拼 /chat/completions 用） */
   baseUrl: string;
-  /** 常见模型名建议列表（可手改，不校验） */
+  /** 常见模型名建议列表（models[0] = 推荐默认；可手改，不校验） */
   models: string[];
 }
 
 export const AI_PROVIDER_PRESETS = presetsJson as AiProviderPreset[];
 
-/** 地址归一化：trim + 去末尾斜杠 + 小写（用户手输大小写/斜杠差异不影响回显比对） */
-function normalizeBaseUrl(url: string): string {
-  return url.trim().replace(/\/+$/, '').toLowerCase();
-}
-
-/** 按接口地址匹配预设：设置页回显「当前选中的服务商」用；不匹配即视为自定义 */
+/** 按接口地址找预设（归一化实现与测试覆盖见 providerMatch.ts）；不匹配即自定义 */
 export function matchPresetByBaseUrl(baseUrl: string): AiProviderPreset | undefined {
-  const normalized = normalizeBaseUrl(baseUrl);
-  if (!normalized) return undefined;
-  return AI_PROVIDER_PRESETS.find((p) => normalizeBaseUrl(p.baseUrl) === normalized);
+  return matchByList(baseUrl, AI_PROVIDER_PRESETS);
 }
