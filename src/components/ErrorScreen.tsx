@@ -42,7 +42,12 @@ export function ErrorScreen({ error, retry }: { error: Error; retry: () => void 
           {error?.message ?? String(error)}
         </Text>
       </ScrollView>
-      <Button mode="contained" onPress={() => retry()}>
+      {/* 边界渲染在 PaperProvider 之外拿不到 MD3 主题（默认紫与品牌不符），颜色全部显式声明 */}
+      <Button
+        mode="contained"
+        contentStyle={{ backgroundColor: palette.volt }}
+        textColor={palette.bg}
+        onPress={() => retry()}>
         {t('common.retry')}
       </Button>
     </View>
