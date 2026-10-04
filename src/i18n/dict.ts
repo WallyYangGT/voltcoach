@@ -322,7 +322,7 @@ export const DICT = {
 
     // ---- M4：数据管理（备份导出导入 / 本地快照 / 顽鹿同步） ----
     'data.title': '数据管理',
-    'data.sub': '备份迁移 · 顽鹿云同步（数据全部在本机）',
+    'data.sub': '备份迁移（数据全部在本机）',
     'data.sync.title': '顽鹿同步',
     'data.sync.desc': '绑定顽鹿账号后，打开 App 自动拉取云端骑行记录（原始 FIT，按文件名去重，只同步最近 3 个月）。账号密码保存在系统安全存储，不随备份包迁移。',
     'data.sync.account': '顽鹿账号',
@@ -641,7 +641,7 @@ export const DICT = {
 
     // ---- M4: Data management (backup export/import / local snapshot / Onelap sync) ----
     'data.title': 'Data',
-    'data.sub': 'Backup & migration · Onelap sync (all data stays local)',
+    'data.sub': 'Backup & migration (all data stays local)',
     'data.sync.title': 'Onelap sync',
     'data.sync.desc': 'Bind your Onelap account and rides are pulled automatically when the app opens (original FIT, deduplicated by file name; only the last 3 months). Credentials live in secure device storage and never migrate with backups.',
     'data.sync.account': 'Onelap account',

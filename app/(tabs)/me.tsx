@@ -1,7 +1,8 @@
 /**
  * 「我的」（M2 设置主体 + M3 AI 服务配置）：骑手摘要卡（FTP/最大心率/体重 + 当前
- * form 状态）+ 骑手参数表单 + 身份与训练目标 + AI 服务配置（BYOK，密钥存 Keystore）
- * + 界面语言 + 入口行（AI 记忆/数据管理/关于）。
+ * form 状态）+ 骑手参数表单 + 身份与训练目标 + AI 服务配置（BYOK，密钥存 Keystore；
+ * 服务商预设下拉做快速填充）+ 顽鹿同步卡（OnelapSyncCard，M5 收尾后自数据管理页
+ * 挪入）+ 界面语言 + 入口行（AI 记忆/数据管理/关于）。
  * 移植自 Web 版 views/settings.js（骑手参数/身份目标/AI 服务三面板；数据管理属 M4
  * 留入口行）；校验在 db 层（setAthlete/setProfile/setAiConfig 双语 Error，界面 Alert
  * 透传）。未配置骑手参数时顶部 banner 引导（§4.3，不强制锁定）。
@@ -16,6 +17,7 @@ import {
   matchPresetByBaseUrl,
   type AiProviderPreset,
 } from '@/ai/providerPresets';
+import { OnelapSyncCard } from '@/components/OnelapSyncCard';
 import type { FormSnapshot } from '@/core/form';
 import type { AthleteParams } from '@/core/settings';
 import { computeForm, getAiConfig, getAthleteState, getProfile, setAiConfig, setAthlete, setProfile } from '@/db';
@@ -445,6 +447,9 @@ export default function MeScreen() {
         </View>
         <Text style={styles.note}>{t('set.ai.note')}</Text>
       </View>
+
+      {/* 顽鹿同步（M5 收尾后自数据管理页挪入：账号绑定与 AI 服务同属账号类配置，原位置太深） */}
+      <OnelapSyncCard />
 
       {/* 界面语言（切换即时生效并写训练库 lang 键，AI 报告语言随动） */}
       <View style={styles.card}>

@@ -1,16 +1,18 @@
 /**
- * data.tsx — 数据管理页（M4，自「我的」入口进入）：三卡布局
- *  - 顽鹿同步（§10.4）：账号绑定（SecureStore）/ 前台自动同步开关 / 立即同步与结果
+ * data.tsx — 数据管理页（M4，自「我的」入口进入）：备份 / 本地快照 / 重复记录三卡布局
  *  - 备份（§7.2）：可选口令导出并系统分享；DocumentPicker 导入（预览确认 + 版本闸门）
  *  - 本地快照：查看/手动创建/删除（auto-latest，导入训练后自动滚动）
- * 错误提示按 BackupError.code / SyncErrorCode 映射双语词条，原始信息随详情透出。
+ *  - 重复记录检查（M5）：内容指纹找重 + 人工确认合并
+ * 顽鹿同步卡原在此处，M5 收尾后按反馈挪至「我的」页 AI 服务下方（src/components/
+ * OnelapSyncCard.tsx，逻辑未动）。错误提示按 BackupError.code 映射双语词条，原始
+ * 信息随详情透出。
  */
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Appbar, Button, Divider, Switch, TextInput } from 'react-native-paper';
+import { Appbar, Button, Divider, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { File } from 'expo-file-system';
 import { createLocalSnapshot, deleteLocalSnapshot, exportBackupToCache, readLocalSnapshotInfo, type SnapshotInfo } from '@/backup/export';
@@ -24,39 +26,18 @@ import { invalidateReportTitles } from '@/services/aiTitle';
 import {
   SCHEMA_VERSION,
   deleteActivity,
-  getSyncState,
   listActivityRideKeys,
   mergeActivityExtras,
   retargetActivityRefs,
-  setSyncState,
   type ActivityRideKey,
-  type SyncState,
 } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
-import {
-  getOnelapAccount,
-  onelapOverrideBase,
-  probeOnelapEndpoints,
-  runOnelapSync,
-  setOnelapAccount,
-  type SyncOutcome,
-} from '@/services/syncOnelap';
 import { palette } from '@/theme';
 
 export default function DataScreen() {
   const { t } = useI18n();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-
-  // —— 顽鹿同步 ——
-  const [account, setAccount] = useState('');
-  const [password, setPassword] = useState('');
-  const [hasAccount, setHasAccount] = useState(false);
-  const [syncState, setSyncStateLocal] = useState<SyncState | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [pinging, setPinging] = useState(false);
-  const [savedFlash, setSavedFlash] = useState(false);
-  const [lastOutcome, setLastOutcome] = useState<SyncOutcome | null>(null);
 
   // —— 备份 ——
   const [pass1, setPass1] = useState('');
@@ -76,11 +57,7 @@ export default function DataScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [acct, state, snap] = await Promise.all([getOnelapAccount(), getSyncState(), readLocalSnapshotInfo()]);
-      setHasAccount(Boolean(acct));
-      if (acct) setAccount(acct.account); // 只回填账号，密码保持密文位不回显
-      setSyncStateLocal(state);
-      setSnapshot(snap);
+      setSnapshot(await readLocalSnapshotInfo());
     } catch (e) {
       console.warn('数据管理页加载失败:', e);
     }
@@ -97,89 +74,6 @@ export default function DataScreen() {
       return t(`data.err.${e.code}` as DictKey) + (e.message && e.code !== e.message ? `\n${e.message}` : '');
     }
     return e instanceof Error ? e.message : String(e);
-  };
-
-  // ---------------- 顽鹿同步 ----------------
-
-  const saveAccount = async () => {
-    if (!account.trim() || !password) return;
-    try {
-      await setOnelapAccount(account, password);
-      setHasAccount(true);
-      setPassword('');
-      setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 2000);
-    } catch (e) {
-      Alert.alert(t('data.err.generic'), String(e));
-    }
-  };
-
-  const clearAccount = () => {
-    Alert.alert(t('data.sync.clear'), t('data.sync.account'), [
-      { text: t('common.cancel'), style: 'cancel' },
-      {
-        text: t('data.sync.clear'),
-        style: 'destructive',
-        onPress: async () => {
-          await setOnelapAccount('', null);
-          setAccount('');
-          setHasAccount(false);
-          load();
-        },
-      },
-    ]);
-  };
-
-  const toggleAuto = async (value: boolean) => {
-    if (!syncState) return;
-    const next = { ...syncState, auto: value };
-    setSyncStateLocal(next); // 乐观更新
-    try {
-      await setSyncState(next);
-    } catch (e) {
-      console.warn('保存同步开关失败:', e);
-      load();
-    }
-  };
-
-  const syncNow = async () => {
-    setSyncing(true);
-    setLastOutcome(null);
-    try {
-      const outcome = await runOnelapSync();
-      setLastOutcome(outcome);
-      if (outcome.error?.code === 'no_account') {
-        Alert.alert(t('data.sync.err.no_account'));
-      } else if (outcome.error?.code === 'auth') {
-        Alert.alert(t('data.sync.err.auth'), outcome.error.message);
-      } else if (outcome.error) {
-        Alert.alert(t('data.err.generic'), outcome.error.message);
-      }
-    } catch (e) {
-      // 编排层的 db 调用（读状态/写水位线）也可能抛错，不能让它静默逃逸
-      Alert.alert(t('data.err.generic'), String(e));
-    } finally {
-      setSyncing(false);
-      load();
-    }
-  };
-
-  const probeNow = async () => {
-    setPinging(true);
-    try {
-      const results = await probeOnelapEndpoints();
-      const lines = results.map((r) => {
-        const host = r.url.replace(/^https?:\/\//, '');
-        return r.reachable
-          ? t('data.sync.pingOk', { host, ms: r.ms, status: r.status ?? 0 })
-          : t('data.sync.pingFail', { host, detail: r.detail ?? '' });
-      });
-      Alert.alert(t('data.sync.pingTitle'), `${lines.join('\n')}\n\n${t('data.sync.pingNoAccount')}`);
-    } catch (e) {
-      Alert.alert(t('data.err.generic'), String(e));
-    } finally {
-      setPinging(false);
-    }
   };
 
   // ---------------- 备份导出 / 导入 ----------------
@@ -353,13 +247,6 @@ export default function DataScreen() {
     ? `${snapshot.exported_at.slice(0, 16).replace('T', ' ')} · ${snapshot.counts.activities} · ${snapshot.counts.records}`
     : t('data.snapshot.none');
 
-  const lastSyncLine = syncState?.last_sync_at
-    ? `${syncState.last_sync_at.slice(0, 16).replace('T', ' ')} · ${
-        syncState.last_result === 'ok' ? '✓' : `✗ ${syncState.last_error ?? ''}`
-      }`
-    : t('data.sync.never');
-  const overrideBase = onelapOverrideBase();
-
   return (
     <View style={styles.page}>
       <Appbar.Header style={styles.header} statusBarHeight={insets.top}>
@@ -368,92 +255,6 @@ export default function DataScreen() {
       </Appbar.Header>
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 48, gap: 12 }}>
         <Text style={styles.sub}>{t('data.sub')}</Text>
-
-        {/* 顽鹿同步 */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>{t('data.sync.title')}</Text>
-          <Text style={styles.note}>{t('data.sync.desc')}</Text>
-          {/* 联调构建显式自曝：避免把指向 mock 的包装到真机上用（曾发生过一次） */}
-          {overrideBase != null && (
-            <Text style={styles.warn}>{t('data.sync.devEndpoint', { url: overrideBase })}</Text>
-          )}
-          <TextInput
-            label={t('data.sync.account')}
-            value={account}
-            onChangeText={setAccount}
-            mode="outlined"
-            dense
-            autoCapitalize="none"
-            keyboardType="email-address"
-            style={styles.input}
-          />
-          <TextInput
-            label={t('data.sync.password')}
-            value={password}
-            onChangeText={setPassword}
-            mode="outlined"
-            dense
-            secureTextEntry
-            style={styles.input}
-          />
-          <View style={styles.row}>
-            <Button
-              mode="contained"
-              compact
-              onPress={saveAccount}
-              disabled={!account.trim() || !password || syncing}
-            >
-              {savedFlash ? t('data.sync.saved') : t('data.sync.save')}
-            </Button>
-            {hasAccount && (
-              <Button mode="text" compact onPress={clearAccount} disabled={syncing}>
-                {t('data.sync.clear')}
-              </Button>
-            )}
-          </View>
-          <Divider style={styles.divider} />
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>{t('data.sync.auto')}</Text>
-            <Switch value={syncState?.auto ?? false} onValueChange={toggleAuto} disabled={!syncState} />
-          </View>
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>{t('data.sync.last')}</Text>
-            <Text style={styles.rowValue}>{lastSyncLine}</Text>
-          </View>
-          <View style={styles.row}>
-            <Button
-              mode="outlined"
-              compact
-              onPress={syncNow}
-              disabled={syncing || pinging || !hasAccount}
-              loading={syncing}
-            >
-              {syncing ? t('data.sync.doing') : t('data.sync.now')}
-            </Button>
-            {/* 测试连接：不需要账号，只验证能否连上顽鹿服务器（排查网络/被墙/改包问题） */}
-            <Button
-              mode="text"
-              compact
-              onPress={probeNow}
-              disabled={syncing || pinging}
-              loading={pinging}
-            >
-              {pinging ? t('data.sync.pingDoing') : t('data.sync.ping')}
-            </Button>
-          </View>
-          {lastOutcome && !lastOutcome.error && (
-            <Text style={styles.note}>
-              {[
-                t('data.sync.imported', { n: lastOutcome.imported }),
-                t('data.sync.skipped', { n: lastOutcome.skipped }),
-                ...(lastOutcome.duplicates > 0
-                  ? [t('data.sync.duplicates', { n: lastOutcome.duplicates })]
-                  : []),
-                t('data.sync.failed', { n: lastOutcome.failed }),
-              ].join(' · ')}
-            </Text>
-          )}
-        </View>
 
         {/* 备份 */}
         <View style={styles.card}>
@@ -578,7 +379,6 @@ const styles = StyleSheet.create({
   warn: { color: palette.red, fontSize: 12, lineHeight: 18 },
   input: { backgroundColor: palette.panel2 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  rowLabel: { color: palette.text, fontSize: 13 },
   rowValue: { color: palette.muted, fontSize: 12, flexShrink: 1, textAlign: 'right' },
   divider: { backgroundColor: palette.lineSoft },
   dupGroup: { backgroundColor: palette.panel2, borderRadius: 8, padding: 10, gap: 4 },
