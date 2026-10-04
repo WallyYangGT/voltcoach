@@ -8,13 +8,14 @@
  * 与全应用同一来源。重试失败可反复点，确定性异常按提示重启应用。
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import type { ErrorBoundaryProps } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { Button, Text } from 'react-native-paper';
-import { DICT, LANG_STORAGE_KEY, type DictKey, type Lang } from '@/i18n';
+import { DICT, detectLang, LANG_STORAGE_KEY, type DictKey, type Lang } from '@/i18n';
 import { palette } from '@/theme';
 
-export function ErrorScreen({ error, retry }: { error: Error; retry: () => void }) {
+export function ErrorScreen({ error, retry }: ErrorBoundaryProps) {
   const [lang, setLang] = useState<Lang>('zh');
 
   useEffect(() => {
@@ -22,9 +23,11 @@ export function ErrorScreen({ error, retry }: { error: Error; retry: () => void 
     console.error('[ErrorBoundary]', error?.message);
     AsyncStorage.getItem(LANG_STORAGE_KEY)
       .then((v) => {
-        if (v === 'en') setLang('en');
+        // 已选语言 → 用之；无记录（首启即崩，I18nProvider 还没落盘）→ 按系统语言检测
+        if (v === 'en' || v === 'zh') setLang(v);
+        else setLang(detectLang());
       })
-      .catch(() => {}); // 存储异常按 zh 兜底，不再抛错
+      .catch(() => setLang(detectLang())); // 存储异常也按系统语言兜底
   }, [error]);
 
   const t = (key: DictKey) => DICT[lang][key];

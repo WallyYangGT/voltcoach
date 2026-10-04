@@ -65,7 +65,9 @@ if (!gradle.includes(ANCHOR)) {
   process.exit(1);
 }
 
-fs.writeFileSync(target, gradle.replace(ANCHOR, `${block}${ANCHOR}`));
+// 函数形式替换：块体若将来含 `$` 字符（如 Gradle 的 ${...}），字符串模式的特殊
+// 替换序列（$& $' 等）会静默改写注入内容
+fs.writeFileSync(target, gradle.replace(ANCHOR, () => `${block}${ANCHOR}`));
 console.log(
   enabled
     ? `✓ 已注入 release 签名配置（VOLTCOACH_KEYSTORE_FILE=${process.env.VOLTCOACH_KEYSTORE_FILE}）`

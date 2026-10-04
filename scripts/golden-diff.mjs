@@ -57,7 +57,9 @@ if (fixturesMissing) {
     console.warn('⚠ 真实测试素材不在库中（gitignored）——CI 环境跳过黄金 diff 门禁（本机提交前必跑）');
     process.exit(0);
   }
-  console.error(`✗ ${FIT_DIR} 中没有 .fit 文件（真实测试素材缺失，见 AGENTS.md）`);
+  if (!fs.existsSync(FIT_DIR)) console.error(`✗ 素材目录不存在：${FIT_DIR}（真实测试素材缺失，见 AGENTS.md）`);
+  else if (!fs.existsSync(GOLDEN_DIR)) console.error(`✗ 黄金基准目录不存在：${GOLDEN_DIR}（见 AGENTS.md「黄金 diff」）`);
+  else console.error(`✗ ${FIT_DIR} 中没有 .fit 文件（真实测试素材缺失，见 AGENTS.md）`);
   process.exit(1);
 }
 

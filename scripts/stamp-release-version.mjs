@@ -12,8 +12,11 @@
 import fs from 'node:fs';
 
 const [versionName, versionCode] = process.argv.slice(2);
-if (!versionName || !/^\d+$/.test(versionCode ?? '')) {
+// versionName 白名单：versionName 会进 APK 的 versionName 与产物文件名（CI 侧已把
+// tag 中的 `/` 净化为 `-`），这里拦住引号/斜杠等会破坏 app.json 或文件名的输入
+if (!versionName || !/^[0-9A-Za-z._-]+$/.test(versionName) || !/^\d+$/.test(versionCode ?? '')) {
   console.error('用法: node scripts/stamp-release-version.mjs <versionName> <versionCode>');
+  console.error('  versionName 仅允许字母数字与 . _ -（如 0.2.0）；versionCode 为正整数');
   process.exit(1);
 }
 

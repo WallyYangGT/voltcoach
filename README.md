@@ -31,8 +31,9 @@ git tag v0.1.0 && git push origin v0.1.0
 ```bash
 keytool -genkeypair -v -keystore voltcoach.keystore -alias voltcoach \
   -keyalg RSA -keysize 2048 -validity 10000
-# macOS/Linux（GitHub Secrets 填 base64 输出；keystore 本体与口令切勿提交入库）
+# macOS/Linux/Git Bash（GitHub Secrets 填 base64 输出；keystore 本体与口令切勿提交入库）
 base64 -w0 voltcoach.keystore
+# Windows PowerShell 改用：certutil -encode voltcoach.keystore keystore-b64.txt
 ```
 
 - `ANDROID_KEYSTORE_B64`：keystore 的 base64 内容

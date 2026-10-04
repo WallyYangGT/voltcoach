@@ -14,6 +14,10 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest # 预装 OpenJDK 与 Android SDK，无需自配工具链
+    timeout-minutes: 90
+    concurrency:
+      group: release-${{ github.ref }} # 同 ref 串行发版，防连打 tag 时 Release 竞态
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -47,6 +51,7 @@ jobs:
 
       # 签名（可选）：仓库 Secrets 未配置 ANDROID_KEYSTORE_* 时产物回退 debug 签名，
       # 仍可侧载体验，但不能作为正式版覆盖安装正式签名包（见 README「发版」）。
+      # 四个 Secrets 必须要么全配、要么全不配——半配直接失败（防把 debug 签名包当正式版发出去）。
       - name: 准备签名密钥
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -54,7 +59,20 @@ jobs:
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
+          missing=""
+          if [ -z "$KEYSTORE_B64" ]; then missing="$missing ANDROID_KEYSTORE_B64"; fi
+          if [ -z "$KEYSTORE_PASSWORD" ]; then missing="$missing ANDROID_KEYSTORE_PASSWORD"; fi
+          if [ -z "$KEY_ALIAS" ]; then missing="$missing ANDROID_KEY_ALIAS"; fi
+          if [ -z "$KEY_PASSWORD" ]; then missing="$missing ANDROID_KEY_PASSWORD"; fi
+          if [ -n "$missing" ]; then
+            echo "未配置的 Secrets:$missing"
+            if [ -n "$KEYSTORE_B64$KEYSTORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" ]; then
+              echo "✗ 签名 Secrets 只配了一半——要么配齐四个 ANDROID_KEYSTORE_*，要么全部不配（回退 debug 签名）"
+              exit 1
+            fi
+            echo "未配置签名 Secrets —— 本次产物使用 debug 签名（不可覆盖安装正式签名包）"
+            echo "SIGNING_NOTE=⚠ 本次产物为 **debug 签名**（正式发版需在仓库 Secrets 配置 ANDROID_KEYSTORE_*），不能覆盖安装正式签名包。" >> "$GITHUB_ENV"
+          else
             echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/voltcoach.keystore"
             {
               echo "VOLTCOACH_KEYSTORE_FILE=$RUNNER_TEMP/voltcoach.keystore"
@@ -62,9 +80,13 @@ jobs:
               echo "VOLTCOACH_KEY_ALIAS=$KEY_ALIAS"
               echo "VOLTCOACH_KEY_PASSWORD=$KEY_PASSWORD"
             } >> "$GITHUB_ENV"
-          else
-            echo "未配置 ANDROID_KEYSTORE_B64 —— 本次产物使用 debug 签名（正式发版请配置仓库 Secrets）"
+            echo "SIGNING_NOTE=正式签名发布（ANDROID_KEYSTORE_* Secrets）。" >> "$GITHUB_ENV"
           fi
+
+      # Expo SDK 57 默认 NDK 27.1.12297006 不在 runner 预装清单内（镜像只有 27.3+），
+      # 显式预装避免 AGP 自动下载不可控（升级 Expo SDK 时同步核对此版本号）
+      - name: 预装 NDK（SDK 57 默认版本）
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.1.12297006" > /dev/null
 
       - name: 注入 release 签名配置
         run: node scripts/patch-release-signing.mjs
@@ -78,8 +100,12 @@ jobs:
       - name: 发版包体检（check:apk，bundle 端点口径）
         run: npm run check:apk
 
+      # tag/分支名可能含 `/`（v1.0/rc1、feat/x），直接进文件名会在发布前最后一步崩掉，
+      # 净化为 `-`（此时构建已完成，崩在命名步最浪费）
       - name: 整理产物命名（VoltCoach-<版本>.apk）
-        run: cp android/app/build/outputs/apk/release/app-release.apk "VoltCoach-${GITHUB_REF_NAME#v}.apk"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"; VERSION="${VERSION//\//-}"
+          cp android/app/build/outputs/apk/release/app-release.apk "VoltCoach-${VERSION}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -91,4 +117,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: VoltCoach-*.apk
+          body: ${{ env.SIGNING_NOTE }} # debug 签名产物在下载页自曝
           generate_release_notes: true
