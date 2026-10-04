@@ -1,8 +1,10 @@
 /**
  * onelap.ts — 顽鹿运动（Onelap）云直拉客户端（MIGRATION_PLAN §10.4）
  *
- * 接口与流程逆向自社区验证的 OnelapSyncStrava（Go，MIT）internal/onelap，移植口径
- * 逐字对齐其实现（2026-03 官方第三方通道关停后的可行方案）。三个动作：
+ * 接口与流程逆向自社区验证的 OnelapSyncStrava（Go，MIT，Copyright (c) 2026
+ * kermit-r-wood）internal/onelap，移植口径逐字对齐其实现（2026-03 官方第三方
+ * 通道关停后的可行方案）——本文件属其 MIT 声明覆盖的实质性移植，版权声明保留于
+ * README「许可证」节。三个动作：
  *   login(account, password) → listSince(session, since) → downloadFit(session, id)
  *
  * 依赖注入（RN 与 node:test 共用本模块，不 import 任何 RN/Expo）：
