@@ -1,0 +1,94 @@
+# VoltCoach 发版流水线（MIGRATION_PLAN §8.2）：tag（v*）即打包 release APK 挂 GitHub Release。
+# 门禁（lint/单测/黄金 diff）前置——黄金 diff 依赖 gitignored 的真实素材，CI 上自动降级跳过。
+# workflow_dispatch 手动触发只构建并上传 artifact、不发布（发版演练用）。
+name: Release APK
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write # 创建 Release 并上传 APK
+
+jobs:
+  release:
+    runs-on: ubuntu-latest # 预装 OpenJDK 与 Android SDK，无需自配工具链
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # 单测跑 .ts 需要 Node ≥ 23.6 原生 type stripping
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 门禁（lint + 单测 + 黄金 diff）
+        run: |
+          npm run lint
+          npm test
+          npm run golden
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 版本戳：versionName 取 tag（v1.2.3 → 1.2.3），versionCode 用 run number 单调递增；
+      # 手动触发（无 tag）跳过，维持 app.json 现值。
+      - name: 版本戳（tag → versionName / run number → versionCode）
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/stamp-release-version.mjs "${GITHUB_REF_NAME#v}" "$GITHUB_RUN_NUMBER"
+
+      - name: Expo prebuild（生成原生工程）
+        run: npx expo prebuild --platform android --no-install
+
+      # 签名（可选）：仓库 Secrets 未配置 ANDROID_KEYSTORE_* 时产物回退 debug 签名，
+      # 仍可侧载体验，但不能作为正式版覆盖安装正式签名包（见 README「发版」）。
+      - name: 准备签名密钥
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/voltcoach.keystore"
+            {
+              echo "VOLTCOACH_KEYSTORE_FILE=$RUNNER_TEMP/voltcoach.keystore"
+              echo "VOLTCOACH_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "VOLTCOACH_KEY_ALIAS=$KEY_ALIAS"
+              echo "VOLTCOACH_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          else
+            echo "未配置 ANDROID_KEYSTORE_B64 —— 本次产物使用 debug 签名（正式发版请配置仓库 Secrets）"
+          fi
+
+      - name: 注入 release 签名配置
+        run: node scripts/patch-release-signing.mjs
+
+      - name: 打包 release APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease
+
+      - name: 发版包体检（check:apk，bundle 端点口径）
+        run: npm run check:apk
+
+      - name: 整理产物命名（VoltCoach-<版本>.apk）
+        run: cp android/app/build/outputs/apk/release/app-release.apk "VoltCoach-${GITHUB_REF_NAME#v}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VoltCoach-APK
+          path: VoltCoach-*.apk
+
+      - name: 发布 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: VoltCoach-*.apk
+          generate_release_notes: true
