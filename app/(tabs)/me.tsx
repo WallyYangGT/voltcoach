@@ -9,8 +9,13 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, Divider, Icon, List, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
+import { Button, Divider, Icon, List, Menu, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  AI_PROVIDER_PRESETS,
+  matchPresetByBaseUrl,
+  type AiProviderPreset,
+} from '@/ai/providerPresets';
 import type { FormSnapshot } from '@/core/form';
 import type { AthleteParams } from '@/core/settings';
 import { computeForm, getAiConfig, getAthleteState, getProfile, setAiConfig, setAthlete, setProfile } from '@/db';
@@ -52,6 +57,9 @@ export default function MeScreen() {
   const [savingAi, setSavingAi] = useState(false);
   // AI 配置草稿只在首次加载重灌：字段多且含密钥，focus 反复重灌会静默丢弃编辑中的修改
   const aiDraftLoadedRef = useRef(false);
+  // 服务商预设下拉（src/ai/providers.json 驱动的快速填充；地址不匹配任何预设即视为自定义）
+  const [providerMenu, setProviderMenu] = useState(false);
+  const [modelMenu, setModelMenu] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -145,6 +153,16 @@ export default function MeScreen() {
     } finally {
       setSavingAi(false);
     }
+  };
+
+  // 当前接口地址命中的预设（回显下拉选中态用；null = 自定义）
+  const matchedPreset = matchPresetByBaseUrl(aiBaseUrl);
+
+  // 选中预设：回填接口地址 + 第一个建议模型（两项随后仍可手改；密钥不跟随变动）
+  const pickProvider = (p: AiProviderPreset) => {
+    setProviderMenu(false);
+    setAiBaseUrl(p.baseUrl);
+    if (p.models.length > 0) setAiModel(p.models[0]);
   };
 
   const form = data?.form ?? null;
@@ -280,6 +298,39 @@ export default function MeScreen() {
       {/* AI 服务配置（M3 BYOK：密钥存 Keystore，其余存库；校验在 db 层 setAiConfig） */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>{t('set.ai')}</Text>
+        {/* 服务商预设（M5 后打磨）：providers.json 驱动的快速填充——选中即回填地址+模型，
+            不匹配任何预设（含手改地址）时自动显示「自定义」；字段始终可手填 */}
+        <Menu
+          visible={providerMenu}
+          onDismiss={() => setProviderMenu(false)}
+          anchor={
+            <TextInput
+              mode="outlined"
+              dense
+              label={t('set.ai.provider')}
+              value={matchedPreset ? matchedPreset.label : aiBaseUrl.trim() ? t('set.ai.provider.custom') : ''}
+              showSoftInputOnFocus={false}
+              caretHidden
+              onPressIn={() => setProviderMenu(true)}
+              right={<TextInput.Icon icon="menu-down" onPress={() => setProviderMenu(true)} />}
+              style={styles.input}
+            />
+          }>
+          {AI_PROVIDER_PRESETS.map((p) => (
+            <Menu.Item
+              key={p.id}
+              leadingIcon={matchedPreset?.id === p.id ? 'check' : undefined}
+              title={p.label}
+              onPress={() => pickProvider(p)}
+            />
+          ))}
+          <Divider />
+          <Menu.Item
+            leadingIcon={!matchedPreset && aiBaseUrl.trim() !== '' ? 'check' : undefined}
+            title={t('set.ai.provider.custom')}
+            onPress={() => setProviderMenu(false)}
+          />
+        </Menu>
         <TextInput
           mode="outlined"
           dense
@@ -309,17 +360,40 @@ export default function MeScreen() {
           autoCorrect={false}
           style={styles.input}
         />
-        <TextInput
-          mode="outlined"
-          dense
-          label={t('set.ai.model')}
-          value={aiModel}
-          onChangeText={setAiModel}
-          placeholder="kimi-k2.6"
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={styles.input}
-        />
+        {/* 模型名：命中预设时右侧箭头给出该厂商的建议模型；列表始终可手填 */}
+        <Menu
+          visible={modelMenu}
+          onDismiss={() => setModelMenu(false)}
+          anchor={
+            <TextInput
+              mode="outlined"
+              dense
+              label={t('set.ai.model')}
+              value={aiModel}
+              onChangeText={setAiModel}
+              placeholder="kimi-k2.6"
+              autoCapitalize="none"
+              autoCorrect={false}
+              right={
+                matchedPreset ? (
+                  <TextInput.Icon icon="menu-down" onPress={() => setModelMenu(true)} />
+                ) : undefined
+              }
+              style={styles.input}
+            />
+          }>
+          {matchedPreset?.models.map((m) => (
+            <Menu.Item
+              key={m}
+              leadingIcon={aiModel === m ? 'check' : undefined}
+              title={m}
+              onPress={() => {
+                setAiModel(m);
+                setModelMenu(false);
+              }}
+            />
+          ))}
+        </Menu>
         {/* 高级选项折叠区（口径同 Web 版：温度/超时/流式；agentic 工具调用总开关） */}
         <List.Accordion title={t('set.ai.advanced')} titleStyle={{ fontSize: 12, color: palette.muted }}>
           <TextInput
