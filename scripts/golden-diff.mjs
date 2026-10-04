@@ -44,15 +44,27 @@ function deepDiff(a, b, base = '') {
 
 const fmt = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));
 
+/** 素材与黄金基准都是 gitignored 的本机真实数据（AGENTS.md：严禁入库），CI 上天然缺失。
+ *  本机（提交门槛）缺失仍硬失败——防素材被误删后门禁静默失效；仅 CI=true 时降级为
+ *  警告放行（GitHub Actions 自动注入 CI=true，见 .github/workflows/release.yml）。 */
+const fixturesMissing =
+  !fs.existsSync(FIT_DIR) ||
+  !fs.existsSync(GOLDEN_DIR) ||
+  fs.readdirSync(FIT_DIR).filter((f) => f.toLowerCase().endsWith('.fit')).length === 0;
+
+if (fixturesMissing) {
+  if (process.env.CI === 'true') {
+    console.warn('⚠ 真实测试素材不在库中（gitignored）——CI 环境跳过黄金 diff 门禁（本机提交前必跑）');
+    process.exit(0);
+  }
+  console.error(`✗ ${FIT_DIR} 中没有 .fit 文件（真实测试素材缺失，见 AGENTS.md）`);
+  process.exit(1);
+}
+
 const fits = fs
   .readdirSync(FIT_DIR)
   .filter((f) => f.toLowerCase().endsWith('.fit'))
   .sort();
-
-if (!fits.length) {
-  console.error(`✗ ${FIT_DIR} 中没有 .fit 文件（真实测试素材缺失，见 AGENTS.md）`);
-  process.exit(1);
-}
 
 let failed = 0;
 for (const name of fits) {
