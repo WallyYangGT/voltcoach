@@ -73,7 +73,9 @@ jobs:
             echo "未配置签名 Secrets —— 本次产物使用 debug 签名（不可覆盖安装正式签名包）"
             echo "SIGNING_NOTE=⚠ 本次产物为 **debug 签名**（正式发版需在仓库 Secrets 配置 ANDROID_KEYSTORE_*），不能覆盖安装正式签名包。" >> "$GITHUB_ENV"
           else
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/voltcoach.keystore"
+            # certutil -encode（Windows）输出带 -----BEGIN/END CERTIFICATE----- 头尾行
+            # 与换行，先剥头尾再解码（纯 base64 粘贴则原样通过）
+            printf '%s' "$KEYSTORE_B64" | grep -v -- '-----' | base64 -d > "$RUNNER_TEMP/voltcoach.keystore"
             {
               echo "VOLTCOACH_KEYSTORE_FILE=$RUNNER_TEMP/voltcoach.keystore"
               echo "VOLTCOACH_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"

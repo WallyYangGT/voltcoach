@@ -17,6 +17,9 @@ ios/
 *.p8
 *.p12
 *.key
+# keystore 的 base64 文本形式（certutil -encode 产物，等同 keystore 本体的敏感度）
+keystore-b64.txt
+*-b64.txt
 .env
 .env.*
 
