@@ -134,3 +134,9 @@ function RootStack() {
     </Stack>
   );
 }
+
+/**
+ * expo-router 错误边界（M5）：任何路由段内未捕获的渲染异常兜底到品牌化恢复页，
+ * 避免白屏/闪退。渲染在 Provider 树之外，语言读 AsyncStorage（见 ErrorScreen）。
+ */
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';
