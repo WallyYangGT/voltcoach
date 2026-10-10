@@ -94,7 +94,7 @@ export function findDuplicateGroups<T extends RideKey>(rows: T[]): T[][] {
  * 再次导入该文件会被副本顶掉、同名行永远更新不到（2026-09-23 code-review 发现）。
  *
  * 已知边界（口径固有代价）：**同名但其实是两趟不同骑行时会被 upsert 覆盖**（本地那条
- * 的逐秒数据随之更新）。要区分只能给本地行存内容指纹或外部 id，本轮明确不做（§9.10）。
+ * 的逐秒数据随之更新）。要区分只能给本地行存内容指纹或外部 id，本轮明确不做。
  */
 export function findDuplicateOf(
   candidate: RideKey & { file_name: string },

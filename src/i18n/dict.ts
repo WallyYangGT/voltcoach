@@ -118,7 +118,7 @@ export const DICT = {
     'm.atl_sub': '训练当日疲劳',
     'm.tsb': '当日 TSB',
 
-    // ---- 底部导航（App 新信息架构 §4.1） ----
+    // ---- 底部导航（App 新信息架构） ----
     'tab.home': '首页',
     'tab.activities': '训练',
     'tab.ai': 'AI',
@@ -219,9 +219,8 @@ export const DICT = {
     'gloss.a4.d': '本机把训练数据、负荷走势与指标口径拼装成 Markdown 提示词，调用 OpenAI 兼容接口（默认 Kimi）生成报告；未配置 API 密钥时展示完整提示词，可一键复制到任意 AI 使用。',
 
     'activities.title': '训练',
-    'activities.placeholder': '训练列表与 FIT 导入（FAB）将在 M1 落地；分享面板接收同步落地。',
     'ai.title': 'AI',
-    // ---- M3：AI 会话中心（§4.2：统一历史列表 + Bottom Sheet 场景选择流） ----
+    // ---- M3：AI 会话中心（统一历史列表 + Bottom Sheet 场景选择流） ----
     'ai.center.new': '新对话',
     'ai.center.report': '生成报告',
     'ai.center.empty': '还没有会话。从一份报告或一次直接对话开始。',
@@ -627,7 +626,6 @@ export const DICT = {
     'gloss.a4.d': 'On-device, training data, load trends and metric definitions are assembled into a Markdown prompt and sent to an OpenAI-compatible API (Kimi by default); without an API key the full prompt is shown for one-click copy to any AI.',
 
     'activities.title': 'Training',
-    'activities.placeholder': 'Activity list and FIT import (FAB) land in M1, along with share-sheet intake.',
     'ai.title': 'AI',
     'me.title': 'Me',
     'me.ftp': 'FTP',

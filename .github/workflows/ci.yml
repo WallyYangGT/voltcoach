@@ -16,6 +16,9 @@ jobs:
   gate: # 名字固定——GitHub ruleset 的 required status check 指向它
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    concurrency:
+      group: ci-${{ github.ref }} # 同 ref 串行：同一 PR 连续推送取消旧的，省机时防干扰
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,10 +33,13 @@ jobs:
         run: npm ci
 
       # PR 硬闸：合并前最后一步必须提版号（version.mjs bump 双写两文件），
-      # 断言「PR 版本 > 基线版本」，忘提必红
+      # 断言「PR 版本 > 基线版本」，忘提必红。
+      # base_ref 经 env 传入（官方建议：${{ }} 内联进 shell 有注入面）
       - name: 版本校验（PR 须领先基线）
         if: github.event_name == 'pull_request'
-        run: node scripts/version.mjs check --base origin/${{ github.base_ref }}
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+        run: node scripts/version.mjs check --base "$BASE_REF"
 
       - name: 版本校验（push main：两文件一致性）
         if: github.event_name != 'pull_request'

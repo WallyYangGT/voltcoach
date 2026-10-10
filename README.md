@@ -13,7 +13,7 @@
 - **数据自主**：SQLCipher 加密训练库、`.fitbackup` 全量备份/迁移（格式见 [docs/BACKUP_FORMAT.md](./docs/BACKUP_FORMAT.md)）、顽鹿云自动同步（见下）
 - **双语界面**：中文/English
 
-> **状态**：可用（Android）；iOS 未冒烟验证。截图占位：<!-- TODO: 补真机截图 -->
+> **状态**：可用（Android）；iOS 未冒烟验证。<!-- TODO: 补真机截图 -->
 
 ## 下载安装
 
@@ -45,12 +45,14 @@ npx expo start --android  # Metro 开发服务 + 模拟器/真机
 | [docs/METRICS.md](./docs/METRICS.md) | 指标算法口径（NP/TSS/分区/峰功率…） | 公开描述（实现权威在 `src/core`） |
 | [docs/BACKUP_FORMAT.md](./docs/BACKUP_FORMAT.md) | `.fitbackup` 备份包格式规范 | 互操作规范（实现权威在 `src/backup`） |
 | [docs/RELEASING.md](./docs/RELEASING.md) | 发版 SOP、签名配置、包体检 | 发版流程权威 |
+| [SECURITY.md](./SECURITY.md) | 漏洞报告渠道与安全边界 | 安全策略权威 |
+| [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) | 随源码移植的第三方组件声明 | 许可证合规 |
 
 ## 目录导览
 
 - `app/` — Expo Router 页面路由（底部四 tab：首页/训练/AI/我的）
 - `src/` — 业务代码（`core/` 纯函数算法层；`prompts/skills/` AI 技能知识库源文件）
-- `scripts/` — 守卫与工具脚本（零依赖，仅 Node 内置库）
+- `scripts/` — 守卫与工具脚本（除 fflate 外仅用 Node 内置库）
 - `test/` — node:test 单元测试（含合成 FIT 二进制生成器）
 - `docs/` — 公开文档体系（见上方文档地图）
 - `assets/brand/` — 品牌 mark（App 图标由 `npm run icons` 从 logo.svg 生成）

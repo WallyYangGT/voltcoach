@@ -128,7 +128,7 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
     [sendFollowUp],
   );
 
-  /** 复制提示词兜底（未配置密钥时的降级路径，口径同会话中心 §1.2） */
+  /** 复制提示词兜底（未配置密钥时的降级路径，口径同会话中心） */
   const copyPrompt = useCallback(async () => {
     try {
       await Clipboard.setStringAsync(await buildReportPrompt('review', { file_name: fileName }, lang));

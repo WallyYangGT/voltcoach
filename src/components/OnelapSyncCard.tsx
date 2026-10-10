@@ -1,5 +1,5 @@
 /**
- * OnelapSyncCard — 顽鹿同步卡（§10.4）：账号绑定（SecureStore）/ 前台自动同步开关 /
+ * OnelapSyncCard — 顽鹿同步卡：账号绑定（SecureStore）/ 前台自动同步开关 /
  * 立即同步与结果 / 测试连接。原先内嵌在数据管理页，M5 收尾后按反馈挪到「我的」页
  * AI 服务下方——绑定账号属于账号类配置，与 AI 服务同类，藏在数据管理里太深。
  * 纯 UI 搬移，编排逻辑不动（runOnelapSync/probeOnelapEndpoints；前台自动同步仍在

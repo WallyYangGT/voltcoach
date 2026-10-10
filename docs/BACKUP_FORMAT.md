@@ -58,5 +58,6 @@ records/<base>.records.csv.gz       逐活动逐秒数据（<base> = 训练文�
 ## 互操作注意
 
 - 导入流程是「先安全快照本机现有库 → 再解包落库」，任何一步失败都不破坏现有数据。
-- records 的 CSV 列与 App 逐秒落盘格式一致（gzip 压缩），列定义以 `src/core/records.ts` 为准。
+- `counts` 字段在导入确认弹窗中展示，供用户人工对照包内容，导入流程**不做自动对账**。
+- records 条目是 gzip 压缩的逐秒 CSV，列序固定：`timestamp,power,heart_rate,cadence,altitude,speed,distance_m,temperature`（缺数据留空；序列化实现在 `src/core/analyze.ts` 的 `recordsToCsv`，解析读取在 `src/core/records.ts`）。fitness.db 的表结构由 App 建库代码定义（`src/db/index.ts`，`PRAGMA user_version` 即 `schema_version`）——**载荷 schema 演进不承诺向后兼容本规范**，第三方工具应以只读消费为目标。
 - 删除类操作不产生快照回滚（快照只保证「导入成功」与「误删可恢复」两个场景），第三方工具同步该语义时注意：**导入成功后滚动快照，删除后不滚**。

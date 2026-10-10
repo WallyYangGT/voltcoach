@@ -1,5 +1,5 @@
 /**
- * 底部导航：首页 / 训练 / AI / 我的（迁移计划 §4.1 四目的地）
+ * 底部导航：首页 / 训练 / AI / 我的（四目的地信息架构）
  *
  * 说明：Expo SDK 57 的 expo-router 已移除 @react-navigation 集成，官方路线是
  * NativeTabs（安卓原生 Material 3 底栏 / iOS UITabBar），比 JS tabs 更贴 MD3，

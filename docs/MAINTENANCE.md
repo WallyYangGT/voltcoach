@@ -22,7 +22,7 @@ src/
   charts/               react-native-svg 自绘图表（计算层复用 core 逻辑，渲染点数抽稀）
   components/           共用 UI 组件
   i18n/                 前端双语词典（zh 默认 / en）
-scripts/                守卫与工具脚本（全部零依赖，仅 Node 内置库）
+scripts/                守卫与工具脚本（除 fflate——备份层同用的 zip 库——外仅用 Node 内置库）
 test/                   node:test 纯函数测试（含合成 FIT 二进制生成器 make_test_fit.mjs）
 docs/                   本公开文档体系
 assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-icons.mjs 从它生成）

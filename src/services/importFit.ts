@@ -104,7 +104,7 @@ export async function importFitBytes(bytes: Uint8Array, fileName: string): Promi
     console.warn(`records 落盘失败（详情页图表将无数据）: ${safe}:`, e);
   }
 
-  // §7.2 触发点：入库成功后静默滚一份本地快照（fire-and-forget 串行链，失败仅警告）
+  // 触发点：入库成功后静默滚一份本地快照（fire-and-forget 串行链，失败仅警告）
   void rollLocalSnapshotQuietly();
   invalidateReportTitles(safe); // 同名重导入可能换了内容 → 起骑时刻缓存失效
   return { summary, duplicateOf: null };

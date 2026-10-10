@@ -1,5 +1,5 @@
 /**
- * mock-onelap-server.mjs — 顽鹿云 API 本地 mock（M4 模拟器端到端用，§10.4）
+ * mock-onelap-server.mjs — 顽鹿云 API 本地 mock（M4 模拟器端到端用）
  *
  * 复刻 OnelapSyncStrava 逆向口径的三个动作（login / ride_record/list /
  * ride_record/analysis*），登录签名按与客户端相同的 U+00D7 签名串校验——签名算法

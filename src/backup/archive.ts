@@ -3,7 +3,7 @@
  *
  * 纯函数层：只依赖 fflate（纯 JS zip 实现，Node/Hermes 通用）与 manifest 校验，
  * node:test 直接覆盖。压缩口径：zip 用 STORE（level 0）——db 与 records 本身已是
- * 密文/gzip，再 deflate 无收益只耗电；.fitbackup 本质 zip 仅为容器格式（§7.1）。
+ * 密文/gzip，再 deflate 无收益只耗电；.fitbackup 本质 zip 仅为容器格式。
  *
  * 条目白名单：只认 manifest.json / fitness.db / records/<base>.records.csv.gz，
  * 解包时其余条目静默跳过、records 条目名过 safeName 校验——防构造包的路径穿越

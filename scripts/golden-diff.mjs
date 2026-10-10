@@ -71,12 +71,14 @@ const fits = fs
   .sort();
 
 let failed = 0;
+let compared = 0;
 for (const name of fits) {
   const goldenPath = path.join(GOLDEN_DIR, `${path.basename(name, '.fit')}.summary.json`);
   if (!fs.existsSync(goldenPath)) {
     console.log(`— ${name}: 无黄金基准，跳过`);
     continue;
   }
+  compared++;
   const golden = JSON.parse(fs.readFileSync(goldenPath, 'utf8'));
   const bytes = new Uint8Array(fs.readFileSync(path.join(FIT_DIR, name)));
   const t0 = Date.now();
@@ -97,7 +99,13 @@ for (const name of fits) {
 }
 
 if (failed) {
-  console.error(`\n黄金 diff 未通过：${failed}/${fits.length} 个文件不一致`);
+  console.error(`\n黄金 diff 未通过：${failed}/${compared} 个文件不一致`);
   process.exit(1);
 }
-console.log(`\n黄金 diff 通过：${fits.length} 个真实文件与黄金基准逐字段一致`);
+// 防假绿：素材在而基准一条都没对上（基准目录指向错误/文件名不匹配）时，
+// 门禁实际什么都没验——本机硬失败防静默失效，CI 上素材本就不存在（不会走到这）
+if (!compared) {
+  console.error(`\n✗ 黄金 diff 没有比对任何文件：${fits.length} 个素材在 ${GOLDEN_DIR} 里一条基准都没有——检查基准目录（GOLDEN_DIR 可覆盖）与文件名对应关系`);
+  process.exit(1);
+}
+console.log(`\n黄金 diff 通过：${compared} 个真实文件与黄金基准逐字段一致`);

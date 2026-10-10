@@ -9,8 +9,9 @@
  *                                                       给 --base 时再断言当前版本 > 基线版本
  *                                                       （CI 对 PR 的硬闸：忘提版号必红）
  *
- * 版本格式：严格 x.y.z 三段数字（发版期 prerelease 走 tag 侧，不进本文件）。
- * 配套：发版流水线在 stamp-release-version.mjs 里断言 tag == 当前版本，防 tag 漂移。
+ * 版本格式：严格 x.y.z 三段数字（拒前导零）。发版 tag 必须与该值一致
+ * （stamp-release-version.mjs 断言）；要发预发布版本时先 bump 出稳定版本再打 tag。
+ * 配套：bump 会同步 package-lock.json 的两处 version，避免无关 lock 噪音。
  */
 
 import fs from 'node:fs';
@@ -18,7 +19,9 @@ import { execSync } from 'node:child_process';
 
 const PKG_FILE = 'package.json';
 const APP_FILE = 'app.json';
-const SEMVER = /^\d+\.\d+\.\d+$/;
+const LOCK_FILE = 'package-lock.json';
+// 拒前导零（semver 口径：01.2.3 非法，防 parseSemver 静默归一改写）
+const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 const readVersion = (file, jsonPath) => {
   const json = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -76,10 +79,22 @@ if (cmd === 'bump') {
     else json.expo.version = next;
     fs.writeFileSync(file, `${JSON.stringify(json, null, 2)}\n`);
   }
-  console.log(`✓ 版本已提升：${level} → ${next}（${PKG_FILE} + ${APP_FILE} 双写）`);
-  console.log('  记得 git add 这两个文件并入提交（PR 的最后一个 commit）。');
+  // package-lock.json 同步两处 version（存在才写）：不刷依赖、只改版本号，
+  // 防止后续任何人 npm install 产生与提版号无关的 lock diff
+  if (fs.existsSync(LOCK_FILE)) {
+    const lock = JSON.parse(fs.readFileSync(LOCK_FILE, 'utf8'));
+    lock.version = next;
+    if (lock.packages && lock.packages['']) lock.packages[''].version = next;
+    fs.writeFileSync(LOCK_FILE, `${JSON.stringify(lock, null, 2)}\n`);
+  }
+  console.log(`✓ 版本已提升：${level} → ${next}（package.json + app.json 双写，package-lock 同步）`);
+  console.log('  记得把 package.json / app.json / package-lock.json 都 git add 进提交（PR 的最后一个 commit）。');
 } else if (cmd === 'check') {
   const baseIdx = process.argv.indexOf('--base');
+  if (baseIdx > -1 && !process.argv[baseIdx + 1]) {
+    // 显式给了 --base 却没给值：宁可红也不能静默跳过「领先基线」断言（fail-open）
+    fail('--base 需要一个 git 引用（如 origin/main）——空值会使版本硬闸失效');
+  }
   const baseRef = baseIdx > -1 ? process.argv[baseIdx + 1] : undefined;
   const pkg = parseSemver(readVersion(PKG_FILE, 'version'));
   const app = parseSemver(readVersion(APP_FILE, 'expo.version'));

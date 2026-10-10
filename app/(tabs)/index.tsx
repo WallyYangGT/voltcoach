@@ -1,7 +1,7 @@
 /**
  * 首页仪表盘（M2）：CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练。
  * 移植自 Web 版 views/dashboard.js：hero 瓦片/趋势/月度/最近训练同在首页（Web 版即此
- * 信息架构），App 侧空库引导语按 §4.1 改指「训练」tab。数据一次并行取齐：
+ * 信息架构），App 侧空库引导语按移动端信息架构改指「训练」tab。数据一次并行取齐：
  * recentFormDaily(90)（趋势图与 hero 大数字同源，序列末端已延伸到今天）/ monthlySummary(6) /
  * listActivities(6)；FTP 科学估算面板见 FtpEstimatePanel（dash.ftp_btn 入口）。
  */

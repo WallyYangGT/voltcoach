@@ -1,14 +1,14 @@
 /**
- * AI 会话中心（M3，§4.2）：顶部「新对话 / 生成报告」双主操作 + 统一历史列表
+ * AI 会话中心（M3）：顶部「新对话 / 生成报告」双主操作 + 统一历史列表
  * （报告与直接对话混排时间倒序、follow_up 不单独成卡——入口在报告详情页内，
  * 类型过滤 chips）。「生成报告」走底部弹层的四场景选择流：复盘（选训练）/
  * 周期规划（无参）/ 赛前减量（比赛日期）/ 两次对比（双训练）。
  *
  * 移植自 Web 版 views/ai.js（四场景卡片表单）+ views/chat.js（对话列表），
- * 按 §4.2 拍板改为统一会话中心。场景弹层用 Paper Modal 底部面板（M2 glossary
+ * 按产品拍板改为统一会话中心。场景弹层用 Paper Modal 底部面板（M2 glossary
  * 先例；计划中 @gorhom/bottom-sheet 的降级方案，规避 reanimated 4 兼容风险）。
  * 生成流程：createReportDraft（prompt 落库 pending）→ 跳详情页 → fire
- * generateReport 后台任务；未配置 AI 时提供「复制提示词」兜底（§1.2）。
+ * generateReport 后台任务；未配置 AI 时提供「复制提示词」兜底。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import dayjs from 'dayjs';
@@ -128,7 +128,7 @@ export default function AiCenterScreen() {
     }
   };
 
-  /** 复制提示词兜底（未配置密钥时的降级路径，§1.2） */
+  /** 复制提示词兜底（未配置密钥时的降级路径） */
   const copyPrompt = async () => {
     if (!scenario || !paramReady(scenario)) {
       Alert.alert(t('ai.scenario.needParam'));
@@ -174,7 +174,7 @@ export default function AiCenterScreen() {
         contentContainerStyle={{ paddingTop: insets.top + 16, paddingBottom: 96, gap: 12 }}>
         <Text style={styles.title}>{t('ai.title')}</Text>
 
-        {/* 顶部双主操作（§4.2） */}
+        {/* 顶部双主操作 */}
         <View style={styles.actions}>
           <Button
             mode="contained"

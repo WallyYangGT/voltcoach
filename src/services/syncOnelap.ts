@@ -13,7 +13,7 @@
  * 形态更贴近官方 App 的长会话；401 时自动清缓存、重登一次并重试原请求（只重试一次，
  * 避免密码错误时的重试风暴）。账号变更/解绑即作废缓存。
  *
- * 自动同步：前台 AppState 触发（国内 ROM 后台限制多，打开时拉最可靠，§10.4），
+ * 自动同步：前台 AppState 触发（国内 ROM 后台限制多，打开时拉最可靠），
  * 模块级 1h 节流；失败仅警告不中断应用。并发防双跑：进行中的同步共享同一 Promise。
  */
 
@@ -236,7 +236,7 @@ export async function probeOnelapEndpoints(): Promise<ProbeResult[]> {
 }
 
 /**
- * 登录 + 拉取 + 入库；逐活动失败仅计数不中断（§10.4 口径），鉴权失败终止本轮。
+ * 登录 + 拉取 + 入库；逐活动失败仅计数不中断（口径），鉴权失败终止本轮。
  * 会话：优先复用缓存 token，401 时清缓存→重登一次→重试原请求（只重试一次）。
  */
 async function pullActivities(account: OnelapAccount, state: SyncState): Promise<SyncOutcome> {

@@ -1,5 +1,5 @@
 /**
- * patch-release-signing.mjs — prebuild 后为 release 构建注入正式签名配置（M5，§8.2）
+ * patch-release-signing.mjs — prebuild 后为 release 构建注入正式签名配置（M5）
  *
  * 为什么是补丁脚本：android/ 是 prebuild 生成物（gitignore 不入库），直接改
  * build.gradle 不可持续；本脚本在每次 prebuild 后跑一次，把签名块注入生成文件。

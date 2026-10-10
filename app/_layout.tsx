@@ -46,7 +46,7 @@ export default function RootLayout() {
   );
 }
 
-/** 前台自动同步（§10.4）：App 回前台触发 maybeAutoSync（未配置/节流不满足时内部静默跳过） */
+/** 前台自动同步：App 回前台触发 maybeAutoSync（未配置/节流不满足时内部静默跳过） */
 function AutoSyncDispatcher() {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (status: AppStateStatus) => {

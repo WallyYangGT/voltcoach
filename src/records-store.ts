@@ -48,7 +48,7 @@ export async function loadStoredRecords(fileName: string): Promise<SecRecord[] |
   return parseRecordsCsv(csv);
 }
 
-// ---------------- 备份打包/恢复支撑（M4，§7.2：records 整目录进出备份包） ----------------
+// ---------------- 备份打包/恢复支撑（M4，records 整目录进出备份包） ----------------
 
 /** 列出已存储 records 的 base 名（备份打包用；目录不存在返回空表） */
 export async function listStoredRecordBases(): Promise<string[]> {

@@ -24,7 +24,7 @@ npx expo start --android  # 直接拉起安卓模拟器/已连接设备
 
 ## 分支与 PR 流程
 
-main 分支受保护：**所有修改在分支上完成，提交 PR，CI（`gate` check）全绿后合并**——包括维护者本人（单人开发可将 required approvals 设为 0 自合，但 CI 必须绿）。
+main 分支受保护：**所有修改在分支上完成，提交 PR，CI（`gate` check）全绿后合并**——包括维护者本人（单人开发可将 required approvals 设为 0 自合，但 CI 必须绿）。保护规则建议同时勾选 **Require branches to be up to date before merging**：否则两个并行 PR 可能各自通过「版本领先」校验、却合出相同的版本号。
 
 ```bash
 git checkout -b feat/xxx main    # 或 fix/xxx、docs/xxx

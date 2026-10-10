@@ -7,9 +7,9 @@
  *   fitness.db                        SQLite 整库（SQLCipher 密文或明文）
  *   records/<base>.records.csv.gz     逐活动逐秒数据（<base> = 训练文件名去扩展名）
  *
- * db_key 语义（§7.2「SQLCipher 与备份的交互」实现期定稿）：
+ * db_key 语义（「SQLCipher 与备份的交互」实现期定稿）：
  *  - string：包内 fitness.db 是 SQLCipher 密文库，`PRAGMA key = '<db_key>'` 可打开。
- *    无口令导出时随包写入本机随机 key——防随手翻文件，不防拿到完整包的人（§7.2 原口径）；
+ *    无口令导出时随包写入本机随机 key——防随手翻文件，不防拿到完整包的人（原口径）；
  *  - null：两种情形——包内是明文库（旧 repo `--export`、无 SQLCipher 的 iOS 导出），
  *    或包内用用户口令派生密钥加密（导入时需用户重输口令）。manifest 层不区分这两种，
  *    由导入流程实际开库判定。
@@ -107,7 +107,7 @@ export function validateBackupManifest(value: unknown): BackupManifest {
 }
 
 /**
- * schema 版本闸门（§7.2：版本高于本机则提示升级 App）。包比本机新 → 拒绝导入；
+ * schema 版本闸门（版本高于本机则提示升级 App）。包比本机新 → 拒绝导入；
  * 包比本机旧 → 允许，导入后由开库流程跑迁移链补齐（当前 SCHEMA_VERSION=1，链为空）。
  */
 export function checkSchemaVersion(manifest: BackupManifest, currentSchemaVersion: number): void {

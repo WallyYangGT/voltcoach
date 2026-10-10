@@ -6,7 +6,7 @@
  *  - SQLCipher 已拍板启用：db key 首次随机生成（expo-crypto）
  *    存 expo-secure-store（Android Keystore），密钥不落盘；
  *  - 从零建库，M1 版 schema 一次建齐（含旧版经 ALTER 迁移得到的列），
- *    PRAGMA user_version = 1 驱动未来备份导入的迁移链（§7.2）；
+ *    PRAGMA user_version = 1 驱动未来备份导入的迁移链；
  *  - 骑手参数不再用"全局可变对象原地合并"（旧版 syncAthleteFromDb 模式），
  *    改 getEffectiveAthlete() 显式返回合并值，由调用方（导入服务）注入 analyzeFile；
  *  - CTL/ATL/TSB 递推在 src/core/form.ts（纯函数），本层只做查询。
@@ -38,7 +38,7 @@ export const SCHEMA_VERSION = 1;
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
 /** 首启随机生成 32 字节 hex 密钥存 Keystore；已有则原样返回（SQLCipher 建库/开库用）。
- *  M4 导出给备份层：无口令导出时该 key 随包写入 manifest（§7.2 口径） */
+ *  M4 导出给备份层：无口令导出时该 key 随包写入 manifest（口径） */
 export async function getDbKey(): Promise<string> {
   const existing = await SecureStore.getItemAsync(DB_KEY_STORE);
   if (existing) return existing;

@@ -5,7 +5,7 @@
  * 挪入）+ 界面语言 + 入口行（AI 记忆/数据管理/关于）。
  * 移植自 Web 版 views/settings.js（骑手参数/身份目标/AI 服务三面板；数据管理属 M4
  * 留入口行）；校验在 db 层（setAthlete/setProfile/setAiConfig 双语 Error，界面 Alert
- * 透传）。未配置骑手参数时顶部 banner 引导（§4.3，不强制锁定）。
+ * 透传）。未配置骑手参数时顶部 banner 引导（不强制锁定）。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
@@ -190,14 +190,14 @@ export default function MeScreen() {
       <Text style={styles.title}>{t('me.title')}</Text>
       <Text style={styles.sub}>{t('set.sub')}</Text>
 
-      {/* 首开引导 banner：未配置骑手参数时提示（不强制锁定，§4.3） */}
+      {/* 首开引导 banner：未配置骑手参数时提示（不强制锁定） */}
       {data && !data.configured && (
         <View style={[styles.banner, { borderColor: palette.voltDim }]}>
           <Text style={styles.bannerText}>{t('set.banner')}</Text>
         </View>
       )}
 
-      {/* 骑手摘要卡：三大参数 + 当前 form 状态（§4.3） */}
+      {/* 骑手摘要卡：三大参数 + 当前 form 状态 */}
       <View style={styles.card}>
         <View style={styles.summaryRow}>
           <SummaryMetric label={t('me.ftp')} value={data ? `${data.athlete.ftp_watts}W` : '—'} />

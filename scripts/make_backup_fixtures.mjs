@@ -1,13 +1,12 @@
 /**
- * make_backup_fixtures.mjs — 生成导入错误分支的夹具包（M4 冒烟用）
+ * make_backup_fixtures.mjs — 生成导入错误分支的夹具包（冒烟用）
  *
  * 用途：在设备上跑通导入的全部拒绝路径——版本超前 / 坏 zip / 错 key（口令错）/
  * 需要口令。用 App 同源纯函数层打包（fflate STORE + manifest 同构），保证夹具与
- * 真实产物格式一致；基底 db 与 records 取自一个真实包（默认取旧 repo --export 的
- * 产物，可用 argv[2] 指定任意 .fitbackup）。
+ * 真实产物格式一致；基底 db 与 records 取自一个真实的 .fitbackup 包（显式传入，
+ * 或用 FIT_READER_EXPORT_DIR 指向某个导出目录）。
  *
  * 用法：node scripts/make_backup_fixtures.mjs [基底.fitbackup] [输出目录]
- *   基底默认取旧 repo 的 export/ 目录下最新产物（D:/projects/fit-reader/export）；
  *   产物用 adb push 到模拟器 Download，再在「数据管理 → 从备份包导入」里逐个选。
  */
 
@@ -16,10 +15,10 @@ import path from 'node:path';
 import { unzipSync } from 'fflate';
 import { packBackup } from '../src/backup/archive.ts';
 
-/** 默认基底：旧 repo export/ 下最新的 .fitbackup（找不到给出可操作的报错） */
-function latestLegacyExport() {
-  const dir = process.env.FIT_READER_EXPORT_DIR ?? 'D:/projects/fit-reader/export';
-  if (fs.existsSync(dir)) {
+/** 未显式传参时：在 FIT_READER_EXPORT_DIR 指向的目录里找最新的 .fitbackup */
+function latestBase() {
+  const dir = process.env.FIT_READER_EXPORT_DIR;
+  if (dir && fs.existsSync(dir)) {
     const candidates = fs
       .readdirSync(dir)
       .filter((n) => n.endsWith('.fitbackup'))
@@ -27,14 +26,14 @@ function latestLegacyExport() {
     if (candidates.length) return path.join(dir, candidates[candidates.length - 1]);
   }
   console.error(
-    `找不到基底备份包。请先跑 \`node index.js --export\`（旧仓库），或显式传入：\n` +
-      `  node scripts/make_backup_fixtures.mjs <基底.fitbackup> [输出目录]\n` +
-      `（也可用 FIT_READER_EXPORT_DIR 指向旧仓库的 export 目录，当前找的是 ${dir}）`,
+    '缺少基底备份包。请显式传入任意一个 .fitbackup（如从 App「数据管理」导出的真实包）：\n' +
+      '  node scripts/make_backup_fixtures.mjs <基底.fitbackup> [输出目录]\n' +
+      '（或用 FIT_READER_EXPORT_DIR 指向包含 .fitbackup 的目录后不带参运行）',
   );
   process.exit(1);
 }
 
-const src = process.argv[2] ?? latestLegacyExport();
+const src = process.argv[2] ?? latestBase();
 const outDir = process.argv[3] ?? path.join(process.env.TEMP ?? '/tmp', 'backup-fixtures');
 fs.mkdirSync(outDir, { recursive: true });
 

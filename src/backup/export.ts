@@ -3,11 +3,11 @@
  *
  * 两条产出路径：
  *  - buildBackup/exportBackupToCache：完整备份包 → cache/exports/，由 UI 经
- *    expo-sharing 系统分享落用户自选位置（文件管理器/网盘/微信，§7.1 方案 A）；
+ *    expo-sharing 系统分享落用户自选位置（文件管理器/网盘/微信， 方案 A）；
  *  - createLocalSnapshot：无口令（本机 key 随包）滚动快照写 document/backups/，
- *    由导入服务在每次入库后 fire-and-forget 触发（§7.2 触发点，空间换安全）。
+ *    由导入服务在每次入库后 fire-and-forget 触发（触发点，空间换安全）。
  *
- * 口令语义（§7.2 SQLCipher 交互定稿）：设口令 → 包内库用口令派生密钥重加密，
+ * 口令语义（SQLCipher 交互定稿）：设口令 → 包内库用口令派生密钥重加密，
  * manifest.db_key=null（导入需重输口令）；不设 → 包内库用本机 key，db_key 随包
  * 写入（防随手翻文件，不防拿到完整包的人）。备份不含 AI Key 与顽鹿账号——
  * 它们存系统 Keystore（expo-secure-store），按设计不随包迁移。
@@ -116,7 +116,7 @@ let rolling = false;
 let rerollPending = false;
 
 /**
- * 静默滚动快照（§7.2 触发点：每次入库成功后调用）。失败仅警告——快照是便利性
+ * 静默滚动快照（触发点：每次入库成功后调用）。失败仅警告——快照是便利性
  * 兜底，不得影响导入主流程结果。并发合并：滚动进行中再有入库请求，只在链尾
  * 补滚一次（批量导入/同步 N 个文件时避免 N 次全量打包，O(N×全库) → O(全库)）。
  */

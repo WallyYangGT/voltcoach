@@ -6,7 +6,7 @@
 
 - **版本单一来源是 `package.json` 的 `version`**，`app.json` 的 `expo.version` 是它的镜像——两者由 `node scripts/version.mjs` 同步维护（`bump` 双写、`check` 校验一致），CI 硬闸断言两文件一致。
 - **发版 tag 必须等于当前版本**：`vX.Y.Z` tag 打在 `package.json` version = X.Y.Z 的提交上，发版流水线会断言（不一致直接失败）。
-- versionName 取 tag（`v1.2.3` → `1.2.3`），versionCode 取 GitHub Actions run number（单调递增）——两者都在打包期由 `scripts/stamp-release-version.mjs` 写入原生工程，**仓库内不手写这两个值**。
+- versionName 取 tag（`v1.2.3` → `1.2.3`），versionCode 取 GitHub Actions run number（单调递增）——两者都在打包期由 `scripts/stamp-release-version.mjs` 写入 `app.json`（随后经 prebuild 注入原生工程），**仓库内不手写这两个值**。
 
 ## 发版 checklist
 
@@ -15,7 +15,7 @@
 | 1 | 前置检查 | `git status` 干净、当前在 main、`git log --oneline -5` 确认在目标提交 | 出包与再开发不并行；多分支时**先确认分支**再打 tag |
 | 2 | 本地门禁 | `npm run lint && npm test && npm run test:coverage && npm run golden` | 全绿才继续；golden 需本地真实素材（见 [MAINTENANCE](./MAINTENANCE.md)） |
 | 3 | 确认版本 | `node scripts/version.mjs check` | version 应已是本次想发的值（合并 PR 时已 bump） |
-| 4 | 打 tag | `git tag v1.2.3 && git push origin v1.2.3` | tag == package.json version，否则流水线第 5 步失败 |
+| 4 | 打 tag | `git tag v1.2.3 && git push origin v1.2.3` | tag == package.json version，否则流水线「版本戳」步骤失败 |
 | 5 | 等 CI 门禁 | Actions 页观察 `Release APK` | lint+单测+黄金 diff（CI 无素材自动跳过 golden） |
 | 6 | 自动打包 | prebuild → 签名 → `assembleRelease` → `check:apk` | NDK 版本随 Expo SDK 固定（workflow 内注明） |
 | 7 | 产物体检 | `check:apk` 解包断言 | 见下文「发版包体检」；失败即中止发布 |
