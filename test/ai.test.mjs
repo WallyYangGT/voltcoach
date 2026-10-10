@@ -1,6 +1,6 @@
 /**
  * ai.test.mjs — src/ai 请求层与 agent 循环回归测试。
- * 自 reference/test/ai.test.mjs 同源搬运（真实 mock 服务换 mock fetch 注入——
+ * 自 fit-reader Web 版 test/ai.test.mjs 同源搬运（真实 mock 服务换 mock fetch 注入——
  * App 内传输层为 expo/fetch，其流式读取已由 M0 PoC 3 验证，这里守住解析与循环逻辑）：
  * 非流式/流式拼接/HTTP 错误透出/总超时、tool_calls 回填、bestContent 最长正文、
  * 轮数耗尽强制作答、400 降级、executeTool 异常兜 {error}。

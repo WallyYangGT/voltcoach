@@ -1,9 +1,9 @@
 /**
  * db/index.ts — 训练库（expo-sqlite + SQLCipher 加密）
  *
- * 移植自 reference/src/db.js：建表/查询 SQL 原样平移，驱动从 node:sqlite
+ * 移植自 fit-reader Web 版 src/db.js：建表/查询 SQL 原样平移，驱动从 node:sqlite
  * （同步 API）换 expo-sqlite（异步 API）。差异：
- *  - SQLCipher 已拍板启用（MIGRATION_PLAN §9.4）：db key 首次随机生成（expo-crypto）
+ *  - SQLCipher 已拍板启用：db key 首次随机生成（expo-crypto）
  *    存 expo-secure-store（Android Keystore），密钥不落盘；
  *  - 从零建库，M1 版 schema 一次建齐（含旧版经 ALTER 迁移得到的列），
  *    PRAGMA user_version = 1 驱动未来备份导入的迁移链（§7.2）；
@@ -11,7 +11,7 @@
  *    改 getEffectiveAthlete() 显式返回合并值，由调用方（导入服务）注入 analyzeFile；
  *  - CTL/ATL/TSB 递推在 src/core/form.ts（纯函数），本层只做查询。
  *
- * M3 追加（自 reference/src/db.js AI 段平移）：ai_reports / ai_chats / ai_chat_messages /
+ * M3 追加（自 fit-reader Web 版 src/db.js AI 段平移）：ai_reports / ai_chats / ai_chat_messages /
  * ai_memories 四表 CRUD 与 get/setAiConfig。差异：api_key 不入库（旧版明文存 settings 行），
  * 改存 expo-secure-store（Android Keystore，AI_KEY_STORE），get 时合并、set 时分流；
  * 其余校验口径（base_url 正则、temperature 0–2、记忆 500 字/白名单分类）与旧版逐字一致。
@@ -850,7 +850,7 @@ export async function setAiConfig(
   return merged;
 }
 
-// ---------------- AI 报告（ai_reports，M3 自 reference/src/db.js 平移） ----------------
+// ---------------- AI 报告（ai_reports，M3 自 fit-reader Web 版 src/db.js 平移） ----------------
 
 export type AiReportMode = 'review' | 'plan' | 'taper' | 'compare';
 

@@ -10,9 +10,9 @@
  * typescript（前者含 .android/.ios/.web/.native 平台后缀，后者按根 tsconfig 的
  * paths 解析 `@/*` 别名）——若在这里补 settings 块只会把基线的解析配置整键替换掉。
  *
- * 本文件只做两件事：忽略 native 工程与生成物（prebuild 产物见 AGENTS.md、reference/
- * 旧实现快照只读、docs/ 与 .expo/ 生成物），以及给 test/ 与 scripts/ 的 .mjs 补 node globals
- * （node:test / process / Buffer 等）。
+ * 本文件只做两件事：忽略 native 工程与生成物（android/ ios/ 为 prebuild 产物；
+ * docs/ 为纯文档；reference/ 为本地保留的旧版快照、不入库），以及给 test/ 与
+ * scripts/ 的 .mjs 补 node globals（node:test / process / Buffer 等）。
  */
 import expoConfig from 'eslint-config-expo/flat.js';
 import globals from 'globals';

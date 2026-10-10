@@ -1,5 +1,5 @@
 /**
- * import.ts — .fitbackup 备份导入（MIGRATION_PLAN §7.2）
+ * import.ts — .fitbackup 备份导入（格式规范见 docs/BACKUP_FORMAT.md）
  *
  * 覆盖式导入 + 防误清（§7.2 口径）：选包 → 解包校验 manifest → schema 版本闸门
  * （高于本机拒绝并提示升级 App）→ staged 库开包验证（试读，错 key/错口令在此拦下，

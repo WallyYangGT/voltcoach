@@ -1,7 +1,7 @@
 /**
  * MetricGrid.tsx — 训练详情顶部指标网格（Web 版 .metric-grid 同构）
  *
- * 视觉口径对照 reference/web/style.css：容器底色当 1px 分隔线（gap + 描边）、
+ * 视觉口径对照 Web 版 style.css：容器底色当 1px 分隔线（gap + 描边）、
  * 单元格 panel 底色、标签大写小字 → 等宽大数字（值 + 小字单位）→ 小字注释。
  * 列数随屏宽自适应（窄屏 2 列同 Web 窄屏；平板/横屏 3–4 列，避免长列表把图表挤到屏外）。
  * 数据（出哪些格、值怎么格式化）由 core/metrics 的 buildActivityMetrics 提供。

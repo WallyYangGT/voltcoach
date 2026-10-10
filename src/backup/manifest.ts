@@ -1,5 +1,5 @@
 /**
- * manifest.ts — .fitbackup 备份包清单定义与校验（MIGRATION_PLAN §7.2）
+ * manifest.ts — .fitbackup 备份包清单定义与校验（格式规范见 docs/BACKUP_FORMAT.md）
  *
  * 纯函数层：不 import 任何 RN/Expo 模块，node:test 直接覆盖。
  * 备份包 = zip（STORE，payload 已是 gzip/sqlite 不再压缩），内容三部分：

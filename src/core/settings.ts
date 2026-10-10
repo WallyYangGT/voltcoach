@@ -1,7 +1,7 @@
 /**
  * settings.ts — 全部可调配置集中于此：骑手参数出厂默认值、分区定义、各分析算法阈值。
  *
- * 移植自 reference/src/settings.js（来源 commit 35dc14f 前身快照，逻辑原样、只补类型）。
+ * 移植自 fit-reader Web 版 src/settings.js（来源 commit 35dc14f 前身版本，逻辑原样、只补类型）。
  *
  * 骑手参数（ATHLETE）与 AI 服务配置（AI_CONFIG）只是"出厂默认值"：训练库 settings 表
  * 存有 athlete / ai 两行配置，由「我的」设置页维护并作为唯一事实来源；库中无配置时

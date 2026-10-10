@@ -1,6 +1,6 @@
 /**
  * prompts.test.mjs — src/prompts 提示词层回归测试。
- * 自 reference/test（web.test.mjs 提示词相关断言 + skills/ai 测试中的拼装口径）
+ * 自 fit-reader Web 版 test/（web.test.mjs 提示词相关断言 + skills/ai 测试中的拼装口径）
  * 同源搬运：四场景拼装结构、数据整形压缩、时间戳本地化、记忆段、对话系统段。
  * zh 文案 2026-09-25 客观性修正起与旧 repo 逐字同步（回归断言依赖）。
  */

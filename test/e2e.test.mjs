@@ -1,7 +1,7 @@
 /**
  * e2e.test.mjs — 端到端回归：合成 FIT → analyzeFile（依赖注入版）→ 校验 records + summary。
  *
- * 断言搬运自 reference/test/e2e.test.mjs；差异：本版 analyzeFile 接收
+ * 断言搬运自 fit-reader Web 版 test/e2e.test.mjs；差异：本版 analyzeFile 接收
  * { bytes, fileName } 返回 { records, summary }，CSV 断言改为 recordsToCsv(records)，
  * 训练库注入（ctl/atl/tsb）与落盘不在 core 职责内、相关断言移除（黄金 diff 覆盖）。
  * 运行：npm test

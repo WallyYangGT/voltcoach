@@ -1,7 +1,7 @@
 /**
  * theme.ts — MD3 暗色主题（volt 荧光黄品牌色）
  *
- * 设计语言延续 Web 版（reference/web/style.css 的 :root 变量）：
+ * 设计语言延续 Web 版（Web 版 style.css 的 :root 变量）：
  * 深色平面科技风 + volt 荧光黄主色 + 青色辅助，等宽数字大数字排版。
  * 组件形态遵循 Material 3（Paper 5），品牌个性靠色彩与排版。
  */

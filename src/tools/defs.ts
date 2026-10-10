@@ -1,5 +1,5 @@
 /**
- * defs.ts — AI agentic 工具 JSON schema 定义（自 reference/src/tools.js 平移，只补类型）。
+ * defs.ts — AI agentic 工具 JSON schema 定义（自 fit-reader Web 版 src/tools.js 平移，只补类型）。
  * 双语：toolDefs(lang) 返回按语言本地化的工具 schema（描述随提示词语言切换）；
  * 执行层见 execute.ts（错误消息经 core/i18n 按 ctx.lang 生成）。
  */

@@ -1,7 +1,7 @@
 /**
  * form.ts — CTL/ATL/TSB 负荷模型递推（纯函数，无 IO）
  *
- * 移植自 reference/src/db.js 的 dailyTssSeries / computeForm / recentFormDaily
+ * 移植自 fit-reader Web 版 src/db.js 的 dailyTssSeries / computeForm / recentFormDaily
  * 的计算段：SQLite 查询由 src/db 层负责，本模块只做「逐日 TSS 序列 → form 递推」，
  * 使递推口径可在 node:test 中直接覆盖（口径与 TrainingPeaks 一致）：
  *   CTL_d = CTL_{d-1} + (TSS_d − CTL_{d-1}) / 42   慢性负荷（体能）

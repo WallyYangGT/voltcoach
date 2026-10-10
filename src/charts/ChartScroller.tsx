@@ -1,7 +1,7 @@
 /**
  * ChartScroller.tsx — 图表横向滚动容器
  *
- * 口径对齐 Web 版窄屏媒体查询（reference/web/style.css：`.chart-wrap{overflow-x:auto}`
+ * 口径对齐 Web 版窄屏媒体查询（Web 版 style.css：`.chart-wrap{overflow-x:auto}`
  * + `svg.chart{width:900px}`）：图表按 **固定 900px 内容宽**渲染，容器窄于 900px 时
  * 横向滚动查看整段曲线，宽于 900px（平板/横屏）时铺满容器、不做无谓滚动。
  *
@@ -11,7 +11,7 @@
 import React, { useRef, useState } from 'react';
 import { ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
 
-/** 图表内容宽（px）：Web 版窄屏口径 900px（reference/web/style.css 移动端媒体查询） */
+/** 图表内容宽（px）：Web 版窄屏口径 900px（Web 版 style.css 移动端媒体查询） */
 export const CHART_CONTENT_WIDTH = 900;
 
 interface Props {

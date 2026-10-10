@@ -1,4 +1,4 @@
-# VoltCoach 发版流水线（MIGRATION_PLAN §8.2）：tag（v*）即打包 release APK 挂 GitHub Release。
+# VoltCoach 发版流水线：tag（v*）即打包 release APK 挂 GitHub Release。
 # 门禁（lint/单测/黄金 diff）前置——黄金 diff 依赖 gitignored 的真实素材，CI 上自动降级跳过。
 # workflow_dispatch 手动触发只构建并上传 artifact、不发布（发版演练用）。
 name: Release APK

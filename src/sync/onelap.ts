@@ -1,5 +1,5 @@
 /**
- * onelap.ts — 顽鹿运动（Onelap）云直拉客户端（MIGRATION_PLAN §10.4）
+ * onelap.ts — 顽鹿运动（Onelap）云直拉客户端（同步说明见 README「顽鹿云同步说明」）
  *
  * 接口与流程逆向自社区验证的 OnelapSyncStrava（Go，MIT，Copyright (c) 2026
  * kermit-r-wood）internal/onelap，移植口径逐字对齐其实现（2026-03 官方第三方

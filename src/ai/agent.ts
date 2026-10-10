@@ -1,5 +1,5 @@
 /**
- * agent.ts — 单轮调用与 agentic 多轮循环（自 reference/src/ai.js callAI / runAgentLoop
+ * agent.ts — 单轮调用与 agentic 多轮循环（自 fit-reader Web 版 src/ai.js callAI / runAgentLoop
  * 平移，逻辑不动只补类型；配置从全局 AI_CONFIG 改为参数注入——App 版生效配置由
  * db 层 getAiConfig() 取出后传入，node:test 注入 mock 配置即可全量断言）。
  *

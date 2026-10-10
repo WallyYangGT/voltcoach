@@ -1,7 +1,7 @@
 /**
  * unit.test.mjs — 指标算法纯函数单元测试（node:test，Node ≥ 23.6 原生跑 TS）
  *
- * 断言搬运自 reference/test/unit.test.mjs（analyze 系；ftp/planning/prompts 的
+ * 断言搬运自 fit-reader Web 版 test/unit.test.mjs（analyze 系；ftp/planning/prompts 的
  * 断言随对应模块在 M3 搬运时再迁入），另覆盖本仓库新增的分支：
  * 依赖注入参数、records CSV 序列化/抽稀、form 递推、数据层本地化。
  * 运行：npm test
@@ -408,7 +408,7 @@ test('formNote/formatAnomaly: zh/en 双语渲染（zh 文案与旧版逐字一�
   );
 });
 
-// ---------------- FTP 历史估算（M2 搬运：ftp.ts，断言同源自 reference/test/unit.test.mjs） ----------------
+// ---------------- FTP 历史估算（M2 搬运：ftp.ts，断言同源自 fit-reader Web 版 test/unit.test.mjs） ----------------
 
 // 构造一次合成骑行（FTP 估算输入：db 层 cyclingSummariesSince 的元素形状）
 const mkRide = (
@@ -619,7 +619,7 @@ test('evaluateFtpApply: 估值越采纳范围 → 拒绝', () => {
   assert.equal(check.reason_vars.w, 30);
 });
 
-// ---------------- 月度汇总（M2 搬运：monthly.ts，归并口径同源自 reference/src/db.js monthlySummary） ----------------
+// ---------------- 月度汇总（M2 搬运：monthly.ts，归并口径同源自 fit-reader Web 版 src/db.js monthlySummary） ----------------
 
 // 强度分布 summary_json 构造辅助
 const zoneJson = (z) => JSON.stringify({ power: { zone_distribution_pct: z } });

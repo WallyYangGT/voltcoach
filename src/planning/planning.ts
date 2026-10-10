@@ -1,5 +1,5 @@
 /**
- * planning.ts — 计划推演纯函数（无 IO，自 reference/src/planning.js 平移，逻辑不动只补类型）。
+ * planning.ts — 计划推演纯函数（无 IO，自 fit-reader Web 版 src/planning.js 平移，逻辑不动只补类型）。
  * 供 src/tools 的计算类工具调用；消息文案经 core/i18n 按 lang 双语（缺省 zh，与旧版逐字一致）。
  *
  * - simulateForm：给定当前 CTL/ATL 与未来逐日计划 TSS，按训练库同一递推口径

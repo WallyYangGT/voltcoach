@@ -1,5 +1,5 @@
 /**
- * archive.ts — .fitbackup 备份包的 zip 打包/解包（MIGRATION_PLAN §7.2）
+ * archive.ts — .fitbackup 备份包的 zip 打包/解包（格式规范见 docs/BACKUP_FORMAT.md）
  *
  * 纯函数层：只依赖 fflate（纯 JS zip 实现，Node/Hermes 通用）与 manifest 校验，
  * node:test 直接覆盖。压缩口径：zip 用 STORE（level 0）——db 与 records 本身已是

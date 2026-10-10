@@ -1,7 +1,7 @@
 /**
  * records.ts — 逐秒记录的抽稀与 CSV 解析（纯函数层）
  *
- * 移植自 reference/src/records.js 的 loadRecords：旧版从 CSV 文件读取，本版拆成
+ * 移植自 fit-reader Web 版 src/records.js 的 loadRecords：旧版从 CSV 文件读取，本版拆成
  * 「CSV 解析」与「时间窗截取 + 抽稀」两个纯函数——文件 IO（gzip 落盘/读取）由
  * src/records-store.ts 负责，抽稀口径（≤1400 点、先截取后抽稀）与旧版一致，
  * 详情页图表与 AI 工具（M3 get_activity_records）共用。

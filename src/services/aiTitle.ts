@@ -78,7 +78,7 @@ async function loadBrief(
 /**
  * 运动类型词条名：缺词条时返回 null，让标题走「训练复盘」泛称，而不是渲染出
  * 「复盘sport.e_biking」这种原始 key——FIT 的 sport 枚举有 40+ 值，词典只覆盖常见几种
- * （旧版 Web 同款守卫，见 reference/web/js/i18n.js）。
+ * （旧版 Web 同款守卫，见 Web 版 js/i18n.js）。
  */
 function sportLabelOf(t: (key: never) => string, sport: string): string | null {
   const key = `sport.${sport}` as never;

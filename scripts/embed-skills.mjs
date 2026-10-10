@@ -70,7 +70,7 @@ export function stripSkillTitleLine(content: string): string {
   return content.replace(/^#\\s+.+\\n?/m, '').trim();
 }
 
-/** 「专业知识库」段标题与引入句（zh 与历史逐字一致，自 reference/src/skills.js 平移） */
+/** 「专业知识库」段标题与引入句（zh 与历史逐字一致，自 fit-reader Web 版 src/skills.js 平移） */
 const SECTION_TEXT: Record<Lang, { head: string; intro: string }> = {
   zh: {
     head: \`## 专业知识库\`,

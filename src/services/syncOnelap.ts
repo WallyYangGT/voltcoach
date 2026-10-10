@@ -1,5 +1,5 @@
 /**
- * syncOnelap.ts — 顽鹿云同步编排（MIGRATION_PLAN §10.4）
+ * syncOnelap.ts — 顽鹿云同步编排（同步说明见 README「顽鹿云同步说明」）
  *
  * 流程：读 SecureStore 账号 → 取会话（缓存的 token 优先，无缓存或失效才用密码登录）
  * → 云端列表（窗口化增量：`syncWindowStart` = 上次同步时间前移 24h 与「最近 90 天」

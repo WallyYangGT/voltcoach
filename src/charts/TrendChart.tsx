@@ -1,7 +1,7 @@
 /**
  * TrendChart.tsx — CTL/ATL/TSB 逐日趋势图（react-native-svg 直译）
  *
- * 直译自 reference/web/js/charts.js 的 drawTrendChart：共享纵轴（form 值域）
+ * 直译自 Web 版 charts.js 的 drawTrendChart：共享纵轴（form 值域）
  * + TSS 背景柱 + 零轴线 + 月份刻度。M2 首页仪表盘消费（数据源 recentFormDaily
  * 口径，M2 接入训练库查询），M1 一并直译完成四类图表的搬运。
  * 渲染宽由外部（ChartScroller，900px 内容宽口径）传入——90 天逐日序列在

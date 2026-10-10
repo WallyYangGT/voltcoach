@@ -1,6 +1,6 @@
 /**
  * skills.test.mjs — src/prompts/skills.ts 内嵌知识库回归测试。
- * 自 reference/test/skills.test.mjs 搬运断言（目录扫描改为 files 参数注入；
+ * 自 fit-reader Web 版 test/skills.test.mjs 搬运断言（目录扫描改为 files 参数注入；
  * 内嵌默认目录的冒烟校验保留）。
  */
 

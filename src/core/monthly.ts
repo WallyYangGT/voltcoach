@@ -1,7 +1,7 @@
 /**
  * monthly.ts — 月度训练汇总（纯函数，无 IO）
  *
- * 移植自 reference/src/db.js monthlySummary 的归并计算段（M1 form.ts 同款拆法：
+ * 移植自 fit-reader Web 版 src/db.js monthlySummary 的归并计算段（M1 form.ts 同款拆法：
  * SQLite 查询由 src/db 层负责，本模块只做「训练行 → 按自然月归并」，
  * 使归并口径可在 node:test 中直接覆盖）：
  *   - 月 TSS / 时长 / 距离 / 次数按 date 前 7 位（YYYY-MM）归并；

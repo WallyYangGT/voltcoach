@@ -1,5 +1,5 @@
 /**
- * execute.ts — 工具参数校验与执行分发（自 reference/src/tools.js 平移，逻辑不动只补类型）。
+ * execute.ts — 工具参数校验与执行分发（自 fit-reader Web 版 src/tools.js 平移，逻辑不动只补类型）。
  *
  * 三类工具：只读查询（数据经 ToolIo 注入，不重复实现查询逻辑）、纯计算
  * （simulate_form / generate_workout → src/planning 纯函数，simulate_form 未显式给

@@ -10,7 +10,7 @@
  *   node scripts/mock-onelap-server.mjs        # 前台跑服务（默认 :8791，env MOCK_ONELAP_PORT）
  *   import { createMockOnelapServer } from ...  # node:test 里起临时实例（端口 0）
  *
- * 模拟器内经 http://10.0.2.2:8791 访问宿主（Windows adb reverse 不可靠，§AGENTS 踩坑）。
+ * 模拟器内经 http://10.0.2.2:8791 访问宿主（Windows adb reverse 不可靠，见 docs/MAINTENANCE.md 构建已知坑）。
  *
  * M5 追加：FIT 的起骑时刻按活动的 start_riding_time 生成（此前是固定常量 2024-01-15，
  * 与列表元数据不符——内容指纹去重会把 5 条"同日期同时长"的活动误判成一趟骑行，

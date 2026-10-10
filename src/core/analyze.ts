@@ -1,7 +1,7 @@
 /**
  * analyze.ts — FIT 解析与指标分析管线（纯函数层，无任何 IO）
  *
- * 移植自 reference/index.js（来源快照 commit 35dc14f，逻辑原样、只补类型）。
+ * 移植自 fit-reader Web 版 index.js（来源 commit 35dc14f，逻辑原样、只补类型）。
  * 与旧版的唯一结构差异：analyzeFile() 依赖注入化——旧版直接 fs 读写 + 入库，
  * 本版接收 { bytes, fileName, athlete } 返回 { records, summary }，CSV/JSON 落盘
  * 与入库由调用方（App 导入服务）决定，使管线可单测、可在黄金 diff 脚本中复用。
@@ -784,7 +784,7 @@ export function cadencePowerAnalysis(records: SecRecord[], athlete: AthleteParam
 
 /**
  * 解析 FIT 字节并产出逐秒记录 + 汇总指标。
- * 与旧版（reference/index.js analyzeFile）的差异：不落盘 CSV/JSON、不直接写训练库、
+ * 与旧版（fit-reader Web 版 index.js analyzeFile）的差异：不落盘 CSV/JSON、不直接写训练库、
  * 不读全局骑手参数——三者全部由调用方处理，入库注入的 athlete_context form 字段
  * （ctl/atl/tsb/form_state/form_note）同样由调用方后续补写。
  */

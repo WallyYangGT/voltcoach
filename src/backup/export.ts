@@ -1,5 +1,5 @@
 /**
- * export.ts — 备份导出与本地快照（MIGRATION_PLAN §7.2）
+ * export.ts — 备份导出与本地快照（格式规范见 docs/BACKUP_FORMAT.md）
  *
  * 两条产出路径：
  *  - buildBackup/exportBackupToCache：完整备份包 → cache/exports/，由 UI 经

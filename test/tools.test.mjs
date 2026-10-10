@@ -1,6 +1,6 @@
 /**
  * tools.test.mjs — src/tools agentic 工具层回归测试。
- * 自 reference/test/web.test.mjs 工具相关断言同源搬运（db 换假 ToolIo 注入）：
+ * 自 fit-reader Web 版 test/web.test.mjs 工具相关断言同源搬运（db 换假 ToolIo 注入）：
  * 参数校验/白名单、路径穿越拒绝、结果截断、save_memory 的 source 标记、
  * simulate_form 参数清洗与起始值缺省、executeTool 异常兜 {error}。
  */

@@ -1,5 +1,5 @@
 /**
- * http.ts — chat/completions 请求层（自 reference/src/ai.js requestChatCompletion 平移，
+ * http.ts — chat/completions 请求层（自 fit-reader Web 版 src/ai.js requestChatCompletion 平移，
  * 传输层从 node:http/https 换成标准 fetch：App 内用 expo/fetch，node:test 注入 mock fetch）。
  *
  * 旧版弃用全局 fetch 的原因是 undici 内置 300s 超时静默掐断长报告；expo/fetch 是

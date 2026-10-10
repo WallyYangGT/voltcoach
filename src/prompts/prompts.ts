@@ -1,5 +1,5 @@
 /**
- * prompts.ts — AI 分析提示词模板库（自 reference/src/prompts.js 平移，逻辑不动只补类型）。
+ * prompts.ts — AI 分析提示词模板库（自 fit-reader Web 版 src/prompts.js 平移，逻辑不动只补类型）。
  *
  * 把「角色 + 指标口径 + 当前时间 + 专业知识库 + 用户背景 + 训练数据 + 固化问题」
  * 拼成完整 Markdown 提示词。双语（zh 默认 / en）：所有 builder 接受可选 lang 末参，
@@ -27,7 +27,7 @@ import type { Lang } from '../core/i18n.ts';
 /** 提示词语言缺省值 */
 type PromptLang = Lang;
 
-// ---------------- 双语静态文本（与旧 repo src/prompts.js 逐字同步；reference/ 快照为历史基准不再更新） ----------------
+// ---------------- 双语静态文本（与旧 repo src/prompts.js 逐字同步） ----------------
 
 const TEXT: Record<PromptLang, Record<string, string>> = {
   zh: {

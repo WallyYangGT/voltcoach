@@ -1,5 +1,5 @@
 /**
- * aiGenerate.ts — AI 报告与对话的本地编排层（对标 reference/server.js 的
+ * aiGenerate.ts — AI 报告与对话的本地编排层（对标 fit-reader Web 版 server.js 的
  * /api/ai 与 /api/ai/chat 端点：Web 版"202 + 轮询 + 服务端后台任务"改为
  * App 内 fire-and-forget 异步任务 + 落库状态，UI 轮询本地 db 看进度）。
  *
@@ -411,7 +411,7 @@ const RESUME_WINDOW_MS = 30 * 60_000;
  * - 未配置 AI 密钥时整体跳过（不把 pending 扫成 failed，等用户进页面自行处理）；
  * - 只补跑窗口内的 pending——窗口外的维持"进 AI 页面时补跑"的现状（此前唯一恢复
  *   路径），避免为用户早已放弃的任务重复消耗 token；SSE 无法续传，续跑 = 整份
- *   重新生成，token 重复消耗已知并接受（MIGRATION_PLAN §9）；
+ *   重新生成，token 重复消耗已知并接受；
  * - 进程内已在跑的任务由 generateReport/runChatGeneration 的注册表防双跑，无需在此判断。
  */
 export async function resumeInterruptedGenerations(lang: Lang = 'zh'): Promise<void> {

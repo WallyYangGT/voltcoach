@@ -1,7 +1,7 @@
 /**
  * dict.ts — 前端双语词典（zh 默认 / en）
  *
- * 移植自 Web 版 reference/web/js/i18n.js 的 DICT，key 命名沿用旧约定
+ * 移植自 Web 版 js/i18n.js 的 DICT，key 命名沿用旧约定
  * （nav.* / common.* / sport.* / cat.* 等），保证 M1/M2 搬运其余词条时口径连续。
  * 新增 App 专属 key：tab.*（底部四 tab）、me.*（设置页）等。
  * 约定：新增 key 必须同时补 zh 与 en；zh 文案与 Web 版逐字一致的 key 改动需谨慎

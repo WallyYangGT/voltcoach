@@ -1,5 +1,5 @@
 /**
- * chat.ts — 对话系统段拼装（自 reference/server.js buildChatSystemSection 平移为纯函数）。
+ * chat.ts — 对话系统段拼装（自 fit-reader Web 版 server.js buildChatSystemSection 平移为纯函数）。
  *
  * 每轮后台生成时按当前状态重新拼装（记忆/备注/profile 修改即时生效），历史消息只带
  * 正文；拼出的系统段以**首条 user 消息形式**注入（非 system role，与旧版口径一致）。

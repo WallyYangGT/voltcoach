@@ -2,7 +2,7 @@
  * records-store.ts — 逐秒 records 的落盘与读取（每活动一个 gzip 压缩 CSV）
  *
  * 旧版（reference）写 `<base>.records.csv` 明文到 output/ 目录；App 端按
- * MIGRATION_PLAN §7.2 改为 gzip 压缩存储（单次 4h 骑行 gzip 后约 50–150KB，
+ * M4 起改为 gzip 压缩存储（单次 4h 骑行 gzip 后约 50–150KB，
  * 不入库防止训练库膨胀）：CSV 序列化在 core/analyze.recordsToCsv（列序与旧版
  * 逐字一致，解压后即旧版格式），压缩/解压用 pako（纯 JS，Hermes 可跑）。
  *

@@ -1,6 +1,6 @@
 /**
  * planning.test.mjs — src/planning 未来负荷推演与课表生成回归测试。
- * 自 reference/src/planning.js 口径同源搬运：递推公式与训练库 CTL/ATL 同口径、
+ * 自 fit-reader Web 版 src/planning.js 口径同源搬运：递推公式与训练库 CTL/ATL 同口径、
  * 风险标注阈值、课表拼装与 TSS 估算（时长秒 × IF² / 36）。
  */
 

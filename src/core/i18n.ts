@@ -1,7 +1,7 @@
 /**
  * i18n.ts（core 层）— 数据层本地化：结构化异常与 form 状态的按语言渲染
  *
- * 移植自 reference/src/i18n.js 的 normalizeLang / t / formNote / formatAnomaly
+ * 移植自 fit-reader Web 版 src/i18n.js 的 normalizeLang / t / formNote / formatAnomaly
  * 及其依赖的 form.note.* / anom.* 词条（zh 文案与旧版逐字一致——回归断言依赖）。
  * 完整服务端词典（db 校验消息、AI 工具文案等）随 M3 AI 层搬运时合并进来。
  *
@@ -25,7 +25,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'note.too_long': '备注过长（上限 {n} 字）',
     'profile.type': '{key} 需为字符串',
     'profile.too_long': '{key} 过长（上限 {n} 字）',
-    // ---- AI 配置与记忆校验消息（src/db，M3 自 reference/src/i18n.js 逐字搬运） ----
+    // ---- AI 配置与记忆校验消息（src/db，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'ai.key_type': 'api_key 需为字符串',
     'ai.base_url': 'base_url 需为 http(s) 地址',
     'ai.model': 'model 不能为空',
@@ -37,13 +37,13 @@ const DICT: Record<Lang, Record<string, string>> = {
     'memory.supersede_not_found': '要取代的记忆不存在: {id}',
     'srv.report_body': '训练分析报告：',
     'srv.training_data': '本次训练数据（供引用具体细节）：',
-    // ---- 未来负荷推演与课表生成（src/planning，M3 自 reference/src/i18n.js 逐字搬运） ----
+    // ---- 未来负荷推演与课表生成（src/planning，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'plan.tsb_recovery': '当前 TSB {tsb} 低于 {thr}，身体未恢复，自动降级为恢复骑',
     'plan.unknown_type': '未知课表类型: {target}（可选: {opts}）',
     'plan.too_short': '{dur} 分钟装不下 {label} 课表（热身 {w} + 至少 {reps}×{min} 分钟主组 + 冷身 {c}），请增加时长或换低时长课表',
     'sim.tsb_low': 'TSB 连续 {days} 天低于 {thr}，深度疲劳风险',
     'sim.ctl_ramp': 'CTL 周增幅 {pct}% 超过 {thr}%，过度训练风险',
-    // ---- agentic 工具层消息（src/tools，M3 自 reference/src/i18n.js 逐字搬运） ----
+    // ---- agentic 工具层消息（src/tools，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'tool.date_invalid': '{key} 需为 YYYY-MM-DD',
     'tool.name_invalid': 'file_name 非法',
     'tool.summary_not_found': '训练库中找不到: {name}',
@@ -56,7 +56,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'tool.unknown': '未知工具: {name}',
     'tool.failed': '工具执行失败: {msg}',
     'tool.result_truncated': '（结果已截断）',
-    // ---- AI 请求层（src/ai，M3 自 reference/src/i18n.js 逐字搬运） ----
+    // ---- AI 请求层（src/ai，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'ai.no_key': '未配置 AI 密钥（Web 设置页可配），无法调用 AI API',
     'ai.stall': 'AI 流已空闲超过 {sec} 秒未收到数据。可能是该模型/账号不真正流式输出，建议在设置页关闭流式。',
     'ai.total_timeout': 'AI 请求总时间超过 {sec} 秒。若模型确实需要更久，可在设置页增大超时时间；否则建议检查网络/API 可用性。',
@@ -71,7 +71,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.read_failed': 'AI 响应读取失败：{msg}',
     'ai.network_failed': 'AI 连接失败：{msg}',
     'ai.retried_note': '（已自动重试 {n} 次）',
-    // ---- 编排层消息（src/services/aiGenerate，M3 自 reference/src/i18n.js 逐字搬运） ----
+    // ---- 编排层消息（src/services/aiGenerate，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'srv.ai_key_missing': '未配置 AI 密钥（设置页可配），无法使用对话',
     'srv.mode_invalid': 'mode 需为 follow_up/chat',
     'srv.message_empty': 'message 不能为空',

@@ -1,7 +1,7 @@
 /**
  * TimeSeriesChart.tsx — 通用多系列时序图（react-native-svg 直译）
  *
- * 计算层直译自 reference/web/js/charts.js 的 drawLineChart：各系列独立纵轴缩放、
+ * 计算层直译自 Web 版 charts.js 的 drawLineChart：各系列独立纵轴缩放、
  * ≤180s 短缺口线性插值桥接（码表自动暂停产生的停顿不断线，仅显示层不改数据）、
  * 中心移动平均平滑（半径随数据长度自适应）、null 断段。渲染点数由上游
  * thinRecords ≤1400 抽稀口径保证。
