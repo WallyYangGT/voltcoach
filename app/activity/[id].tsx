@@ -13,12 +13,18 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  useKeyboardState,
+  useWindowDimensions,
+} from 'react-native-keyboard-controller';
 import { Appbar, Button, Chip, Icon, TextInput } from 'react-native-paper';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { HR_ZONE_COLORS, POWER_ZONE_COLORS, ZoneBars } from '@/charts/ZoneBars';
 import { PeakCurve } from '@/charts/PeakCurve';
 import { TimeSeriesChart, type SeriesSpec } from '@/charts/TimeSeriesChart';
 import { AiReviewPanel, type AiReviewPanelHandle } from '@/components/AiReviewPanel';
+import type { AskInputInstance } from '@/components/AskInput';
 import type { Summary } from '@/core/analyze';
 import { formatAnomaly } from '@/core/i18n';
 import { buildActivityMetrics, buildCadenceMetrics, type MetricItem, type MetricText } from '@/core/metrics';
@@ -83,6 +89,47 @@ export default function ActivityDetailScreen() {
     if (panelY.current == null) return; // 还没量到位置就滚 = 滚到页顶
     scrollRef.current?.scrollTo({ y: Math.max(0, panelY.current - 12), animated: true });
   }, []);
+
+  // 键盘浮起（M5，口径同 AI 会话页）：edge-to-edge 下系统 adjustResize 不再缩放窗口，
+  // 由 KeyboardProvider + KeyboardAvoidingView 接管整页垫起。本页备注/追问两个输入都
+  // 在长 ScrollView 内部，原生只在聚焦瞬间做过「键盘弹出前」的最小滚动，键盘弹出后
+  // 还得把目标输入滚到键盘上方。不走 RN 自带的 scrollResponderScrollNativeHandle
+  // ToKeyboard：bridgeless/edge-to-edge 下 RN 核心键盘事件根本不派发（ReactRootView
+  // 的 sendEvent 在新架构 no-op，模拟器实测亦然），ScrollView 缓存的 Keyboard.metrics
+  // 恒为 null、按整窗高度当键盘顶必滚错——这里用 keyboard-controller 的键盘高度 +
+  // 输入行宿主实例的 measureInWindow 自己算目标偏移。不依赖 onFocus 事件拿节点：
+  // 已聚焦的输入再点一下不派发 onFocus（模拟器实测），事件只用来记「哪个输入是滚动
+  // 目标」，位置一律从 ref 现量
+  const kbVisible = useKeyboardState((s) => s.isVisible);
+  const kbHeight = useKeyboardState((s) => s.height);
+  const windowDp = useWindowDimensions(); // 键盘库同源窗口高度，与 KAV padding 同一真值
+  const [lastFocus, setLastFocus] = useState<'note' | 'followup'>('followup');
+  const [rescrollTick, setRescrollTick] = useState(0); // 布局变化时 +1，触发重滚
+  const scrollOffsetRef = useRef(0);
+  const noteWrapRef = useRef<View>(null);
+  const followUpInputRef = useRef<AskInputInstance | null>(null);
+
+  // 内容在键盘开着时长高（回复气泡落地、备注/追问多行自增）→ 请重滚一次。滚动只改
+  // 偏移不改布局，onLayout 不会因此再触发，无反馈环；键盘关着时 effect 早退，空转无害
+  const rescrollOnLayout = useCallback(() => {
+    if (kbVisible) setRescrollTick((v) => v + 1);
+  }, [kbVisible]);
+
+  // 键盘已开 → 把目标输入行滚到键盘上方。等键盘动画落位后量窗口坐标（此时 KAV
+  // padding 已垫满，量到的即终态），目标比当前偏移还小说明整行已可见，不回拉
+  useEffect(() => {
+    if (!kbVisible || kbHeight <= 0) return;
+    const timer = setTimeout(() => {
+      const target = lastFocus === 'note' ? noteWrapRef.current : followUpInputRef.current;
+      const fromOffset = scrollOffsetRef.current; // 量前先取偏移，与测量同刻配对
+      target?.measureInWindow((_x, y, _w, h) => {
+        const overflow = y + h + 12 - (windowDp.height - kbHeight);
+        if (overflow <= 0) return;
+        scrollRef.current?.scrollTo({ y: fromOffset + overflow, animated: true });
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [kbVisible, kbHeight, lastFocus, rescrollTick, windowDp.height]);
 
   useEffect(() => {
     let alive = true;
@@ -214,7 +261,7 @@ export default function ActivityDetailScreen() {
     });
 
   return (
-    <View style={styles.page}>
+    <KeyboardAvoidingView style={styles.page} behavior="padding">
       <Appbar.Header style={styles.header}>
         <Appbar.BackAction color={palette.text} onPress={() => router.back()} />
         <Appbar.Content
@@ -235,7 +282,17 @@ export default function ActivityDetailScreen() {
           onPress={confirmDelete}
         />
       </Appbar.Header>
-      <ScrollView ref={scrollRef} contentContainerStyle={styles.body}>
+      <ScrollView
+        ref={scrollRef}
+        contentContainerStyle={styles.body}
+        // 键盘开着时点 Save/Send 不吃掉首击收键盘（iOS 上 RN 内置收起拦截会生效、
+        // Android 因核心键盘事件不派发本就无此问题，显式声明双端口径一致）
+        keyboardShouldPersistTaps="handled"
+        // 键盘滚动定位的数据源：当前偏移量（measure 回调里现读配对）
+        onScroll={(e) => {
+          scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={16}>
         {/* 概览指标网格（列数随屏宽 2–4；内容与小字注释对齐 Web 版 metric-grid） */}
         <MetricGrid items={metrics} />
 
@@ -258,20 +315,26 @@ export default function ActivityDetailScreen() {
               );
             })}
           </View>
-          <TextInput
-            mode="outlined"
-            dense
-            multiline
-            label={t('detail.note_label')}
-            value={note}
-            onChangeText={setNote}
-            style={styles.noteInput}
-          />
-          <View style={styles.saveRow}>
-            <Button mode="contained" buttonColor={palette.volt} textColor={palette.bg} onPress={saveNote}>
-              {t('common.save')}
-            </Button>
-            {savedFlash && <Text style={styles.savedText}>{t('common.saved')}</Text>}
+          {/* 输入+Save 包一层：宿主实例可测量（键盘滚动定位）；gap 补回 card 的 10，
+              onLayout 在内容长高（多行自增）时请页面重滚 */}
+          <View ref={noteWrapRef} onLayout={rescrollOnLayout} style={styles.noteWrap}>
+            <TextInput
+              mode="outlined"
+              dense
+              multiline
+              label={t('detail.note_label')}
+              value={note}
+              onChangeText={setNote}
+              style={styles.noteInput}
+              onFocus={() => setLastFocus('note')}
+            />
+            {/* Save 行一并纳入键盘滚动测量范围：输完字保存按钮不被键盘压住 */}
+            <View style={styles.saveRow}>
+              <Button mode="contained" buttonColor={palette.volt} textColor={palette.bg} onPress={saveNote}>
+                {t('common.save')}
+              </Button>
+              {savedFlash && <Text style={styles.savedText}>{t('common.saved')}</Text>}
+            </View>
           </View>
         </View>
 
@@ -398,10 +461,17 @@ export default function ActivityDetailScreen() {
           onLayout={(e) => {
             panelY.current = e.nativeEvent.layout.y;
           }}>
-          <AiReviewPanel ref={panelRef} fileName={fileName} onReveal={revealPanel} />
+          <AiReviewPanel
+            ref={panelRef}
+            fileName={fileName}
+            onReveal={revealPanel}
+            onFollowUpFocus={() => setLastFocus('followup')}
+            followUpInputRef={followUpInputRef}
+            onFollowUpLayout={rescrollOnLayout}
+          />
         </View>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -421,6 +491,7 @@ const styles = StyleSheet.create({
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: { height: 30, borderColor: palette.line },
   noteInput: { backgroundColor: palette.panel2 },
+  noteWrap: { gap: 10 }, // 补回被包装 View 隔断的 card gap（输入框与 Save 行间距）
   saveRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   savedText: { color: palette.green, fontSize: 12 },
   empty: { color: palette.muted, textAlign: 'center', marginTop: 48 },

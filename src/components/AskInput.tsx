@@ -3,12 +3,23 @@
  *
  * 发送用显性 Button：Paper 的 TextInput.Icon 在 multiline 下触摸不可靠（M3 冒烟实证）。
  * 草稿状态自持：提交后立即清空，失败由调用方提示（输入内容不丢在输入框里更符合直觉）。
+ * ref 指向行容器 View（宿主实例，可 measureInWindow）——训练详情页据此把整行滚出
+ * 键盘遮挡；会话页不传。
  */
-import React, { useState } from 'react';
-import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
+import React, { useState, type ComponentRef, type Ref } from 'react';
+import {
+  StyleSheet,
+  View,
+  type LayoutChangeEvent,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
 import { Button, TextInput } from 'react-native-paper';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
+
+/** 行容器 View 的宿主实例类型（页面侧 useRef 用） */
+export type AskInputInstance = ComponentRef<typeof View>;
 
 interface Props {
   placeholder: string;
@@ -17,9 +28,14 @@ interface Props {
   style?: StyleProp<ViewStyle>;
   /** 输入框自适应高度上限（会话页 120、内联面板 100） */
   maxHeight?: number;
+  /** 聚焦信号透传（训练详情页据此区分备注/追问两路滚动目标，会话页不传） */
+  onFocus?: () => void;
+  /** 行容器布局回调透传（训练详情页据此在内容长高——回复落地/多行自增——时重滚） */
+  onLayout?: (e: LayoutChangeEvent) => void;
+  ref?: Ref<AskInputInstance>;
 }
 
-export function AskInput({ placeholder, sending, onSend, style, maxHeight = 120 }: Props) {
+export function AskInput({ placeholder, sending, onSend, style, maxHeight = 120, onFocus, onLayout, ref }: Props) {
   const { t } = useI18n();
   const [draft, setDraft] = useState('');
 
@@ -31,7 +47,7 @@ export function AskInput({ placeholder, sending, onSend, style, maxHeight = 120 
   };
 
   return (
-    <View style={[styles.row, style]}>
+    <View ref={ref} onLayout={onLayout} style={[styles.row, style]}>
       <TextInput
         mode="outlined"
         dense
@@ -40,6 +56,7 @@ export function AskInput({ placeholder, sending, onSend, style, maxHeight = 120 
         onChangeText={setDraft}
         placeholder={placeholder}
         style={[styles.input, { maxHeight }]}
+        onFocus={onFocus}
       />
       <Button
         mode="contained"

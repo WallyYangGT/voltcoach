@@ -7,7 +7,7 @@
  * 报告正文并接上追问。顶部「AI 分析」按钮走 analyze()：已有报告则直接露出本面板，
  * 没有则新建并触发后台生成（口径同 Web 版「已有报告时跳到底部，否则触发分析」）。
  */
-import React, { useCallback, useImperativeHandle, useRef, useState } from 'react';
+import React, { useCallback, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -17,7 +17,7 @@ import { buildReportPrompt, createReportDraft } from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiReportBody } from './AiReportBody';
-import { AskInput } from './AskInput';
+import { AskInput, type AskInputInstance } from './AskInput';
 import { ChatBubbles } from './ChatBubbles';
 import { useAiReport } from './useAiReport';
 
@@ -30,10 +30,16 @@ interface Props {
   fileName: string;
   /** 面板需要露出自身时回调（页面负责滚动） */
   onReveal?: () => void;
+  /** 追问输入聚焦信号（页面据此把滚动目标切到追问行） */
+  onFollowUpFocus?: () => void;
+  /** 追问行容器实例（页面测量位置把整行滚出键盘遮挡，M5） */
+  followUpInputRef?: Ref<AskInputInstance>;
+  /** 追问行布局回调透传（内容长高——回复落地/多行自增——时页面重滚，M5） */
+  onFollowUpLayout?: () => void;
   ref?: React.Ref<AiReviewPanelHandle>;
 }
 
-export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
+export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInputRef, onFollowUpLayout, ref }: Props) {
   const { t, lang } = useI18n();
   const router = useRouter();
   const [reportId, setReportId] = useState<number | null>(null);
@@ -204,10 +210,13 @@ export function AiReviewPanel({ fileName, onReveal, ref }: Props) {
                 <ChatBubbles chatId={ai.chat.id} messages={ai.chat.messages} onRetry={retryFollowUp} />
               )}
               <AskInput
+                ref={followUpInputRef}
                 placeholder={t('session.followUp.hint')}
                 sending={ai.sending}
                 onSend={send}
                 maxHeight={100}
+                onFocus={onFollowUpFocus}
+                onLayout={onFollowUpLayout}
               />
             </View>
           )}
