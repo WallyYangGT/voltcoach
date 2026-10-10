@@ -21,6 +21,14 @@ if (!versionName || !/^[0-9A-Za-z._-]+$/.test(versionName) || !/^\d+$/.test(vers
 }
 
 const file = 'app.json';
+// tag == 版本断言：versionName 来自 tag（v1.2.3 → 1.2.3），必须等于该 commit 的
+// package.json version（版本单一来源）——防「忘了提版号就打 tag」的发版漂移
+const pkgVersion = JSON.parse(fs.readFileSync('package.json', 'utf8')).version;
+if (versionName !== pkgVersion) {
+  console.error(`✗ tag 版本 ${versionName} ≠ package.json version ${pkgVersion}`);
+  console.error('  修复：把 tag 打在版本号一致的提交上（PR 合并前最后一步 node scripts/version.mjs bump）');
+  process.exit(1);
+}
 const json = JSON.parse(fs.readFileSync(file, 'utf8'));
 json.expo.version = versionName;
 json.expo.android = { ...json.expo.android, versionCode: Number(versionCode) };

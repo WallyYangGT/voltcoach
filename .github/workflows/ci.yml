@@ -1,0 +1,46 @@
+# 常规 CI 门禁：push main 与 PR（→ main）时跑版本校验 + lint + 单测。
+# 黄金 diff 不在此跑：依赖 gitignored 的本地真实素材，CI 上会自动跳过（发版流水线
+# 保留该门禁位，本机提交前必跑）；安卓打包只在发版流水线（release.yml）做。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate: # 名字固定——GitHub ruleset 的 required status check 指向它
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # PR 侧要与 origin/<base> 比版本，需取到基线分支
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # 单测跑 .ts 需要 Node ≥ 23.6 原生 type stripping
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # PR 硬闸：合并前最后一步必须提版号（version.mjs bump 双写两文件），
+      # 断言「PR 版本 > 基线版本」，忘提必红
+      - name: 版本校验（PR 须领先基线）
+        if: github.event_name == 'pull_request'
+        run: node scripts/version.mjs check --base origin/${{ github.base_ref }}
+
+      - name: 版本校验（push main：两文件一致性）
+        if: github.event_name != 'pull_request'
+        run: node scripts/version.mjs check
+
+      - name: Lint（0 error 且 0 warning）
+        run: npm run lint
+
+      - name: 单元测试
+        run: npm test
