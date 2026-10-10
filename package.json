@@ -4,6 +4,20 @@
   "type": "module",
   "version": "0.1.0",
   "license": "MIT",
+  "description": "数据驱动的骑行私教——纯本地的 .fit 训练分析 App：NP/TSS/CTL-ATL-TSB、峰功率曲线、AI 训练解读（BYOK），无服务器、数据全在手机",
+  "keywords": [
+    "cycling",
+    "fit",
+    "training-analysis",
+    "tss",
+    "react-native",
+    "expo"
+  ],
+  "author": "Wally Yang <wallys_studio@163.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sicheng886/voltcoach.git"
+  },
   "dependencies": {
     "@expo/ui": "~57.0.18",
     "@react-native-async-storage/async-storage": "2.2.0",

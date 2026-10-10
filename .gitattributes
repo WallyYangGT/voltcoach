@@ -1,0 +1,14 @@
+# 行尾单源：仓库内一律 LF（跨 Windows 开发 / Linux CI 协作，防 CRLF 假阳性）；*.bat 例外
+* text=auto eol=lf
+*.bat text eol=crlf
+
+# 二进制：防误做行尾转换与文本 diff
+*.png binary
+*.webp binary
+*.ttf binary
+*.otf binary
+*.keystore binary
+*.fit binary
+*.db binary
+*.gz binary
+*.apk binary
