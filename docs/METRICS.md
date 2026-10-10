@@ -1,0 +1,67 @@
+# 指标算法口径（METRICS）
+
+> **文档地位**：本文是 VoltCoach 训练指标的**公开权威描述**，供使用方与贡献者理解各项数值的含义与计算方式。实现权威在 `src/core/`（解析与指标在 `analyze.ts` / `metrics.ts`，算法阈值集中在 `settings.ts`）；两者不一致时以代码为准，欢迎提 Issue 指正，修代码时同步更新本文。
+>
+> 缺数据统一 `null`；取整口径：功率/心率/爬升取整，速度 2 位小数，海拔 1 位小数，IF/VI 2 位小数，平均踏频 1 位小数。算法公式承袭 Coggan 功率体系与 TrainingPeaks 负荷模型的公开定义（详见 `src/prompts/skills/` 内置知识库 01/02 两篇）。
+
+## summary 结构总览
+
+解析管线对每个 `.fit` 文件产出 `summary`（喂 AI 与界面的汇总结构），逐秒明细另存 gzip CSV（records）：
+
+| 块 | 内容 |
+|---|---|
+| `activity` | 日期（UTC 口径）、运动类型（cycling/running/swimming）、时长（**剔除计时暂停**）、距离、爬升、平均速度、卡路里 |
+| `athlete_context` | 骑手参数（FTP/最大心率/体重）+ 当日 CTL/ATL/TSB + `form_state` 枚举（fresh/good/balanced/fatigued/overtrained，语言中立） |
+| `power` | 平均/NP/最大功率、VI、IF、TSS、功体比、峰功率曲线（5s/1min/5min/20min）、FTP 自动估算、Coggan 7 区时间分布 |
+| `heart_rate` | 平均/最大心率、5 区时间分布、心率漂移（有氧解耦 %） |
+| `cadence` | 平均踏频（**剔除 0 rpm 滑行秒**，与码表/Strava 口径一致；跑步为步频 spm） |
+| `cadence_power` | 踏频-功率联合分析（发力习惯为 `style` 枚举 normal/low_cadence/high_cadence） |
+| `climbs` / `interval_set` / `segments` | 爬坡段 / 间歇组 / 圈与赛段 |
+| `anomalies` | 设备异常标注（**结构化对象**：`power_gap`/`record_gap`/`timer_pause`/`hr_jump`，语言中立，展示层本地化） |
+| `data_quality` | 覆盖率、无时间戳丢弃数、缺失秒数（不含暂停）、暂停秒数 |
+
+## 核心公式
+
+- **NP（归一化功率）**：30s 滚动平均 → 四次方均值 → 开四次方根。缺口窗口不参与（要求 30s 窗口内逐秒齐全）；数据不足 30s 不产出。
+- **IF（强度因子）** = NP / FTP（2 位小数）。
+- **TSS** = 时长秒 × NP × IF / (FTP × 3600) × 100（取整）。时长剔除计时暂停。
+- **VI（变异指数）** = NP / 平均功率（2 位小数），衡量功率波动程度（计时赛趋近 1.0）。
+- **心率漂移（有氧解耦）**：前后半程「效率因子」的相对变化百分比（1 位小数）。骑行用功率/心率，无功率数据时自动切换速度/心率。
+- **CTL/ATL/TSB**：CTL = TSS 的 42 天指数加权（体能）；ATL = 7 天（疲劳）；TSB = CTL − ATL（状态）。缺训日按 TSS=0 参与衰减。
+- **峰功率曲线**：指定时长（5s/1min/5min/20min）的最大平均功率，**要求窗口连续**；允许 ≤10s 的短缺口先线性插值再取峰（容忍功率计偶发掉秒，阈值 `PEAK_CURVE.max_interp_gap_sec`）。NP/分区/TSS 仍用原始序列，不插值。
+- **FTP 自动估算**：20min 峰功率 × 0.95（无连续 20min 窗口时省略）。另有基于近期骑行的 **FTP 历史估算**：Morton 双参数 CP 模型（P(t)=CP+W′/t）与 Coggan 20min×0.95 双方法互校 + 心率交叉验证，输出估值/区间/置信度（high/medium/low），阈值见 `FTP_ESTIMATION`。
+
+## 分区
+
+**功率 7 区**（占 FTP 百分比，`POWER_ZONES`）：
+
+| 区 | %FTP | 区 | %FTP |
+|---|---|---|---|
+| Z1 | 0–55 | Z5 | 105–120 |
+| Z2 | 55–75 | Z6 | 120–150 |
+| Z3 | 75–90 | Z7 | ≥150 |
+| Z4 | 90–105 | | |
+
+**心率 5 区**（占最大心率百分比，`HR_ZONES`）：Z1 ≤68% / Z2 68–75% / Z3 75–85% / Z4 85–92% / Z5 ≥92%。
+
+**月度强度分布**按时长加权分类：低(Z1–Z2)/中(Z3–Z4)/高(Z5–Z7)。低 ≥75% 且 高>中 → `polarized`；低>中>高 → `pyramidal`；其余 → `sweet_spot`。
+
+## 特征段识别
+
+- **间歇识别**：≥105% FTP 的过阈段为工作段；≤10s 瞬时掉功率合并进工作段，<30s 的段丢弃。
+- **爬坡段**：30s 窗口坡度 ≥3% 且累计爬升 ≥15m、长度 ≥300m。
+- **踏频-功率联合分析**：仅统计功率 ≥75% FTP 的「发力时段」（剔除滑行）；低踏频 <80 rpm、高踏频 >90 rpm。
+
+## 数据可信度口径
+
+- **累计爬升**：优先采用码表自报 `session.total_ascent`（与码表屏幕同口径，附 `elevation_gain_source: 'device'`）；缺失时自算——滞回去抖（以最近确认点为基线，累计上升达 `ELEVATION.noise_threshold_m` 才计入并抬升基线，亚米级气压抖动不计数，标记 `'computed'`）。
+- **计时暂停识别**（三级判据，阈值见 `DATA_QUALITY`）：FIT timer `stop_all→start` 事件区间 > 设备累计距离在空缺两侧冻结 > 恢复侧静止。命中归类 `timer_pause`，不计入时长/TSS/平均速度/缺失秒数；未命中的空缺标 `record_gap`（整段记录缺失 ≥10s）或 `power_gap`（功率缺失 >60s）。
+- **心率跳变**：相邻秒差 >25 bpm 标注 `hr_jump`。
+- FIT 文件视为不可信输入：解析器以容错模式运行（`force: true` 口径），损坏记录跳过并计入 `data_quality`。
+
+## 单位与时间口径
+
+- 单位公制：W / km / km/h / kg / °C / m，不做英制换算。
+- **海拔换算坑**：FIT 解析器按 `lengthUnit: 'km'` 配置时会把海拔/爬升缩放成 km，管线内统一 ×1000 换回米（历史 bug，已有回归断言钉住）。
+- 数据落盘（summary/records/训练库）时间戳一律 **UTC 口径**；喂 AI 前统一改写为带本地时区偏移的等价 ISO 表示，纯日期字段（`activity.date`）不换算。
+- 跑步：无功率段，心率漂移走速度/心率口径，配速 min/km，步频 spm；游泳：length 消息统计（趟数/泳池长度/划水/SWOLF）+ 心率。
