@@ -36,6 +36,8 @@ assets/poc/*.db
 assets/poc-output/
 reference/output/
 reference/output-poc/
+# 黄金 diff 基准由真实训练派生（npm run golden），仅本地存在
+golden/
 
 # ---- reference/（旧实现只读快照）的运行产物 ----
 reference/node_modules/

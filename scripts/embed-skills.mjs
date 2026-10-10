@@ -1,8 +1,8 @@
 /**
- * embed-skills.mjs — 把 reference/skills/*.md 内嵌为 src/prompts/skills.ts 的字符串常量。
+ * embed-skills.mjs — 把 src/prompts/skills/*.md 内嵌为 src/prompts/skills.ts 的字符串常量。
  *
- * 旧版（reference/src/skills.js）在每次 AI 请求时实时扫描 skills/ 目录；App 无法
- * 在运行时读仓库目录，改为构建期内嵌：本脚本读 reference/skills/（只读快照），
+ * 旧版（fit-reader Web 版 src/skills.js）在每次 AI 请求时实时扫描 skills/ 目录；App 无法
+ * 在运行时读仓库目录，改为构建期内嵌：本脚本读 src/prompts/skills/（源文件入库），
  * 生成 src/prompts/skills.ts（SKILL_FILES 常量 + 与旧版同口径的纯函数拼装）。
  * 技能内容变更时重跑 `node scripts/embed-skills.mjs` 重新生成（产物入库）。
  *
@@ -15,7 +15,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const srcDir = path.join(root, 'reference', 'skills');
+const srcDir = path.join(root, 'src', 'prompts', 'skills');
 const outFile = path.join(root, 'src', 'prompts', 'skills.ts');
 
 const names = fs
@@ -35,7 +35,7 @@ for (const name of names) {
 }
 
 const out = `/**
- * skills.ts — 训练科学知识库（内嵌自 reference/skills/，生成文件勿手改）。
+ * skills.ts — 训练科学知识库（内嵌自 src/prompts/skills/，生成文件勿手改）。
  *
  * 由 scripts/embed-skills.mjs 生成：旧版 loadSkills 每次请求实时扫描 skills/ 目录，
  * App 改为构建期内嵌（口径一致：按文件名排序、_ 前缀跳过、.en.md 归英文）。

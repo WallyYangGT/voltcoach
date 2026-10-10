@@ -1,5 +1,5 @@
 /**
- * skills.ts — 训练科学知识库（内嵌自 reference/skills/，生成文件勿手改）。
+ * skills.ts — 训练科学知识库（内嵌自 src/prompts/skills/，生成文件勿手改）。
  *
  * 由 scripts/embed-skills.mjs 生成：旧版 loadSkills 每次请求实时扫描 skills/ 目录，
  * App 改为构建期内嵌（口径一致：按文件名排序、_ 前缀跳过、.en.md 归英文）。

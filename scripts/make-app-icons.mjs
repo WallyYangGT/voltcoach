@@ -2,12 +2,12 @@
  * make-app-icons.mjs — 由品牌 mark 生成 App 图标资源（M5）
  *
  * 背景：App 图标此前是 Expo 模板自带的蓝色占位图（M0 骨架遗留），与品牌（volt 荧光黄）
- * 无关。本脚本从 `reference/web/logo.svg` 解析品牌 mark（斜切平行四边形 + 45° 对角
+ * 无关。本脚本从 `assets/brand/logo.svg` 解析品牌 mark（斜切平行四边形 + 45° 对角
  * 条纹）的几何，按坐标精确光栅化出 `assets/images/` 的一整套图标源，再经
  * `npx expo prebuild --platform android --no-install` 落到 android 的 mipmap/drawable。
  *
- * 构图对齐参考实现的 `reference/web/icon.png`（512² 深色底 + mark 宽占 62%、垂直居中）
- * 与 `reference/web/favicon.svg`（深色圆角方底，配浅色浏览器标签栏）。
+ * 构图沿用 Web 版既有设计：icon.png（512² 深色底 + mark 宽占 62%、垂直居中）
+ * 与 favicon（深色圆角方底，配浅色浏览器标签栏）。
  *
  * 用法：node scripts/make-app-icons.mjs
  * 说明：纯 Node（zlib 手写 PNG 编码），无第三方依赖；几何全部来自 SVG 解析——
@@ -20,10 +20,10 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SVG = path.join(ROOT, 'reference/web/logo.svg');
+const SVG = path.join(ROOT, 'assets/brand/logo.svg');
 const OUT = path.join(ROOT, 'assets/images');
 
-/** 品牌色（与 web/style.css 的 --volt 一致）与深色底 */
+/** 品牌色（Web 版同款 --volt）与深色底 */
 const VOLT = [0xd7, 0xff, 0x3f];
 const BG = [0x0a, 0x0d, 0x11];
 
@@ -289,7 +289,7 @@ function writePng(file, { rgba, size }) {
 
 // ---------------- 生成一套图标源 ----------------
 
-// 与 reference/web/icon.png 一致：可见 mark 宽占画布的 62%，垂直居中
+// 与 Web 版 icon.png 一致：可见 mark 宽占画布的 62%，垂直居中
 const ICON_MARK = 0.62;
 // 自适应图标前景层：系统会放大 1.5× 做视差，可见内容须留在中央 66/108≈61% 安全区内
 const FG_MARK = 0.56;
@@ -304,7 +304,7 @@ const plan = [
   ['android-icon-monochrome.png', 432, () => compose(432, { markRatio: FG_MARK, stripes: false, fill: [255, 255, 255] })],
   // 启动图（expo-splash-screen 的 imageWidth=76dp，深色底由插件 backgroundColor 给）
   ['splash-icon.png', 512, () => compose(512, { markRatio: 0.92 })],
-  // Web favicon：深色圆角方底（同 reference/web/favicon.svg 的处理，浅色标签栏下可见）
+  // Web favicon：深色圆角方底（同 Web 版 favicon 的处理，浅色标签栏下可见）
   ['favicon.png', 192, () => compose(192, { bg: BG, markRatio: ICON_MARK, radius: 36 })],
 ];
 
@@ -323,7 +323,7 @@ for (const [name, size, make] of plan) {
  * iOS 26 的 `.icon` 是 Icon Composer 目录包：icon.json 描述背景填充与图层，
  * 图层引用 Assets/ 下的图片。这里保持目录结构与图层文件名不变，只换内容：
  * 背景渐变 → 品牌深色、图层符号 → 品牌 mark（去掉模板的装饰网格层）。
- * ⚠️ 未在 macOS/Icon Composer 上验证（iOS 冒烟后置，见 AGENTS）。
+ * ⚠️ 未在 macOS/Icon Composer 上验证（iOS 冒烟后置）。
  */
 function writeIosIcon() {
   const dir = path.join(ROOT, 'assets/expo.icon');
@@ -352,7 +352,7 @@ function writeIosIcon() {
     .map(([lo, hi]) => `    <polygon points="${lo},0 ${hi},0 0,${hi} 0,${lo}"/>`)
     .join('\n');
   const svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- 品牌 mark（几何同 reference/web/logo.svg，构图随 Android 图标：可见宽占 62%） -->
+  <!-- 品牌 mark（几何同 assets/brand/logo.svg，构图随 Android 图标：可见宽占 62%） -->
   <g transform="translate(${tx.toFixed(2)},${ty.toFixed(2)}) scale(${scale.toFixed(4)}) translate(${-qx0},${-qy0})">
     <g fill="#d7ff3f">
 ${stripePolys}

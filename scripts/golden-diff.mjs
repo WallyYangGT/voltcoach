@@ -1,13 +1,15 @@
 /**
- * golden-diff.mjs — 黄金 diff：真实 MAGENE 文件经 src/core 管线产出的 summary
- * 与 Docker 版基准（reference/output/*.summary.json）逐字段比对。
+ * golden-diff.mjs — 黄金 diff：真实码表文件经 src/core 管线产出的 summary
+ * 与既定基准（golden/*.summary.json）逐字段比对，防解析管线「重写走样」。
  *
- * 这是 M1 验收口径（MIGRATION_PLAN §8.5）：防"重写走样"的核心手段。
  * 排除字段：summary.athlete_context 的 ctl/atl/tsb/form_state/form_note——
  * 这五项是旧版入库后从训练库注入的当日 form（依赖库内历史数据），App 版由
  * 导入服务在入库阶段同样注入，不属于解析管线口径。
  *
- * 运行：npm run golden（素材 docs/sample-fit-files/ 真实数据，gitignored，本机必有）
+ * 运行：npm run golden。素材与基准都是 gitignored 的本机数据、不入库：
+ * 素材放 docs/sample-fit-files/（真实 .fit 文件），基准目录默认 golden/
+ * （可用环境变量 GOLDEN_DIR 覆盖；基准 json 可用旧版 Docker/Web 版 fit-reader
+ * 的 summary 输出生成）。机制详见 docs/MAINTENANCE.md「测试」。
  */
 
 import fs from 'node:fs';
@@ -15,7 +17,7 @@ import path from 'node:path';
 import { analyzeFile } from '../src/core/analyze.ts';
 
 const FIT_DIR = 'docs/sample-fit-files';
-const GOLDEN_DIR = 'reference/output';
+const GOLDEN_DIR = process.env.GOLDEN_DIR || 'golden';
 /** 库注入字段（非解析管线产物），比对前从两侧剔除 */
 const DB_INJECTED = new Set(['ctl', 'atl', 'tsb', 'form_state', 'form_note']);
 
@@ -44,9 +46,9 @@ function deepDiff(a, b, base = '') {
 
 const fmt = (v) => (typeof v === 'object' ? JSON.stringify(v) : String(v));
 
-/** 素材与黄金基准都是 gitignored 的本机真实数据（AGENTS.md：严禁入库），CI 上天然缺失。
+/** 素材与黄金基准都是 gitignored 的本机真实数据（个人健康数据严禁入库），CI 上天然缺失。
  *  本机（提交门槛）缺失仍硬失败——防素材被误删后门禁静默失效；仅 CI=true 时降级为
- *  警告放行（GitHub Actions 自动注入 CI=true，见 .github/workflows/release.yml）。 */
+ *  警告放行（GitHub Actions 自动注入 CI=true，见 .github/workflows/*.yml）。 */
 const fixturesMissing =
   !fs.existsSync(FIT_DIR) ||
   !fs.existsSync(GOLDEN_DIR) ||
@@ -57,9 +59,9 @@ if (fixturesMissing) {
     console.warn('⚠ 真实测试素材不在库中（gitignored）——CI 环境跳过黄金 diff 门禁（本机提交前必跑）');
     process.exit(0);
   }
-  if (!fs.existsSync(FIT_DIR)) console.error(`✗ 素材目录不存在：${FIT_DIR}（真实测试素材缺失，见 AGENTS.md）`);
-  else if (!fs.existsSync(GOLDEN_DIR)) console.error(`✗ 黄金基准目录不存在：${GOLDEN_DIR}（见 AGENTS.md「黄金 diff」）`);
-  else console.error(`✗ ${FIT_DIR} 中没有 .fit 文件（真实测试素材缺失，见 AGENTS.md）`);
+  if (!fs.existsSync(FIT_DIR)) console.error(`✗ 素材目录不存在：${FIT_DIR}（真实测试素材不入库，本地自备，见 docs/MAINTENANCE.md）`);
+  else if (!fs.existsSync(GOLDEN_DIR)) console.error(`✗ 黄金基准目录不存在：${GOLDEN_DIR}（可用环境变量 GOLDEN_DIR 指向其他位置，见 docs/MAINTENANCE.md）`);
+  else console.error(`✗ ${FIT_DIR} 中没有 .fit 文件（真实测试素材不入库，本地自备，见 docs/MAINTENANCE.md）`);
   process.exit(1);
 }
 
@@ -98,4 +100,4 @@ if (failed) {
   console.error(`\n黄金 diff 未通过：${failed}/${fits.length} 个文件不一致`);
   process.exit(1);
 }
-console.log(`\n黄金 diff 通过：${fits.length} 个真实文件与 Docker 版 summary 逐字段一致`);
+console.log(`\n黄金 diff 通过：${fits.length} 个真实文件与黄金基准逐字段一致`);

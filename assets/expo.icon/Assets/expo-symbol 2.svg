@@ -1,5 +1,5 @@
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- 品牌 mark（几何同 reference/web/logo.svg，构图随 Android 图标：可见宽占 62%） -->
+  <!-- 品牌 mark（几何同 assets/brand/logo.svg，构图随 Android 图标：可见宽占 62%） -->
   <g transform="translate(194.56,226.30) scale(31.7440) translate(-6,-7)">
     <g fill="#d7ff3f">
     <polygon points="15.8,0 19.2,0 0,19.2 0,15.8"/>
