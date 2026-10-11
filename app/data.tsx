@@ -1,6 +1,6 @@
 /**
  * data.tsx — 数据管理页（M4，自「我的」入口进入）：备份 / 本地快照 / 重复记录三卡布局
- *  - 备份：可选口令导出并系统分享；DocumentPicker 导入（预览确认 + 版本闸门）
+ *  - 备份：可选口令导出——保存到本机（SAF 目录直存）或系统分享；DocumentPicker 导入（预览确认 + 版本闸门）
  *  - 本地快照：查看/手动创建/删除（auto-latest，导入训练后自动滚动）
  *  - 重复记录检查（M5）：内容指纹找重 + 人工确认合并
  * 顽鹿同步卡原在此处，M5 收尾后按反馈挪至「我的」页 AI 服务下方（src/components/
@@ -9,16 +9,17 @@
  */
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
+import { EncodingType, StorageAccessFramework } from 'expo-file-system/legacy';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button, Divider, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { File } from 'expo-file-system';
-import { createLocalSnapshot, deleteLocalSnapshot, exportBackupToCache, readLocalSnapshotInfo, type SnapshotInfo } from '@/backup/export';
+import { createLocalSnapshot, deleteLocalSnapshot, buildBackup, exportBackupToCache, readLocalSnapshotInfo, type SnapshotInfo } from '@/backup/export';
 import { importBackupFile } from '@/backup/import';
 import { BackupError, checkSchemaVersion as gateVersion } from '@/backup/manifest';
-import { unpackBackup } from '@/backup/archive';
+import { bytesToBase64, unpackBackup } from '@/backup/archive';
 import { findDuplicateGroups } from '@/core/dedupe';
 import { formatDuration } from '@/core/metrics';
 import { copyStoredRecord, deleteStoredRecord } from '@/records-store';
@@ -44,6 +45,7 @@ export default function DataScreen() {
   const [pass2, setPass2] = useState('');
   const [importPass, setImportPass] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
 
   // —— 本地快照 ——
@@ -98,6 +100,37 @@ export default function DataScreen() {
       Alert.alert(t('data.err.generic'), describeError(e));
     } finally {
       setExporting(false);
+    }
+  };
+
+  /**
+   * 保存到本机：SAF（存储访问框架）目录选择器直存用户选定的文件夹——分享面板上
+   * 没有「保存到文件」目标的设备（用户真机实测）无法经分享落盘，这是独立出口。
+   * 先要目录授权再打包：用户取消授权就静默返回，不做无谓的全库打包；包字节经
+   * base64 写入 SAF 内容 uri（mime 记 zip，文件名与 cache 导出同一套时间戳规则）。
+   */
+  const doSaveLocal = async () => {
+    if ((pass1 || pass2) && pass1 !== pass2) {
+      Alert.alert(t('data.backup.passMismatch'));
+      return;
+    }
+    const perms = await StorageAccessFramework.requestDirectoryPermissionsAsync().catch((e) => {
+      Alert.alert(t('data.err.generic'), describeError(e));
+      return null;
+    });
+    if (!perms?.granted) return;
+    setSaving(true);
+    try {
+      const { bytes, manifest } = await buildBackup(pass1 ? pass1 : null);
+      const stamp = manifest.exported_at.replace(/[-:T]/g, '').slice(0, 14);
+      const name = `voltcoach-backup-${stamp}.fitbackup`;
+      const uri = await StorageAccessFramework.createFileAsync(perms.directoryUri, name, 'application/zip');
+      await StorageAccessFramework.writeAsStringAsync(uri, bytesToBase64(bytes), { encoding: EncodingType.Base64 });
+      Alert.alert(t('data.backup.savedLocal', { name }));
+    } catch (e) {
+      Alert.alert(t('data.err.generic'), describeError(e));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -279,9 +312,26 @@ export default function DataScreen() {
             secureTextEntry
             style={styles.input}
           />
-          <Button mode="contained" compact onPress={doExport} disabled={exporting || importing} loading={exporting}>
-            {exporting ? t('data.backup.exporting') : t('data.backup.export')}
-          </Button>
+          <View style={styles.row}>
+            <Button
+              mode="contained"
+              compact
+              style={{ flex: 1 }}
+              onPress={doExport}
+              disabled={exporting || saving || importing}
+              loading={exporting}>
+              {exporting ? t('data.backup.exporting') : t('data.backup.export')}
+            </Button>
+            <Button
+              mode="outlined"
+              compact
+              style={{ flex: 1 }}
+              onPress={() => void doSaveLocal()}
+              disabled={exporting || saving || importing}
+              loading={saving}>
+              {saving ? t('data.backup.saving') : t('data.backup.saveLocal')}
+            </Button>
+          </View>
           <Divider style={styles.divider} />
           <Text style={styles.warn}>{t('data.backup.importWarn')}</Text>
           <TextInput
