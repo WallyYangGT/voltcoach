@@ -98,6 +98,28 @@ export function bytesToUtf8(bytes: Uint8Array): string {
   return out;
 }
 
+const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * 字节 → base64（手写实现，口径同文件头 UTF-8 编解码——不依赖 btoa/Buffer，
+ * Hermes 与 Node 环境都无保证）。调用方：导出「保存到本机」经 SAF 写入内容 uri。
+ * 容量假设：整包字节 + base64 字符串（1.33×）+ 跨桥传输 + 原生解码各持一份，
+ * 峰值约 3.3× 包体——常规库几 MB 无碍；备份包到几十 MB 量级时需换直写字节方案。
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : -1;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : -1;
+    out += B64_ALPHABET[b0 >> 2];
+    out += B64_ALPHABET[((b0 & 0x03) << 4) | (b1 >= 0 ? b1 >> 4 : 0)];
+    out += b1 < 0 ? '=' : B64_ALPHABET[((b1 & 0x0f) << 2) | (b2 >= 0 ? b2 >> 6 : 0)];
+    out += b2 < 0 ? '=' : B64_ALPHABET[b2 & 0x3f];
+  }
+  return out;
+}
+
 /** 训练文件名（去扩展名后的 base）→ records 条目名；base 非法返回 null（safeName 口径） */
 export function recordsEntryName(base: string): string | null {
   const safe = safeName(base);

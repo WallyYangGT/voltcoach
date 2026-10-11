@@ -7,7 +7,7 @@
 技术栈：React Native + Expo（新架构）+ Expo Router + TypeScript；UI 用 React Native Paper 5（Material 3）自定义暗色主题（品牌色 volt 荧光黄 `#d7ff3f`，深色底 `#0a0d11` 系，等宽大数字排版）。**纯本地应用**：无自建服务器，训练库 SQLCipher 加密，AI Key 与同步凭据存 `expo-secure-store`（Android Keystore）。
 
 ```
-app/                    Expo Router 文件路由（底部四 tab + 详情/会话/数据管理/导入等页面）
+app/                    Expo Router 文件路由（底部四 tab + 详情/会话/数据管理/导入/关于等页面）
 src/
   core/                 ★ 纯函数算法层：解析、指标、FTP、规划、去重、报告标题——
                         不 import 任何 RN/Expo 模块，node:test 直接覆盖
@@ -67,7 +67,7 @@ assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-
 7. **模拟器图形**：部分 AVD 需 `-gpu swiftshader_indirect` 启动（默认 gfxstream 会崩）。
 8. **EBUSY 目录锁**：prebuild/gradlew 清目录报 EBUSY = 有进程占着（资源管理器停在输出目录、终端 cwd 在其中）；Gradle daemon 残留句柄用 `./gradlew --stop` 释放。
 9. **release 包不可 inspect 私有目录**：非 debuggable 构建下 `adb shell run-as` 不可用，验证 db 内容要走 UI 路径或临时 debuggable 变体。
-10. **AOSP 镜像缺 zip 分享目标**：GSI 的 DocumentsUI 未注册 ACTION_SEND(application/zip)，系统分享面板没有「保存到文件」；真机通常正常。文档导入（DocumentPicker）不受影响。
+10. **AOSP 镜像缺 zip 分享目标**：GSI 的 DocumentsUI 未注册 ACTION_SEND(application/zip)，系统分享面板没有「保存到文件」；真机也可能同样缺失（用户实测）。因此备份导出除系统分享外另有「保存到本机」（Android SAF 目录直存，`expo-file-system/legacy` 的 StorageAccessFramework）独立出口；注意 legacy SAF 写入仅对 externalstorage 类 provider 有效，网盘类目录会报不可写。文档导入（DocumentPicker）不受影响。
 11. **EXPO_PUBLIC_* 打包期内联且不失效 bundle 缓存**：换环境变量后必须清 bundle 缓存再构建，发版必跑 `check:apk`——详见 [RELEASING](./RELEASING.md)。
 
 ## 依赖与安全口径

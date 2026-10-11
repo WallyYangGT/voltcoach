@@ -1,6 +1,8 @@
 /**
  * data.tsx — 数据管理页（M4，自「我的」入口进入）：备份 / 本地快照 / 重复记录三卡布局
- *  - 备份：可选口令导出并系统分享；DocumentPicker 导入（预览确认 + 版本闸门）
+ *  - 备份：可选口令导出——保存到本机（SAF 目录直存）或系统分享；DocumentPicker
+ *    选包 → 预检（版本闸门）→ 弹对话框（来源信息 + 可选口令，仅加密包显示口令框）
+ *    → 确认执行，口令错误原地重试不重选包
  *  - 本地快照：查看/手动创建/删除（auto-latest，导入训练后自动滚动）
  *  - 重复记录检查（M5）：内容指纹找重 + 人工确认合并
  * 顽鹿同步卡原在此处，M5 收尾后按反馈挪至「我的」页 AI 服务下方（src/components/
@@ -9,16 +11,17 @@
  */
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
+import { deleteAsync, EncodingType, StorageAccessFramework } from 'expo-file-system/legacy';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Appbar, Button, Divider, TextInput } from 'react-native-paper';
+import { Alert, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Appbar, Button, Dialog, Divider, Portal, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { File } from 'expo-file-system';
-import { createLocalSnapshot, deleteLocalSnapshot, exportBackupToCache, readLocalSnapshotInfo, type SnapshotInfo } from '@/backup/export';
+import { createLocalSnapshot, deleteLocalSnapshot, buildBackup, exportBackupToCache, readLocalSnapshotInfo, type SnapshotInfo } from '@/backup/export';
 import { importBackupFile } from '@/backup/import';
-import { BackupError, checkSchemaVersion as gateVersion } from '@/backup/manifest';
-import { unpackBackup } from '@/backup/archive';
+import { BackupError, checkSchemaVersion as gateVersion, type BackupManifest } from '@/backup/manifest';
+import { bytesToBase64, unpackBackup } from '@/backup/archive';
 import { findDuplicateGroups } from '@/core/dedupe';
 import { formatDuration } from '@/core/metrics';
 import { copyStoredRecord, deleteStoredRecord } from '@/records-store';
@@ -42,8 +45,11 @@ export default function DataScreen() {
   // —— 备份 ——
   const [pass1, setPass1] = useState('');
   const [pass2, setPass2] = useState('');
-  const [importPass, setImportPass] = useState('');
+  // 导入对话框：选包并预检通过后弹出（先选包后输口令），含来源信息与可选口令框
+  const [pendingImport, setPendingImport] = useState<{ uri: string; manifest: BackupManifest } | null>(null);
+  const [dialogPass, setDialogPass] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
 
   // —— 本地快照 ——
@@ -101,53 +107,87 @@ export default function DataScreen() {
     }
   };
 
+  /**
+   * 保存到本机：SAF（存储访问框架）目录选择器直存用户选定的文件夹——分享面板上
+   * 没有「保存到文件」目标的设备（用户真机实测）无法经分享落盘，这是独立出口。
+   * 先要目录授权再打包：用户取消授权就静默返回，不做无谓的全库打包；包字节经
+   * base64 写入 SAF 内容 uri（mime 记 zip，文件名与 cache 导出同一套时间戳规则）。
+   * 已知边界：legacy SAF 写入只对 externalstorage 类 provider（本机存储
+   * Download/Documents 等）持有写权限，网盘类目录会报不可写——主用途即本机落盘，
+   * 接受该边界。仅 Android 提供（iOS 无 SAF，保留系统分享路径）。
+   */
+  const doSaveLocal = async () => {
+    if ((pass1 || pass2) && pass1 !== pass2) {
+      Alert.alert(t('data.backup.passMismatch'));
+      return;
+    }
+    const perms = await StorageAccessFramework.requestDirectoryPermissionsAsync().catch((e) => {
+      Alert.alert(t('data.err.generic'), describeError(e));
+      return null;
+    });
+    if (!perms?.granted) return;
+    setSaving(true);
+    let createdUri: string | null = null;
+    try {
+      const { bytes, manifest } = await buildBackup(pass1 ? pass1 : null);
+      const stamp = manifest.exported_at.replace(/[-:T]/g, '').slice(0, 14);
+      const name = `voltcoach-backup-${stamp}.fitbackup`;
+      createdUri = await StorageAccessFramework.createFileAsync(perms.directoryUri, name, 'application/zip');
+      await StorageAccessFramework.writeAsStringAsync(createdUri, bytesToBase64(bytes), { encoding: EncodingType.Base64 });
+      Alert.alert(t('data.backup.savedLocal', { name }));
+    } catch (e) {
+      // 写入失败清理已建出的半截文件（SAF 建文件即落盘，0 字节包会被误当有效备份）
+      if (createdUri) {
+        try {
+          await deleteAsync(createdUri, { idempotent: true });
+        } catch (cleanupErr) {
+          console.warn('备份包残留清理失败（忽略）:', cleanupErr);
+        }
+      }
+      Alert.alert(t('data.err.generic'), describeError(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const doImport = async () => {
     try {
       const res = await DocumentPicker.getDocumentAsync({ multiple: false, copyToCacheDirectory: true });
       const asset = res.assets?.[0];
       if (res.canceled || !asset) return;
 
-      // 预览阶段先做结构校验与版本闸门（坏包/超前版本在确认前拦下）
+      // 弹框前先做结构校验与版本闸门（坏包/超前版本在确认前拦下）
       const bytes = await new File(asset.uri).bytes();
       const { manifest } = unpackBackup(bytes);
       gateVersion(manifest, SCHEMA_VERSION);
-      Alert.alert(
-        t('data.backup.confirmTitle'),
-        t('data.backup.confirmMsg', {
-          device: manifest.device,
-          time: manifest.exported_at.slice(0, 16).replace('T', ' '),
-          acts: manifest.counts.activities,
-          recs: manifest.counts.records,
-        }),
-        [
-          { text: t('common.cancel'), style: 'cancel' },
-          {
-            text: t('data.backup.import'),
-            style: 'destructive',
-            onPress: () => {
-              runImport(asset.uri);
-            },
-          },
-        ],
-      );
+      setDialogPass('');
+      setPendingImport({ uri: asset.uri, manifest });
     } catch (e) {
       Alert.alert(t('data.err.generic'), describeError(e));
     }
   };
 
-  const runImport = (uri: string) => {
+  /**
+   * 执行导入（口令来自导入对话框）。wrong_key/passphrase_required 时对话框不关、
+   * 口令清空——用户原地重试，不必重新选包；其他失败关对话框（包本身有问题，
+   * 原地重试无意义）。
+   */
+  const runImport = (uri: string, pass: string | null) => {
     setImporting(true);
-    importBackupFile(uri, importPass || null)
+    importBackupFile(uri, pass)
       .then((outcome) => {
+        setPendingImport(null);
         invalidateReportTitles(); // 整库被替换：活动行与 records 全变了，标题缓存必须全清
         Alert.alert(t('data.backup.confirmTitle'), t('data.backup.importDone', { acts: outcome.activities, recs: outcome.records }));
       })
       .catch((e) => {
+        const retryable = e instanceof BackupError && (e.code === 'wrong_key' || e.code === 'passphrase_required');
+        if (retryable) setDialogPass('');
+        else setPendingImport(null);
         Alert.alert(t('data.err.generic'), describeError(e));
       })
       .finally(() => {
         setImporting(false);
-        setImportPass('');
         load();
       });
   };
@@ -279,21 +319,32 @@ export default function DataScreen() {
             secureTextEntry
             style={styles.input}
           />
-          <Button mode="contained" compact onPress={doExport} disabled={exporting || importing} loading={exporting}>
-            {exporting ? t('data.backup.exporting') : t('data.backup.export')}
-          </Button>
+          <View style={styles.row}>
+            <Button
+              mode="contained"
+              compact
+              style={{ flex: 1 }}
+              onPress={doExport}
+              disabled={exporting || saving || importing}
+              loading={exporting}>
+              {exporting ? t('data.backup.exporting') : t('data.backup.export')}
+            </Button>
+            {/* 保存到本机走 Android SAF（iOS 无此机制，仅保留系统分享） */}
+            {Platform.OS === 'android' && (
+              <Button
+                mode="outlined"
+                compact
+                style={{ flex: 1 }}
+                onPress={() => void doSaveLocal()}
+                disabled={exporting || saving || importing}
+                loading={saving}>
+                {saving ? t('data.backup.saving') : t('data.backup.saveLocal')}
+              </Button>
+            )}
+          </View>
           <Divider style={styles.divider} />
           <Text style={styles.warn}>{t('data.backup.importWarn')}</Text>
-          <TextInput
-            label={t('data.backup.importPass')}
-            value={importPass}
-            onChangeText={setImportPass}
-            mode="outlined"
-            dense
-            secureTextEntry
-            style={styles.input}
-          />
-          <Button mode="outlined" compact onPress={doImport} disabled={exporting || importing} loading={importing}>
+          <Button mode="outlined" compact onPress={() => void doImport()} disabled={exporting || saving || importing} loading={importing}>
             {importing ? t('data.backup.importing') : t('data.backup.import')}
           </Button>
         </View>
@@ -356,6 +407,60 @@ export default function DataScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* 导入确认对话框（先选包后弹）：来源信息 + 口令框（仅口令加密包显示）。
+          importing 期间不可关闭（遮罩/返回键/取消全禁）——覆盖式导入进行中"看似
+          取消实则继续"的认知落差是数据替换级别，必须锁死 */}
+      <Portal>
+        <Dialog
+          visible={pendingImport != null}
+          dismissable={!importing}
+          onDismiss={() => {
+            if (!importing) setPendingImport(null);
+          }}
+          style={{ backgroundColor: palette.panel }}
+        >
+          <Dialog.Title style={{ color: palette.text }}>{t('data.backup.confirmTitle')}</Dialog.Title>
+          <Dialog.Content>
+            {pendingImport && (
+              <Text style={styles.note}>
+                {t('data.backup.confirmMsg', {
+                  device: pendingImport.manifest.device,
+                  time: pendingImport.manifest.exported_at.slice(0, 16).replace('T', ' '),
+                  acts: pendingImport.manifest.counts.activities,
+                  recs: pendingImport.manifest.counts.records,
+                })}
+              </Text>
+            )}
+            {/* db_key 为空 = 包内库由口令加密（manifest 口径），才需要口令；未加密包直接确认 */}
+            {pendingImport?.manifest.db_key == null && (
+              <TextInput
+                label={t('data.backup.importPass')}
+                value={dialogPass}
+                onChangeText={setDialogPass}
+                mode="outlined"
+                dense
+                secureTextEntry
+                style={styles.input}
+              />
+            )}
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setPendingImport(null)} disabled={importing}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              loading={importing}
+              disabled={importing}
+              textColor={palette.red}
+              onPress={() => {
+                if (pendingImport) runImport(pendingImport.uri, dialogPass || null);
+              }}>
+              {t('data.backup.importConfirm')}
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </View>
   );
 }

@@ -15,6 +15,7 @@ import {
   validateBackupManifest,
 } from '../src/backup/manifest.ts';
 import {
+  bytesToBase64,
   bytesToUtf8,
   packBackup,
   recordsEntryBase,
@@ -102,6 +103,23 @@ test('utf8ToBytes: 与标准 TextEncoder 一致（抽样对照）', () => {
   const s = 'Café—汉字β';
   const expected = [...new TextEncoder().encode(s)];
   assert.deepEqual([...utf8ToBytes(s)], expected);
+});
+
+test('bytesToBase64: 已知向量（含 0/1/2/3 字节的填充边界）', () => {
+  assert.equal(bytesToBase64(new Uint8Array(0)), '');
+  assert.equal(bytesToBase64(new Uint8Array([0x66])), 'Zg==');
+  assert.equal(bytesToBase64(new Uint8Array([0x66, 0x6f])), 'Zm8=');
+  assert.equal(bytesToBase64(new Uint8Array([0x66, 0x6f, 0x6f])), 'Zm9v');
+  assert.equal(bytesToBase64(new Uint8Array([0x66, 0x6f, 0x6f, 0x62])), 'Zm9vYg==');
+  assert.equal(bytesToBase64(new Uint8Array([0xab])), 'qw==');
+});
+
+test('bytesToBase64: 与 Buffer 实现一致（随机数据、各种长度）', () => {
+  for (let len = 0; len <= 96; len += 1) {
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i += 1) bytes[i] = (len * 37 + i * 91) % 256;
+    assert.equal(bytesToBase64(bytes), Buffer.from(bytes).toString('base64'), `len=${len}`);
+  }
 });
 
 test('packBackup/unpackBackup: 完整 roundtrip（manifest + db + records 字节一致）', () => {

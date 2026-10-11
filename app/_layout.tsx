@@ -130,6 +130,11 @@ function RootStack() {
         name="data"
         options={{ animation: 'slide_from_right' }}
       />
+      {/* 开源维护期：关于页（品牌/简介/仓库/联系/许可） */}
+      <Stack.Screen
+        name="about"
+        options={{ animation: 'slide_from_right' }}
+      />
       <Stack.Screen name="import" options={{ presentation: 'fullScreenModal' }} />
     </Stack>
   );
