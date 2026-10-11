@@ -76,6 +76,11 @@ export const DATA_QUALITY = {
   pause_resume_window_sec: 5, // 静止判定窗口（秒）：取恢复记录后该窗口内的最大速度判断
 };
 
+// ============ 踩踏时间分解（详情页展示层口径，pedalTime.ts；不进 summary 不喂 AI） ============
+export const PEDAL_TIME = {
+  stationary_hint_sec: 60, // 静止累计提示线：达到该秒数（≥）在卡片附「计时未停的静止以 0W 计入指标」提示（移动/静止判据复用 DATA_QUALITY.pause_resume_speed_kmh）
+};
+
 // ============ 功率峰曲线缺口容忍（analyze.ts：fillShortGaps 插值后再算峰功率/FTP 估算） ============
 export const PEAK_CURVE = {
   max_interp_gap_sec: 10, // 允许线性插值补齐的连续缺口上限（秒）：功率计偶发掉几秒不应让 20min 峰功率整体作废；更长缺口仍视为不连续
@@ -134,7 +139,7 @@ export const AI_CONFIG: AiConfig = {
 // Agentic 工具调用参数（M3 src/ai / src/tools）
 export const AGENTIC = {
   max_rounds: 8, // 最大工具调用轮数，超出后强制模型直接作答（M5 扩到 8：估算→更新 FTP→重算数次训练→汇总作答）
-  tool_result_max_chars: 4000, // 单个工具结果截断上限（超出附"（结果已截断）"标记）
+  tool_result_max_chars: 16000, // 单个工具结果截断上限（超出附"（结果已截断）"标记）；2026-10 由 4000 放宽 4×——start_sec/end_sec 窄窗逐秒核对在 4000 下也不可用（60s 全秒窗约 7k 字符），16k ≈ 4-8k tokens，BYOK 模型上下文可承受（roadmap 截断放宽项）
   records_max_points: 600, // get_activity_records 时序抽稀点数上限
   list_limit: 50, // list_activities 返回条数上限
   form_max_days: 120, // get_form_series 天数上限

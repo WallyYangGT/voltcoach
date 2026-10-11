@@ -72,7 +72,7 @@ assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-
 
 ## 依赖与安全口径
 
-- **升级策略**：expo 系包一律跟 `npx expo install --check` 对齐 SDK 期望版本（是 Expo 测试过的组合，不盲目追 Latest）；非 expo 包在有兼容性评估后才升级。当前有意不升的大版本：`fit-file-parser` 3→6（解析 API 有变，types 手写适配 3.x 且黄金 diff 钉住输出口径，升级需专门回归一轮）、`@react-native-async-storage/async-storage` 2→3 与 `react-native-gesture-handler` 2→3（SDK 57 钉旧版）、`eslint` 9→10（基线 `eslint-config-expo` 兼容未验证）、`eslint-import-resolver-typescript` 3.x（刻意钉住，见 `eslint.config.js` 头注释）。
+- **升级策略**：expo 系包一律跟 `npx expo install --check` 对齐 SDK 期望版本（是 Expo 测试过的组合，不盲目追 Latest）；非 expo 包在有兼容性评估后才升级。当前有意不升的大版本：`@react-native-async-storage/async-storage` 2→3 与 `react-native-gesture-handler` 2→3（SDK 57 钉旧版）、`eslint` 9→10（基线 `eslint-config-expo` 兼容未验证）、`eslint-import-resolver-typescript` 3.x（刻意钉住，见 `eslint.config.js` 头注释）。`fit-file-parser` 已于 2026-10 升至 6.2.1（官方 TypeScript 类型接替手写声明；5.x 破坏性变更经逐项核对不影响本仓消费字段，黄金 diff 3 真实文件逐字段一致 + 合成爬坡 e2e 钉住海拔 km 缩放口径）。
 - **`react-native-keyboard-controller` 有意停在 1.22.5**（expo check 期望 1.21.9 是降级）——键盘避让方案建在该库上，降级需真机回归，无对应收益。
 - **npm audit 残余的接受口径**（`npm audit fix` 后约 37 条，audit 不进 CI 硬闸）：
   - **构建工具链类**（metro/braces、@expo/cli/node-forge、@expo/config-plugins 链）——只在开发/CI 机器上运行，不进 APK，随 Expo SDK 升级自然消解；

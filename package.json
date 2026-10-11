@@ -47,7 +47,7 @@
     "expo-system-ui": "~57.0.4",
     "expo-web-browser": "~57.0.3",
     "fflate": "^0.8.3",
-    "fit-file-parser": "3.0.2",
+    "fit-file-parser": "6.2.1",
     "pako": "^3.0.2",
     "punycode": "^2.3.1",
     "react": "19.2.3",

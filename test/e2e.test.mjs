@@ -191,6 +191,28 @@ test('累计爬升：优先采用码表自报 total_ascent，缺失时回退自�
   assert.equal(s3.activity.elevation_gain_source, 'computed');
 });
 
+test('爬坡段识别：海拔 km 缩放换算后的完整 climbs 链路（CI 无黄金 diff 的兜底断言）', async () => {
+  // 300m 平路后以 6.8% 匀坡爬升（0.35m/秒 × 5m/s），30s 坡度窗口与去抖把
+  // 段沿修整为 495s / 2470m / 167m（探针实测钉死，防 parser 升级静默破坏海拔口径）
+  const { summary } = await analyzeFile(
+    fitOf(gen.buildRideFit({ durationSec: 600, speedMS: 5, altitude: (i) => 100 + Math.max(0, i - 120) * 0.35 })),
+  );
+  assert.deepEqual(summary.climbs, [
+    {
+      name: 'climb_1',
+      start: '2024-01-15T10:01:44.000Z',
+      duration_sec: 495,
+      distance_m: 2470,
+      elevation_gain_m: 167,
+      avg_grade_pct: 6.8,
+      avg_power: 200,
+      avg_hr: 140,
+    },
+  ]);
+  assert.equal(summary.activity.elevation_gain_m, 167);
+  assert.equal(summary.activity.elevation_gain_source, 'computed');
+});
+
 test('跑步：配速/步频指标，无功率段，心率漂移走速度口径', async () => {
   const { summary } = await analyzeFile(fitOf(gen.buildRunFit()));
 
