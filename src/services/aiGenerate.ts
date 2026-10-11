@@ -43,6 +43,7 @@ import {
   type AiReportMode,
 } from '@/db';
 import { loadDefaultFetch } from '@/ai/http';
+import { acquireGenerationKeepAlive, releaseGenerationKeepAlive } from '@/ai/keepalive';
 import { callAI, runAgentLoop } from '@/ai/agent';
 import { t, type Lang } from '@/core/i18n';
 import { withinResumeWindow } from '@/core/report-status';
@@ -259,6 +260,14 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
       finalPrompt += '\n\n' + buildAgenticSection(lang);
       finalPrompt += '\n\n' + buildMemorySection(await listMemories(), lang);
     }
+    // 生成期间启动保活前台服务（引用计数，见 src/ai/keepalive.ts）：进程脱离
+    // cached 冻结桶，退后台/锁屏 SSE 不断流。放在所有取数/校验之后——fast-fail
+    // 路径不闪通知；finally 无条件 release（未 acquire 时 refs=0 为 no-op）。
+    await acquireGenerationKeepAlive({
+      title: t(lang, 'ai.keepalive_title'),
+      body: t(lang, 'ai.keepalive_body'),
+      channel: t(lang, 'ai.keepalive_channel'),
+    });
     const markdown = await callAiMaybeAgentic(
       config,
       [{ role: 'user', content: finalPrompt }],
@@ -277,6 +286,7 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     await updateAiReport(reportId, { status: 'failed', error: msg });
     console.error(`[AI] 后台分析失败: ${msg}`);
   } finally {
+    await releaseGenerationKeepAlive();
     runningReports.delete(reportId);
     reportProgress.delete(reportId);
   }
@@ -375,6 +385,12 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
       .filter((m) => m.status === 'completed' && m.content)
       .map((m) => ({ role: m.role, content: m.content }));
     const system = await buildChatSystem(chat, config.agentic !== false, lang);
+    // 保活口径同 generateReport（快取数/校验后、真正发起 LLM 调用前 acquire）
+    await acquireGenerationKeepAlive({
+      title: t(lang, 'ai.keepalive_title'),
+      body: t(lang, 'ai.keepalive_body'),
+      channel: t(lang, 'ai.keepalive_channel'),
+    });
     const markdown = await callAiMaybeAgentic(
       config,
       [{ role: 'user', content: system }, ...history],
@@ -395,6 +411,7 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     await touchAiChat(chatId); // 失败同样刷新 updated_at（列表排序与旧版一致）
     console.error(`[AI chat] 后台生成失败: ${msg}`);
   } finally {
+    await releaseGenerationKeepAlive();
     runningChats.delete(key);
     chatProgress.delete(key);
   }
