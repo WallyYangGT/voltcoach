@@ -240,3 +240,25 @@ test('结果超长截断：超 AGENTIC.tool_result_max_chars 附截断标记', a
   assert.ok(raw.length <= AGENTIC.tool_result_max_chars + '（结果已截断）'.length);
   assert.ok(raw.endsWith('（结果已截断）'));
 });
+
+test('get_activity_records：60s 全秒窄窗不截断（逐秒核对暂停时刻的可用性，截断放宽回归）', async () => {
+  // 60 秒逐秒数据（< records_max_points 抽稀线 → 全秒返回）；旧 4000 上限时这种窗
+  // 也会被硬切（roadmap 2026-09-25 留档：逐秒核对暂停时刻基本不可用）
+  const points = Array.from({ length: 60 }, (_, i) => ({
+    t: `2026-03-25T03:10:${String(i).padStart(2, '0')}.000Z`,
+    power: i < 20 ? 0 : 200,
+    heart_rate: 140,
+    cadence: i < 20 ? 0 : 90,
+    altitude: 100,
+    speed: i < 20 ? 0.5 : 25,
+    distance_m: i * 7,
+    temperature: null,
+  }));
+  const io = fakeIo({ loadRecords: async () => ({ points, total_seconds: points.length, stride: 1 }) });
+  const exec = createExecuteTool(io, { lang: 'zh' });
+  const raw = await exec('get_activity_records', { file_name: 'a.fit', start_sec: 0, end_sec: 59 });
+  assert.ok(raw.length > 4000, '60s 全秒窗应超旧 4000 上限（证明放宽实际生效）');
+  const parsed = JSON.parse(raw); // 截断标记会破坏 JSON——能 parse 即未截断
+  assert.equal(parsed.points.length, 60);
+  assert.ok(raw.length <= AGENTIC.tool_result_max_chars + '（结果已截断）'.length);
+});
