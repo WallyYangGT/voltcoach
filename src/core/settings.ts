@@ -76,6 +76,11 @@ export const DATA_QUALITY = {
   pause_resume_window_sec: 5, // 静止判定窗口（秒）：取恢复记录后该窗口内的最大速度判断
 };
 
+// ============ 踩踏时间分解（详情页展示层口径，pedalTime.ts；不进 summary 不喂 AI） ============
+export const PEDAL_TIME = {
+  stationary_hint_sec: 60, // 静止累计提示线：超过该秒数在卡片附「计时未停的静止以 0W 计入指标」提示（移动/静止判据复用 DATA_QUALITY.pause_resume_speed_kmh）
+};
+
 // ============ 功率峰曲线缺口容忍（analyze.ts：fillShortGaps 插值后再算峰功率/FTP 估算） ============
 export const PEAK_CURVE = {
   max_interp_gap_sec: 10, // 允许线性插值补齐的连续缺口上限（秒）：功率计偶发掉几秒不应让 20min 峰功率整体作废；更长缺口仍视为不连续

@@ -69,6 +69,13 @@ export const DICT = {
     'climb.col.grade': '均坡度 %',
     'climb.col.avg_power': '均功率',
     'climb.col.avg_hr': '均心率',
+    // 踩踏时间分解卡（展示层口径见 core/pedalTime.ts：踩踏 P>0 / 滑行 P=0 且移动 /
+    // 静止 P=0 且速度≈0；不进 summary 不喂 AI）
+    'pedal.title': '踩踏时间分解',
+    'pedal.pedaling': '踩踏',
+    'pedal.coasting': '滑行',
+    'pedal.stationary': '静止',
+    'pedal.stationary_hint': '提示：约 {dur} 计时未停的静止（速度≈0、0W）已计入功率分区与负荷指标',
     'dq.title': '数据质量与异常',
     'dq.power': '功率覆盖 {p}%',
     'dq.hr': '心率覆盖 {p}%',
@@ -492,6 +499,13 @@ export const DICT = {
     'climb.col.grade': 'Grade %',
     'climb.col.avg_power': 'Avg power',
     'climb.col.avg_hr': 'Avg HR',
+    // Pedaling-time breakdown card (display-layer scope, see core/pedalTime.ts:
+    // pedaling P>0 / coasting P=0 & moving / stationary P=0 & ≈0 speed; not in summary, not fed to AI)
+    'pedal.title': 'Pedaling time breakdown',
+    'pedal.pedaling': 'Pedaling',
+    'pedal.coasting': 'Coasting',
+    'pedal.stationary': 'Stationary',
+    'pedal.stationary_hint': 'Note: about {dur} stationary with the timer running (≈0 speed, 0 W) is counted into power zones and load metrics',
     'dq.title': 'Data quality & anomalies',
     'dq.power': 'Power coverage {p}%',
     'dq.hr': 'HR coverage {p}%',

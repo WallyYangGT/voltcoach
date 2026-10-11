@@ -30,12 +30,14 @@ import { formatAnomaly } from '@/core/i18n';
 import {
   buildActivityMetrics,
   buildCadenceMetrics,
+  buildPedalTimeMetrics,
   formatDurationClock,
   type MetricItem,
   type MetricText,
 } from '@/core/metrics';
+import { pedalTimeBreakdown, type PedalTimeBreakdown } from '@/core/pedalTime';
 import { thinRecords } from '@/core/records';
-import { HR_ZONES, POWER_ZONES, type Zone } from '@/core/settings';
+import { HR_ZONES, PEDAL_TIME, POWER_ZONES, type Zone } from '@/core/settings';
 import { CATEGORY_KEYS, deleteActivity, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import { MetricGrid } from '@/components/MetricGrid';
@@ -81,6 +83,8 @@ export default function ActivityDetailScreen() {
 
   const [summary, setSummary] = useState<Summary | null | undefined>(undefined); // undefined=加载中
   const [thinned, setThinned] = useState<Awaited<ReturnType<typeof thinRecords>> | null>(null);
+  // 踩踏时间分解（从完整逐秒数据现算——不是抽稀后的 thinned，占比才准）
+  const [pedal, setPedal] = useState<PedalTimeBreakdown | null>(null);
   const [visible, setVisible] = useState<Set<string>>(new Set(DEFAULT_VISIBLE));
   // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
   const [note, setNote] = useState('');
@@ -147,7 +151,10 @@ export default function ActivityDetailScreen() {
         setNote(s?.activity.note ?? '');
         if (s) {
           const stored = await loadStoredRecords(fileName);
-          if (alive) setThinned(stored ? thinRecords(stored) : null);
+          if (alive) {
+            setThinned(stored ? thinRecords(stored) : null);
+            setPedal(stored ? pedalTimeBreakdown(stored) : null);
+          }
         }
       } catch (e) {
         console.warn('加载训练详情失败:', e);
@@ -238,6 +245,13 @@ export default function ActivityDetailScreen() {
     const tMetric: MetricText = (key, vars) => t(key as DictKey, vars);
     return buildCadenceMetrics(summary.cadence_power, tMetric);
   }, [summary, t]);
+
+  // 踩踏时间分解卡指标格（pedal 为 null = 全程无功率数据，卡片隐藏）
+  const pedalMetrics = useMemo<MetricItem[]>(() => {
+    if (!pedal) return [];
+    const tMetric: MetricText = (key, vars) => t(key as DictKey, vars);
+    return buildPedalTimeMetrics(pedal, tMetric);
+  }, [pedal, t]);
 
   if (summary === undefined) return <View style={styles.page} />;
   if (!summary) {
@@ -446,6 +460,22 @@ export default function ActivityDetailScreen() {
             <MetricGrid items={cadenceMetrics} />
             {/* 不用 as never：模板字面量类型恰为三个 DictKey 成员，style 扩枚举而未补词典时 tsc 直接报错 */}
             <Text style={styles.dqLine}>{t(`cad.style.${summary.cadence_power.style}`)}</Text>
+          </View>
+        )}
+
+        {/* 踩踏时间分解（roadmap「0W/踩踏时间分解」展示层轻量实现：从已存逐秒数据现算，
+            不进 summary 不喂 AI；静止判据复用暂停阈值，口径见 core/pedalTime.ts。
+            位置在踏频-功率分析卡之后——同为发力/踏频侧数据，先于数据质量与异常卡；
+            静止累计超提示线时附「0W 计入指标」披露行） */}
+        {pedal && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{t('pedal.title')}</Text>
+            <MetricGrid items={pedalMetrics} />
+            {pedal.stationary_sec >= PEDAL_TIME.stationary_hint_sec && (
+              <Text style={styles.dqLine}>
+                {t('pedal.stationary_hint', { dur: formatDurationClock(pedal.stationary_sec) })}
+              </Text>
+            )}
           </View>
         )}
 
