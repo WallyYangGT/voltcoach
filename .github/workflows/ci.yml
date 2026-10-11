@@ -20,11 +20,11 @@ jobs:
       group: ci-${{ github.ref }} # 同 ref 串行：同一 PR 连续推送取消旧的，省机时防干扰
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # PR 侧要与 origin/<base> 比版本，需取到基线分支
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24 # 单测跑 .ts 需要 Node ≥ 23.6 原生 type stripping
           cache: npm

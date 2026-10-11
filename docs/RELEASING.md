@@ -89,7 +89,7 @@ cd .. && npm run check:apk
 
 | 变体 | 构建方式 | 差异 |
 |---|---|---|
-| 通用包（默认发版） | `./gradlew assembleRelease` | 含全部四套 ABI（arm64-v8a / armeabi-v7a / x86 / x86_64），体积大但任意设备可装 |
-| arm64 精简包 | `./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a` | 只含 arm64-v8a，体积小；2018 年后的主流手机与全部模拟器均可用 |
+| arm64 包（**CI 发版默认**，2026-10-11 起） | `./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a` | 只含 arm64-v8a，约 55MB；现代安卓手机均可装 |
+| 通用包（本地自建可选） | `./gradlew assembleRelease` | 含全部四套 ABI（arm64-v8a / armeabi-v7a / x86 / x86_64），约 140MB；仅老 32 位 ARM 设备与 x86 模拟器需要 |
 
-两变体除 ABI 集合外无任何差异；日常自用建议 arm64 包，对外发布默认通用包。
+两变体除 ABI 集合外无任何差异。发版流水线固定打 arm64 包（体积减半，老 32 位设备不在支持范围——arm64-v8a 自 Android 5.1 起为主流，纯 32 位机型已属边缘）；确需覆盖老设备或 x86 模拟器时按上表本地自建通用包。
