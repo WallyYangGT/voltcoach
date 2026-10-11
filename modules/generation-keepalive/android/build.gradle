@@ -8,4 +8,10 @@ version = '0.1.0'
 
 android {
   namespace "expo.modules.generationkeepalive"
+  defaultConfig {
+    // expo-autolinking 配置期读取这两个值，缺省即「'android.defaultConfig.versionName'
+    // is not defined」构建失败（expo-clipboard 等官方模块模板同款写法）
+    versionCode 1
+    versionName '0.1.0'
+  }
 }
