@@ -20,7 +20,7 @@ const TEXT = { title: 'AI 生成进行中', body: '切后台也继续', channel:
 
 /** spy impl：记录调用次数与参数，可按需让 start/stop 抛错或挂起 */
 function makeSpyImpl({ failStart = false, failStop = false } = {}) {
-  const calls = { start: 0, stop: 0, args: [] };
+  const calls = { start: 0, stop: 0, perm: 0, args: [] };
   return {
     calls,
     start: async (title, body, channel) => {
@@ -33,6 +33,9 @@ function makeSpyImpl({ failStart = false, failStop = false } = {}) {
       calls.stop += 1;
       if (failStop) throw new Error('stop boom');
       return true;
+    },
+    ensureNotificationPermission: async () => {
+      calls.perm += 1;
     },
   };
 }
@@ -138,4 +141,51 @@ test('并发交错：A/B 先后 acquire，A 先退场不触发 stop，B 退场�
 
   await releaseGenerationKeepAlive();
   assert.equal(spy.calls.stop, 1);
+});
+
+test('首个 acquire 触发通知权限申请（fire-and-forget）', async () => {
+  const spy = makeSpyImpl();
+  resetKeepAliveForTests(spy);
+
+  await acquireGenerationKeepAlive(TEXT);
+  assert.equal(spy.calls.perm, 1);
+});
+
+test('真实装载路径在 node 环境失败 → 整体 no-op 且不抛错（loadImpl 兜底分支）', async () => {
+  // loaderUnresolved：不注入 impl，让下一次 acquire 走真实动态 import——
+  // node:test 里 modules/generation-keepalive（依赖 react-native/expo 原生）必然失败
+  resetKeepAliveForTests(null, { loaderUnresolved: true });
+  await acquireGenerationKeepAlive(TEXT);
+  await releaseGenerationKeepAlive();
+});
+
+test('电池白名单查询/申请透传 impl；impl 缺失或抛错一律 false', async () => {
+  const { isIgnoringBatteryOptimizations, requestIgnoreBatteryOptimizations } =
+    await import('../src/ai/keepalive.ts');
+
+  resetKeepAliveForTests(null);
+  assert.equal(await isIgnoringBatteryOptimizations(), false);
+  assert.equal(await requestIgnoreBatteryOptimizations(), false);
+
+  resetKeepAliveForTests({
+    start: async () => true,
+    stop: async () => true,
+    isIgnoringBatteryOptimizations: () => true,
+    requestIgnoreBatteryOptimizations: async () => true,
+  });
+  assert.equal(await isIgnoringBatteryOptimizations(), true);
+  assert.equal(await requestIgnoreBatteryOptimizations(), true);
+
+  resetKeepAliveForTests({
+    start: async () => true,
+    stop: async () => true,
+    isIgnoringBatteryOptimizations: () => {
+      throw new Error('boom');
+    },
+    requestIgnoreBatteryOptimizations: async () => {
+      throw new Error('boom');
+    },
+  });
+  assert.equal(await isIgnoringBatteryOptimizations(), false);
+  assert.equal(await requestIgnoreBatteryOptimizations(), false);
 });

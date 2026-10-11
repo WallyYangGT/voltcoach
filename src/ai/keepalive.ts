@@ -18,14 +18,18 @@
  * - start 与 stop 串行化：极短任务在 start 落定前 release 时，等 start 结束再
  *   stop——避免 Android 上「startForegroundService 已排队、stopService 先到」
  *   导致服务未及 startForeground 的崩溃面。
- * - POST_NOTIFICATIONS（Android 13+ 运行时权限）在首个 acquire 时 fire-and-forget
- *   申请一次：拒绝不影响 FGS 运行（只是通知不展示），绝不阻塞生成。
  */
 
-/** 保活实现形状（原生模块接口的子集投影；node:test 注入 spy 用） */
+/** 保活实现形状（modules/generation-keepalive 默认导出的投影；node:test 注入 spy 用） */
 export interface KeepAliveImpl {
   start(title: string, body: string, channelName: string): Promise<boolean> | boolean;
   stop(): Promise<boolean> | boolean;
+  /** Android 13+ 通知权限申请（fire-and-forget，模块内部自带 once 口径），可缺省 */
+  ensureNotificationPermission?: () => Promise<void>;
+  /** 是否已在电池优化白名单内（同步），可缺省 */
+  isIgnoringBatteryOptimizations?: () => boolean;
+  /** 弹系统框申请电池白名单，可缺省 */
+  requestIgnoreBatteryOptimizations?: () => Promise<boolean>;
 }
 
 /** 启动保活所需的文案（调用方按语言取好：通知标题/正文 + 通知渠道名） */
@@ -39,7 +43,6 @@ let refs = 0;
 let pendingStart: Promise<void> | null = null;
 let impl: KeepAliveImpl | null = null;
 let implResolved = false;
-let notificationPermissionRequested = false;
 
 /** 原生模块装载：iOS（未链接）与 node:test 环境下 import 抛错 → 永久 no-op */
 async function loadImpl(): Promise<KeepAliveImpl | null> {
@@ -56,27 +59,6 @@ async function loadImpl(): Promise<KeepAliveImpl | null> {
   return impl;
 }
 
-/** Android 13+ 通知运行时权限：只申请一次，拒绝不影响 FGS 运行（通知不展示而已） */
-async function requestPostNotificationsOnce(): Promise<void> {
-  if (notificationPermissionRequested) return;
-  notificationPermissionRequested = true;
-  try {
-    const rn = (await import('react-native')) as {
-      Platform: { OS: string; Version: number | string };
-      PermissionsAndroid?: {
-        request: (perm: string) => Promise<string>;
-        PERMISSIONS: { POST_NOTIFICATIONS: string };
-      };
-    };
-    if (rn.Platform.OS !== 'android' || Number(rn.Platform.Version) < 33 || !rn.PermissionsAndroid) {
-      return;
-    }
-    await rn.PermissionsAndroid.request(rn.PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
-  } catch {
-    // node:test 环境（react-native 不可 import）或旧版本：忽略
-  }
-}
-
 /**
  * 进入一段生成任务：首个 acquire 启动保活前台服务；后续并发 acquire 仅计数。
  * 永不抛错（含 impl 缺失/启动失败——都只是不保活）。text 传 i18n 后的文案。
@@ -87,7 +69,8 @@ export async function acquireGenerationKeepAlive(text: KeepAliveText): Promise<v
   const run = async (): Promise<void> => {
     const i = await loadImpl();
     if (!i) return;
-    void requestPostNotificationsOnce();
+    // 通知权限（Android 13+）：fire-and-forget，拒绝不影响 FGS 运行，绝不阻塞生成
+    void i.ensureNotificationPermission?.().catch(() => {});
     try {
       const ok = await i.start(text.title, text.body, text.channel);
       if (!ok) console.warn('[keepalive] 前台服务启动未成功，本次生成退回「前台等待」行为');
@@ -124,8 +107,8 @@ export async function releaseGenerationKeepAlive(): Promise<void> {
 
 /** 是否已在电池优化白名单内（设置页状态行用；impl 不可用/查询失败一律 false） */
 export async function isIgnoringBatteryOptimizations(): Promise<boolean> {
-  const i = (await loadImpl()) as (KeepAliveImpl & { isIgnoringBatteryOptimizations?: () => boolean }) | null;
-  if (!i || typeof i.isIgnoringBatteryOptimizations !== 'function') return false;
+  const i = await loadImpl();
+  if (!i?.isIgnoringBatteryOptimizations) return false;
   try {
     return i.isIgnoringBatteryOptimizations() === true;
   } catch {
@@ -135,10 +118,8 @@ export async function isIgnoringBatteryOptimizations(): Promise<boolean> {
 
 /** 弹系统确认框申请电池优化白名单；false = 已在内/无法弹窗（部分 ROM 不支持） */
 export async function requestIgnoreBatteryOptimizations(): Promise<boolean> {
-  const i = (await loadImpl()) as
-    | (KeepAliveImpl & { requestIgnoreBatteryOptimizations?: () => Promise<boolean> })
-    | null;
-  if (!i || typeof i.requestIgnoreBatteryOptimizations !== 'function') return false;
+  const i = await loadImpl();
+  if (!i?.requestIgnoreBatteryOptimizations) return false;
   try {
     return (await i.requestIgnoreBatteryOptimizations()) === true;
   } catch {
@@ -146,11 +127,22 @@ export async function requestIgnoreBatteryOptimizations(): Promise<boolean> {
   }
 }
 
-/** 测试钩子：重置全部模块级状态并直接注入 impl（null = 模拟「原生模块不可用」） */
-export function resetKeepAliveForTests(nextImpl: KeepAliveImpl | null): void {
+/**
+ * 测试钩子：重置全部模块级状态并直接注入 impl（null = 模拟「原生模块不可用」）。
+ * opts.loaderUnresolved = true 时把装载器也退回未解析态——下一次 acquire 会走
+ * 真实动态 import 路径（node:test 里必然失败，用于覆盖 loadImpl 的兜底分支）。
+ */
+export function resetKeepAliveForTests(
+  nextImpl: KeepAliveImpl | null,
+  opts?: { loaderUnresolved?: boolean },
+): void {
   refs = 0;
   pendingStart = null;
-  impl = nextImpl;
-  implResolved = true;
-  notificationPermissionRequested = false;
+  if (opts?.loaderUnresolved) {
+    impl = null;
+    implResolved = false;
+  } else {
+    impl = nextImpl;
+    implResolved = true;
+  }
 }
