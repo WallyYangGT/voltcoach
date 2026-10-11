@@ -1,6 +1,8 @@
 /**
  * data.tsx — 数据管理页（M4，自「我的」入口进入）：备份 / 本地快照 / 重复记录三卡布局
- *  - 备份：可选口令导出——保存到本机（SAF 目录直存）或系统分享；DocumentPicker 导入（预览确认 + 版本闸门）
+ *  - 备份：可选口令导出——保存到本机（SAF 目录直存）或系统分享；DocumentPicker
+ *    选包 → 预检（版本闸门）→ 弹对话框（来源信息 + 可选口令，仅加密包显示口令框）
+ *    → 确认执行，口令错误原地重试不重选包
  *  - 本地快照：查看/手动创建/删除（auto-latest，导入训练后自动滚动）
  *  - 重复记录检查（M5）：内容指纹找重 + 人工确认合并
  * 顽鹿同步卡原在此处，M5 收尾后按反馈挪至「我的」页 AI 服务下方（src/components/
@@ -13,12 +15,12 @@ import { EncodingType, StorageAccessFramework } from 'expo-file-system/legacy';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Appbar, Button, Divider, TextInput } from 'react-native-paper';
+import { Appbar, Button, Dialog, Divider, Portal, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { File } from 'expo-file-system';
 import { createLocalSnapshot, deleteLocalSnapshot, buildBackup, exportBackupToCache, readLocalSnapshotInfo, type SnapshotInfo } from '@/backup/export';
 import { importBackupFile } from '@/backup/import';
-import { BackupError, checkSchemaVersion as gateVersion } from '@/backup/manifest';
+import { BackupError, checkSchemaVersion as gateVersion, type BackupManifest } from '@/backup/manifest';
 import { bytesToBase64, unpackBackup } from '@/backup/archive';
 import { findDuplicateGroups } from '@/core/dedupe';
 import { formatDuration } from '@/core/metrics';
@@ -43,7 +45,9 @@ export default function DataScreen() {
   // —— 备份 ——
   const [pass1, setPass1] = useState('');
   const [pass2, setPass2] = useState('');
-  const [importPass, setImportPass] = useState('');
+  // 导入对话框：选包并预检通过后弹出（先选包后输口令），含来源信息与可选口令框
+  const [pendingImport, setPendingImport] = useState<{ uri: string; manifest: BackupManifest } | null>(null);
+  const [dialogPass, setDialogPass] = useState('');
   const [exporting, setExporting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -140,47 +144,38 @@ export default function DataScreen() {
       const asset = res.assets?.[0];
       if (res.canceled || !asset) return;
 
-      // 预览阶段先做结构校验与版本闸门（坏包/超前版本在确认前拦下）
+      // 弹框前先做结构校验与版本闸门（坏包/超前版本在确认前拦下）
       const bytes = await new File(asset.uri).bytes();
       const { manifest } = unpackBackup(bytes);
       gateVersion(manifest, SCHEMA_VERSION);
-      Alert.alert(
-        t('data.backup.confirmTitle'),
-        t('data.backup.confirmMsg', {
-          device: manifest.device,
-          time: manifest.exported_at.slice(0, 16).replace('T', ' '),
-          acts: manifest.counts.activities,
-          recs: manifest.counts.records,
-        }),
-        [
-          { text: t('common.cancel'), style: 'cancel' },
-          {
-            text: t('data.backup.import'),
-            style: 'destructive',
-            onPress: () => {
-              runImport(asset.uri);
-            },
-          },
-        ],
-      );
+      setDialogPass('');
+      setPendingImport({ uri: asset.uri, manifest });
     } catch (e) {
       Alert.alert(t('data.err.generic'), describeError(e));
     }
   };
 
-  const runImport = (uri: string) => {
+  /**
+   * 执行导入（口令来自导入对话框）。wrong_key/passphrase_required 时对话框不关、
+   * 口令清空——用户原地重试，不必重新选包；其他失败关对话框（包本身有问题，
+   * 原地重试无意义）。
+   */
+  const runImport = (uri: string, pass: string | null) => {
     setImporting(true);
-    importBackupFile(uri, importPass || null)
+    importBackupFile(uri, pass)
       .then((outcome) => {
+        setPendingImport(null);
         invalidateReportTitles(); // 整库被替换：活动行与 records 全变了，标题缓存必须全清
         Alert.alert(t('data.backup.confirmTitle'), t('data.backup.importDone', { acts: outcome.activities, recs: outcome.records }));
       })
       .catch((e) => {
+        const retryable = e instanceof BackupError && (e.code === 'wrong_key' || e.code === 'passphrase_required');
+        if (retryable) setDialogPass('');
+        else setPendingImport(null);
         Alert.alert(t('data.err.generic'), describeError(e));
       })
       .finally(() => {
         setImporting(false);
-        setImportPass('');
         load();
       });
   };
@@ -334,16 +329,7 @@ export default function DataScreen() {
           </View>
           <Divider style={styles.divider} />
           <Text style={styles.warn}>{t('data.backup.importWarn')}</Text>
-          <TextInput
-            label={t('data.backup.importPass')}
-            value={importPass}
-            onChangeText={setImportPass}
-            mode="outlined"
-            dense
-            secureTextEntry
-            style={styles.input}
-          />
-          <Button mode="outlined" compact onPress={doImport} disabled={exporting || importing} loading={importing}>
+          <Button mode="outlined" compact onPress={() => void doImport()} disabled={exporting || saving || importing} loading={importing}>
             {importing ? t('data.backup.importing') : t('data.backup.import')}
           </Button>
         </View>
@@ -406,6 +392,51 @@ export default function DataScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* 导入确认对话框（先选包后弹）：来源信息 + 口令框（仅口令加密包显示） */}
+      <Portal>
+        <Dialog visible={pendingImport != null} onDismiss={() => setPendingImport(null)} style={{ backgroundColor: palette.panel }}>
+          <Dialog.Title style={{ color: palette.text }}>{t('data.backup.confirmTitle')}</Dialog.Title>
+          <Dialog.Content>
+            {pendingImport && (
+              <Text style={styles.note}>
+                {t('data.backup.confirmMsg', {
+                  device: pendingImport.manifest.device,
+                  time: pendingImport.manifest.exported_at.slice(0, 16).replace('T', ' '),
+                  acts: pendingImport.manifest.counts.activities,
+                  recs: pendingImport.manifest.counts.records,
+                })}
+              </Text>
+            )}
+            {/* db_key 为空 = 包内库由口令加密（manifest 口径），才需要口令；未加密包直接确认 */}
+            {pendingImport?.manifest.db_key == null && (
+              <TextInput
+                label={t('data.backup.importPass')}
+                value={dialogPass}
+                onChangeText={setDialogPass}
+                mode="outlined"
+                dense
+                secureTextEntry
+                style={styles.input}
+              />
+            )}
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setPendingImport(null)} disabled={importing}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              loading={importing}
+              disabled={importing}
+              textColor={palette.red}
+              onPress={() => {
+                if (pendingImport) runImport(pendingImport.uri, dialogPass || null);
+              }}>
+              {t('data.backup.importConfirm')}
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </View>
   );
 }
