@@ -43,7 +43,10 @@ import {
   type AiReportMode,
 } from '@/db';
 import { loadDefaultFetch } from '@/ai/http';
-import { acquireGenerationKeepAlive, releaseGenerationKeepAlive } from '@/ai/keepalive';
+import {
+  acquireGenerationKeepAlive,
+  type KeepAliveHandle,
+} from '@/ai/keepalive';
 import { callAI, runAgentLoop } from '@/ai/agent';
 import { t, type Lang } from '@/core/i18n';
 import { withinResumeWindow } from '@/core/report-status';
@@ -251,6 +254,9 @@ export function getChatProgress(chatId: number, messageId: number): GenProgress 
 export async function generateReport(reportId: number, lang: Lang = 'zh'): Promise<{ started: boolean }> {
   if (runningReports.has(reportId)) return { started: false }; // 同一报告不重复 fire
   runningReports.add(reportId);
+  // 保活句柄：acquire 之前的 fast-fail 路径（未配对 acquire）下保持 null，
+  // finally 的可选 release 是 no-op——不会偷走并发任务的保活引用（code-review P1-2）
+  let keepAlive: KeepAliveHandle | null = null;
   try {
     const config = await requireAiConfig(lang);
     const report = await getAiReport(reportId);
@@ -260,10 +266,10 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
       finalPrompt += '\n\n' + buildAgenticSection(lang);
       finalPrompt += '\n\n' + buildMemorySection(await listMemories(), lang);
     }
-    // 生成期间启动保活前台服务（引用计数，见 src/ai/keepalive.ts）：进程脱离
+    // 生成期间启动保活前台服务（令牌制引用计数，见 src/ai/keepalive.ts）：进程脱离
     // cached 冻结桶，退后台/锁屏 SSE 不断流。放在所有取数/校验之后——fast-fail
-    // 路径不闪通知；finally 无条件 release（未 acquire 时 refs=0 为 no-op）。
-    await acquireGenerationKeepAlive({
+    // 路径不闪通知；finally 只释放自己的句柄（成功/失败/超时都停）。
+    keepAlive = await acquireGenerationKeepAlive({
       title: t(lang, 'ai.keepalive_title'),
       body: t(lang, 'ai.keepalive_body'),
       channel: t(lang, 'ai.keepalive_channel'),
@@ -286,7 +292,7 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     await updateAiReport(reportId, { status: 'failed', error: msg });
     console.error(`[AI] 后台分析失败: ${msg}`);
   } finally {
-    await releaseGenerationKeepAlive();
+    await keepAlive?.release();
     runningReports.delete(reportId);
     reportProgress.delete(reportId);
   }
@@ -377,6 +383,8 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
   const key = `${chatId}:${messageId}`;
   if (runningChats.has(key)) return { started: false }; // 同一消息不重复 fire
   runningChats.add(key);
+  // 保活句柄：口径同 generateReport（fast-fail 不闪通知、finally 只释放自己的句柄）
+  let keepAlive: KeepAliveHandle | null = null;
   try {
     const config = await requireAiConfig(lang);
     const chat = await getAiChat(chatId);
@@ -385,8 +393,7 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
       .filter((m) => m.status === 'completed' && m.content)
       .map((m) => ({ role: m.role, content: m.content }));
     const system = await buildChatSystem(chat, config.agentic !== false, lang);
-    // 保活口径同 generateReport（快取数/校验后、真正发起 LLM 调用前 acquire）
-    await acquireGenerationKeepAlive({
+    keepAlive = await acquireGenerationKeepAlive({
       title: t(lang, 'ai.keepalive_title'),
       body: t(lang, 'ai.keepalive_body'),
       channel: t(lang, 'ai.keepalive_channel'),
@@ -411,7 +418,7 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     await touchAiChat(chatId); // 失败同样刷新 updated_at（列表排序与旧版一致）
     console.error(`[AI chat] 后台生成失败: ${msg}`);
   } finally {
-    await releaseGenerationKeepAlive();
+    await keepAlive?.release();
     runningChats.delete(key);
     chatProgress.delete(key);
   }

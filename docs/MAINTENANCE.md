@@ -23,8 +23,9 @@ src/
   components/           共用 UI 组件
   i18n/                 前端双语词典（zh 默认 / en）
 modules/                本地 Expo 原生模块（generation-keepalive：AI 生成保活前台服务
-                        + 电池优化白名单 API，android-only，autolinking 自动接入；
-                        manifest 声明由 plugins/with-generation-keepalive.js 注入）
+                        + 电池优化白名单 API，android-only，autolinking 自动接入）
+plugins/                本地 config plugin（with-generation-keepalive.js：prebuild 时向
+                        AndroidManifest 注入 service 声明；gradle 注入仍走 scripts/ 补丁）
 scripts/                守卫与工具脚本（除 fflate——备份层同用的 zip 库——外仅用 Node 内置库）
 test/                   node:test 纯函数测试（含合成 FIT 二进制生成器 make_test_fit.mjs）
 docs/                   本公开文档体系

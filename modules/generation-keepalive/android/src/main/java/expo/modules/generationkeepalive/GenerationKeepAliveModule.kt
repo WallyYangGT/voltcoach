@@ -1,5 +1,6 @@
 package expo.modules.generationkeepalive
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -69,10 +70,20 @@ class GenerationKeepAliveModule : Module() {
       pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false
     }
 
+    /** 通知权限是否已授予（设置页状态行；API 24 起 NotificationManager 自带该方法） */
+    Function("areNotificationsEnabled") {
+      val context = appContext.reactContext?.applicationContext ?: return@Function false
+      val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+      nm?.areNotificationsEnabled() ?: false
+    }
+
     /**
      * 申请加入电池优化白名单（系统确认弹窗）：FGS 已解决进程冻结，此白名单兜住
      * 深度 Doze 忽略 wake lock 的极端场景。自分发（GitHub Release）不受 Play 对
      * 该权限的政策限制。已在白名单内或系统拒绝弹窗时 resolve(false)。
+     * 权限声明：本 action 要求 manifest 持有 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+     * （normal 级，app.json android.permissions 已声明）——缺失时 startActivity 抛
+     * SecurityException 走到 catch，卡片表现即「点了没反应」（code-review P1-1）。
      */
     AsyncFunction("requestIgnoreBatteryOptimizations") { promise: Promise ->
       val activity = appContext.currentActivity
@@ -95,7 +106,7 @@ class GenerationKeepAliveModule : Module() {
         )
         promise.resolve(true)
       } catch (e: Exception) {
-        // 部分 ROM 未注册该 action
+        // 权限未声明 / 部分 ROM 未注册该 action
         promise.resolve(false)
       }
     }

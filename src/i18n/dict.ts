@@ -337,6 +337,9 @@ export const DICT = {
     'me.keepalive.battery.ok': '已加入电池优化白名单（深度省电场景也不断流）',
     'me.keepalive.battery.off': '尚未加入电池优化白名单（建议开启）',
     'me.keepalive.battery.action': '申请白名单',
+    'me.keepalive.battery.unavailable': '当前系统无法打开白名单申请，请到系统设置 → 应用 → 电池 中手动设置',
+    'me.keepalive.notif.ok': '通知权限已授予（生成期间可见保活通知）',
+    'me.keepalive.notif.off': '通知权限未授予（保活仍生效，只是看不到通知）',
     'me.keepalive.oem': '提示：小米/华为/OPPO/vivo 等机型若仍杀后台，请在系统设置中允许本应用「自启动」、省电策略设为「无限制」。',
 
     // ---- 关于页（开源维护期）：素材口径与 README 一致 ----
@@ -694,6 +697,9 @@ export const DICT = {
     'me.keepalive.battery.ok': 'On the battery-optimization allowlist (survives deep doze)',
     'me.keepalive.battery.off': 'Not on the battery-optimization allowlist (recommended)',
     'me.keepalive.battery.action': 'Request allowlist',
+    'me.keepalive.battery.unavailable': 'Could not open the allowlist dialog — set it manually in system settings → apps → battery',
+    'me.keepalive.notif.ok': 'Notification permission granted (keep-alive notice visible)',
+    'me.keepalive.notif.off': 'Notification permission denied (keep-alive still works, just invisible)',
     'me.keepalive.oem': 'Note: on Xiaomi/Huawei/OPPO/vivo etc., if the app is still killed in background, allow "Auto-start" for this app and set its battery policy to "No restrictions" in system settings.',
     'about.title': 'About',
     'about.tagline': 'Your data-driven cycling coach',

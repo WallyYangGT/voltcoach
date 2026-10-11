@@ -17,6 +17,7 @@
       "permissions": [
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_DATA_SYNC",
+        "REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
         "WAKE_LOCK",
         "POST_NOTIFICATIONS"
       ],

@@ -25,6 +25,8 @@ type GenerationKeepAliveNativeModule = {
   isIgnoringBatteryOptimizations(): boolean;
   /** 弹系统确认框申请加入电池优化白名单；false = 已在内/无法弹窗 */
   requestIgnoreBatteryOptimizations(): Promise<boolean>;
+  /** 通知权限是否已授予（同步） */
+  areNotificationsEnabled(): boolean;
 };
 
 const native = requireNativeModule<GenerationKeepAliveNativeModule>('GenerationKeepAlive');
@@ -52,5 +54,6 @@ export default {
   stop: () => native.stop(),
   isIgnoringBatteryOptimizations: () => native.isIgnoringBatteryOptimizations(),
   requestIgnoreBatteryOptimizations: () => native.requestIgnoreBatteryOptimizations(),
+  areNotificationsEnabled: () => native.areNotificationsEnabled(),
   ensureNotificationPermission: ensureNotificationPermissionOnce,
 };

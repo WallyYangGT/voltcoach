@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 
 /**
  * AI 生成保活前台服务（dataSync 类型）。
@@ -40,13 +41,20 @@ class GenerationKeepAliveService : Service() {
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    // 重复 start（上一条生成尚未 release 又来一条）时刷新通知文案并确保 wake lock 在持
-    startInForeground(
-      title = intent?.getStringExtra(EXTRA_TITLE) ?: DEFAULT_TITLE,
-      body = intent?.getStringExtra(EXTRA_BODY) ?: "",
-      channelName = intent?.getStringExtra(EXTRA_CHANNEL) ?: DEFAULT_CHANNEL_NAME,
-    )
-    acquireWakeLock()
+    // 重复 start（上一条生成尚未 release 又来一条）时刷新通知文案并确保 wake lock 在持。
+    // 整体 try/catch：服务跑在主线程同进程，startForeground/通知构造一旦抛错就是
+    // 全 App 崩溃——与 JS 侧「保活失败只降级不打断生成」的口径矛盾（code-review P2-2）。
+    try {
+      startInForeground(
+        title = intent?.getStringExtra(EXTRA_TITLE) ?: DEFAULT_TITLE,
+        body = intent?.getStringExtra(EXTRA_BODY) ?: "",
+        channelName = intent?.getStringExtra(EXTRA_CHANNEL) ?: DEFAULT_CHANNEL_NAME,
+      )
+      acquireWakeLock()
+    } catch (e: Exception) {
+      Log.e(TAG, "启动失败，自动停止（保活降级）", e)
+      stopSelf()
+    }
     return START_NOT_STICKY // 进程被杀后不自动重建：恢复走 30 分钟续跑兜底（决策 #11 口径保留）
   }
 
@@ -74,21 +82,24 @@ class GenerationKeepAliveService : Service() {
       manager.createNotificationChannel(channel) // 重复创建同名 channel 无副作用（幂等）
     }
 
+    // 通知点击回 App；个别 ROM 可能返回 null（无 LAUNCHER 入口时），判空兜底
     val launch = packageManager.getLaunchIntentForPackage(packageName)
-    val contentIntent = PendingIntent.getActivity(
-      this, 0, launch,
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
+    val contentIntent = launch?.let {
+      PendingIntent.getActivity(
+        this, 0, it,
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+      )
+    }
     val builder =
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL_ID)
       else Notification.Builder(this)
     builder
       .setContentTitle(title)
       .setContentText(body)
-      .setSmallIcon(applicationInfo.icon) // 用应用自身图标，不引第三方资源
+      .setSmallIcon(R.drawable.ic_generation_keepalive) // 单色剪影（自适应图标会被蒙版成方块）
       .setOngoing(true)
       .setOnlyAlertOnce(true)
-      .setContentIntent(contentIntent)
+    contentIntent?.let { builder.setContentIntent(it) }
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) builder.setPriority(Notification.PRIORITY_LOW)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
       builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
@@ -125,5 +136,6 @@ class GenerationKeepAliveService : Service() {
     private const val WAKE_LOCK_TIMEOUT_MS = 15 * 60 * 1000L
     private const val DEFAULT_TITLE = "AI generating"
     private const val DEFAULT_CHANNEL_NAME = "AI generation"
+    private const val TAG = "GenerationKeepAlive"
   }
 }

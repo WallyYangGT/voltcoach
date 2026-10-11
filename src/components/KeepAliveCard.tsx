@@ -7,18 +7,28 @@
  */
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { Platform, Alert, StyleSheet, Text, View } from 'react-native';
 import { Button } from 'react-native-paper';
-import { isIgnoringBatteryOptimizations, requestIgnoreBatteryOptimizations } from '@/ai/keepalive';
+import {
+  areNotificationsEnabled,
+  isIgnoringBatteryOptimizations,
+  requestIgnoreBatteryOptimizations,
+} from '@/ai/keepalive';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
 export function KeepAliveCard() {
   const { t } = useI18n();
   const [whitelisted, setWhitelisted] = useState(false);
+  const [notifEnabled, setNotifEnabled] = useState(false);
 
   const load = useCallback(async () => {
-    setWhitelisted(await isIgnoringBatteryOptimizations());
+    const [wl, notif] = await Promise.all([
+      isIgnoringBatteryOptimizations(),
+      areNotificationsEnabled(),
+    ]);
+    setWhitelisted(wl);
+    setNotifEnabled(notif);
   }, []);
 
   useFocusEffect(
@@ -31,7 +41,11 @@ export function KeepAliveCard() {
   if (Platform.OS !== 'android') return null;
 
   const request = async () => {
-    await requestIgnoreBatteryOptimizations();
+    const ok = await requestIgnoreBatteryOptimizations();
+    if (!ok && !(await isIgnoringBatteryOptimizations())) {
+      // false = 权限缺失或部分 ROM 未注册该 action：给出提示，不留静默失败
+      Alert.alert(t('me.keepalive.battery.unavailable'));
+    }
     // 系统弹窗异步返回，此刻重查多半还是旧值——用户确认后回本页 focus 会刷新
     await load();
   };
@@ -40,6 +54,9 @@ export function KeepAliveCard() {
     <View style={styles.card}>
       <Text style={styles.cardTitle}>{t('me.keepalive')}</Text>
       <Text style={styles.note}>{t('me.keepalive.desc')}</Text>
+      <Text style={[styles.status, { color: notifEnabled ? palette.green : palette.orange }]}>
+        {notifEnabled ? t('me.keepalive.notif.ok') : t('me.keepalive.notif.off')}
+      </Text>
       <Text style={[styles.status, { color: whitelisted ? palette.green : palette.orange }]}>
         {whitelisted ? t('me.keepalive.battery.ok') : t('me.keepalive.battery.off')}
       </Text>
