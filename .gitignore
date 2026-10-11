@@ -39,7 +39,6 @@ golden/
 
 # ---- 内部工作文档与旧版快照（本地保留、不入库，开源面不含）----
 AGENTS.md
-MIGRATION_PLAN.md
 .zcodeignore
 reference/
 docs-private/
