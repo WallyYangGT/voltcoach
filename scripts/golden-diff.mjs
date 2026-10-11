@@ -7,7 +7,7 @@
  * 导入服务在入库阶段同样注入，不属于解析管线口径。
  *
  * 运行：npm run golden。素材与基准都是 gitignored 的本机数据、不入库：
- * 素材放 docs/sample-fit-files/（真实 .fit 文件），基准目录默认 golden/
+ * 素材放 docs-private/sample-fit-files/（真实 .fit 文件），基准目录默认 golden/
  * （可用环境变量 GOLDEN_DIR 覆盖；基准 json 可用旧版 Docker/Web 版 fit-reader
  * 的 summary 输出生成）。机制详见 docs/MAINTENANCE.md「测试」。
  */
@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { analyzeFile } from '../src/core/analyze.ts';
 
-const FIT_DIR = 'docs/sample-fit-files';
+const FIT_DIR = 'docs-private/sample-fit-files';
 const GOLDEN_DIR = process.env.GOLDEN_DIR || 'golden';
 /** 库注入字段（非解析管线产物），比对前从两侧剔除 */
 const DB_INJECTED = new Set(['ctl', 'atl', 'tsb', 'form_state', 'form_note']);
