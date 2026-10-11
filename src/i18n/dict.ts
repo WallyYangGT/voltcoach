@@ -60,6 +60,21 @@ export const DICT = {
     'cad.style.normal': '踏频功率匹配正常',
     'cad.style.low_cadence': '偏低踏频高扭矩发力（力量型，可考虑提高踏频降低肌肉负担）',
     'cad.style.high_cadence': '偏高踏频发力（心肺型，注意高踏频下的心率成本）',
+    // 爬坡段卡片（标题照搬 Web 版 i18n.js climb.title；列头带单位、值直出数字。
+    // Web 版表格的 climb.col.name/duration 两列头在移动端头行布局中无对应文案，不搬）
+    'climb.title': '爬坡段（{n}）',
+    'climb.col.distance': '长度 m',
+    'climb.col.gain': '爬升 m',
+    'climb.col.grade': '均坡度 %',
+    'climb.col.avg_power': '均功率',
+    'climb.col.avg_hr': '均心率',
+    // 踩踏时间分解卡（展示层口径见 core/pedalTime.ts：踩踏 P>0 / 滑行 P=0 且移动 /
+    // 静止 P=0 且速度≈0；不进 summary 不喂 AI）
+    'pedal.title': '踩踏时间分解',
+    'pedal.pedaling': '踩踏',
+    'pedal.coasting': '滑行',
+    'pedal.stationary': '静止',
+    'pedal.stationary_hint': '提示：约 {dur} 计时未停的静止（速度≈0、0W）已计入功率分区与负荷指标',
     'dq.title': '数据质量与异常',
     'dq.power': '功率覆盖 {p}%',
     'dq.hr': '心率覆盖 {p}%',
@@ -474,6 +489,22 @@ export const DICT = {
     'cad.style.normal': 'Cadence and power well matched',
     'cad.style.low_cadence': 'Low-cadence, high-torque riding (strength style — consider higher cadence to reduce muscle strain)',
     'cad.style.high_cadence': 'High-cadence riding (aerobic style — mind the HR cost of high cadence)',
+    // Climb card (title verbatim from Web i18n.js climb.title; column headers carry units,
+    // values are plain numbers. The Web table headers climb.col.name/duration have no
+    // counterpart in the mobile head-row layout, so they are not ported)
+    'climb.title': 'Climbs ({n})',
+    'climb.col.distance': 'Length m',
+    'climb.col.gain': 'Gain m',
+    'climb.col.grade': 'Grade %',
+    'climb.col.avg_power': 'Avg power',
+    'climb.col.avg_hr': 'Avg HR',
+    // Pedaling-time breakdown card (display-layer scope, see core/pedalTime.ts:
+    // pedaling P>0 / coasting P=0 & moving / stationary P=0 & ≈0 speed; not in summary, not fed to AI)
+    'pedal.title': 'Pedaling time breakdown',
+    'pedal.pedaling': 'Pedaling',
+    'pedal.coasting': 'Coasting',
+    'pedal.stationary': 'Stationary',
+    'pedal.stationary_hint': 'Note: about {dur} stationary with the timer running (≈0 speed, 0 W) is counted into power zones and load metrics',
     'dq.title': 'Data quality & anomalies',
     'dq.power': 'Power coverage {p}%',
     'dq.hr': 'HR coverage {p}%',

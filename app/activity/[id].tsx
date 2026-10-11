@@ -27,9 +27,17 @@ import { AiReviewPanel, type AiReviewPanelHandle } from '@/components/AiReviewPa
 import type { AskInputInstance } from '@/components/AskInput';
 import type { Summary } from '@/core/analyze';
 import { formatAnomaly } from '@/core/i18n';
-import { buildActivityMetrics, buildCadenceMetrics, type MetricItem, type MetricText } from '@/core/metrics';
+import {
+  buildActivityMetrics,
+  buildCadenceMetrics,
+  buildPedalTimeMetrics,
+  formatDurationClock,
+  type MetricItem,
+  type MetricText,
+} from '@/core/metrics';
+import { pedalTimeBreakdown, type PedalTimeBreakdown } from '@/core/pedalTime';
 import { thinRecords } from '@/core/records';
-import { HR_ZONES, POWER_ZONES, type Zone } from '@/core/settings';
+import { HR_ZONES, PEDAL_TIME, POWER_ZONES, type Zone } from '@/core/settings';
 import { CATEGORY_KEYS, deleteActivity, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import { MetricGrid } from '@/components/MetricGrid';
@@ -75,6 +83,8 @@ export default function ActivityDetailScreen() {
 
   const [summary, setSummary] = useState<Summary | null | undefined>(undefined); // undefined=加载中
   const [thinned, setThinned] = useState<Awaited<ReturnType<typeof thinRecords>> | null>(null);
+  // 踩踏时间分解（从完整逐秒数据现算——不是抽稀后的 thinned，占比才准）
+  const [pedal, setPedal] = useState<PedalTimeBreakdown | null>(null);
   const [visible, setVisible] = useState<Set<string>>(new Set(DEFAULT_VISIBLE));
   // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
   const [note, setNote] = useState('');
@@ -141,7 +151,10 @@ export default function ActivityDetailScreen() {
         setNote(s?.activity.note ?? '');
         if (s) {
           const stored = await loadStoredRecords(fileName);
-          if (alive) setThinned(stored ? thinRecords(stored) : null);
+          if (alive) {
+            setThinned(stored ? thinRecords(stored) : null);
+            setPedal(stored ? pedalTimeBreakdown(stored) : null);
+          }
         }
       } catch (e) {
         console.warn('加载训练详情失败:', e);
@@ -232,6 +245,13 @@ export default function ActivityDetailScreen() {
     const tMetric: MetricText = (key, vars) => t(key as DictKey, vars);
     return buildCadenceMetrics(summary.cadence_power, tMetric);
   }, [summary, t]);
+
+  // 踩踏时间分解卡指标格（pedal 为 null = 全程无功率数据，卡片隐藏）
+  const pedalMetrics = useMemo<MetricItem[]>(() => {
+    if (!pedal) return [];
+    const tMetric: MetricText = (key, vars) => t(key as DictKey, vars);
+    return buildPedalTimeMetrics(pedal, tMetric);
+  }, [pedal, t]);
 
   if (summary === undefined) return <View style={styles.page} />;
   if (!summary) {
@@ -398,6 +418,40 @@ export default function ActivityDetailScreen() {
           </View>
         )}
 
+        {/* 爬坡段（回补：数据 M1 起随 summary 入库、仅 UI 缺失；位置对齐 Web 版
+            climbsHtml → cadencePowerHtml 相邻顺序，插在踏频-功率分析卡之前。
+            内容同 Web 版 climbsHtml 七列口径，布局按移动端重做：每段两行——
+            首行名称+时长，次行五项小字指标（列头带单位，值直出数字，缺失显示 -） */}
+        {summary.climbs?.length ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{t('climb.title', { n: summary.climbs.length })}</Text>
+            {summary.climbs.map((c, i) => (
+              <View key={c.name} style={[styles.climbBlock, i > 0 && styles.climbSep]}>
+                <View style={styles.climbHead}>
+                  <Text style={styles.climbName}>{c.name}</Text>
+                  <Text style={styles.climbDur}>{formatDurationClock(c.duration_sec)}</Text>
+                </View>
+                <View style={styles.climbMetrics}>
+                  {(
+                    [
+                      [t('climb.col.distance'), String(c.distance_m)],
+                      [t('climb.col.gain'), String(c.elevation_gain_m)],
+                      [t('climb.col.grade'), String(c.avg_grade_pct)],
+                      [t('climb.col.avg_power'), c.avg_power != null ? String(c.avg_power) : '-'],
+                      [t('climb.col.avg_hr'), c.avg_hr != null ? String(c.avg_hr) : '-'],
+                    ] as const
+                  ).map(([label, value]) => (
+                    <View key={label} style={styles.climbMetricCell}>
+                      <Text style={styles.climbMetricLabel}>{label}</Text>
+                      <Text style={styles.climbMetricValue}>{value}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
         {/* 踏频-功率分析（M5 回补：数据 M1 起随 summary 入库、仅 UI 缺失；位置在
             数据质量与异常卡上方，对齐 Web 版 cadencePowerHtml → anomaliesHtml 顺序） */}
         {summary.cadence_power && (
@@ -406,6 +460,22 @@ export default function ActivityDetailScreen() {
             <MetricGrid items={cadenceMetrics} />
             {/* 不用 as never：模板字面量类型恰为三个 DictKey 成员，style 扩枚举而未补词典时 tsc 直接报错 */}
             <Text style={styles.dqLine}>{t(`cad.style.${summary.cadence_power.style}`)}</Text>
+          </View>
+        )}
+
+        {/* 踩踏时间分解（roadmap「0W/踩踏时间分解」展示层轻量实现：从已存逐秒数据现算，
+            不进 summary 不喂 AI；静止判据复用暂停阈值，口径见 core/pedalTime.ts。
+            位置在踏频-功率分析卡之后——同为发力/踏频侧数据，先于数据质量与异常卡；
+            静止累计超提示线时附「0W 计入指标」披露行） */}
+        {pedal && (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{t('pedal.title')}</Text>
+            <MetricGrid items={pedalMetrics} />
+            {pedal.stationary_sec >= PEDAL_TIME.stationary_hint_sec && (
+              <Text style={styles.dqLine}>
+                {t('pedal.stationary_hint', { dur: formatDurationClock(pedal.stationary_sec) })}
+              </Text>
+            )}
           </View>
         )}
 
@@ -506,4 +576,19 @@ const styles = StyleSheet.create({
     paddingVertical: 6, // 触控目标 ≥48dp 无障碍建议（行高约 19px + 上下 6px）
   },
   dqToggleText: { color: palette.muted, fontSize: 12.5 },
+  // 爬坡段卡：段间细分隔线 + 头行（名称+时长）+ 五列小字指标行
+  climbBlock: { gap: 6 },
+  climbSep: { borderTopWidth: 1, borderTopColor: palette.lineSoft, paddingTop: 10 },
+  climbHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  climbName: { color: palette.text, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  climbDur: { color: palette.muted, fontSize: 12.5, fontVariant: ['tabular-nums'] },
+  climbMetrics: { flexDirection: 'row' },
+  climbMetricCell: { flex: 1, gap: 1 },
+  climbMetricLabel: { color: palette.faint, fontSize: 10, fontWeight: '700' },
+  climbMetricValue: {
+    color: palette.text,
+    fontSize: 13.5,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
 });
