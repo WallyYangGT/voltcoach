@@ -16,7 +16,7 @@
   "author": "Wally Yang <wallys_studio@163.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Sicheng886/voltcoach.git"
+    "url": "git+https://github.com/WallyYangGT/voltcoach.git"
   },
   "dependencies": {
     "@expo/ui": "~57.0.18",
