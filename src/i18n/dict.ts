@@ -327,6 +327,7 @@ export const DICT = {
     'about.contact': '联系作者',
     'about.licenseTitle': '许可与声明',
     'about.license': '以 MIT 许可证开源（© 2026 Wally Yang），第三方组件声明见仓库 THIRD_PARTY_NOTICES.md。',
+    'about.thirdParty': 'Onelap 同步模块移植自 OnelapSyncStrava（MIT，© 2026 kermit-r-wood）。',
     'about.onelapNote': '「顽鹿同步」通过社区逆向的非官方接口拉取你自己账号的运动记录，本项目与顽鹿/迈金无任何关联；该接口随时可能变更失效，请仅用于个人数据导出。',
 
     // ---- M4：数据管理（备份导出导入 / 本地快照 / 重复记录检查）；顽鹿同步（data.sync.*）
@@ -384,7 +385,7 @@ export const DICT = {
     'data.backup.savedLocal': '备份包已保存：\n{name}',
     'data.backup.import': '从备份包导入',
     'data.backup.importConfirm': '导入',
-    'data.backup.importPass': '备份口令（加密备份需要，可留空）',
+    'data.backup.importPass': '备份口令（该备份已加密，留空将无法解密）',
     'data.backup.importWarn': '导入将覆盖当前全部数据（覆盖前自动生成安全备份，保留最近 3 份）。',
     'data.backup.importing': '正在导入…',
     'data.backup.confirmTitle': '确认导入',
@@ -658,6 +659,7 @@ export const DICT = {
     'about.contact': 'Contact the author',
     'about.licenseTitle': 'License & notices',
     'about.license': 'Open source under the MIT License (© 2026 Wally Yang). See THIRD_PARTY_NOTICES.md in the repository for third-party components.',
+    'about.thirdParty': 'The Onelap sync module is ported from OnelapSyncStrava (MIT, © 2026 kermit-r-wood).',
     'about.onelapNote': '"Onelap sync" pulls rides from your own account via a community-reversed unofficial API. This project is not affiliated with Onelap/MAGENE; the API may change or break at any time — personal data export only.',
 
     // ---- M4: Data management (backup export/import / local snapshot / Onelap sync) ----
@@ -714,7 +716,7 @@ export const DICT = {
     'data.backup.savedLocal': 'Backup saved:\n{name}',
     'data.backup.import': 'Import from backup',
     'data.backup.importConfirm': 'Import',
-    'data.backup.importPass': 'Backup passphrase (required for encrypted backups; can be left empty)',
+    'data.backup.importPass': 'Backup passphrase (this backup is encrypted; leaving it empty will fail)',
     'data.backup.importWarn': 'Importing replaces ALL current data (a safety backup is created first; the latest 3 are kept).',
     'data.backup.importing': 'Importing…',
     'data.backup.confirmTitle': 'Confirm import',

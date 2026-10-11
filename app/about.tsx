@@ -81,6 +81,7 @@ export default function AboutScreen() {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{t('about.licenseTitle')}</Text>
           <Text style={styles.body}>{t('about.license')}</Text>
+          <Text style={styles.note}>{t('about.thirdParty')}</Text>
           <Text style={styles.note}>{t('about.onelapNote')}</Text>
         </View>
       </ScrollView>

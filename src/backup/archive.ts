@@ -103,6 +103,8 @@ const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012345
 /**
  * 字节 → base64（手写实现，口径同文件头 UTF-8 编解码——不依赖 btoa/Buffer，
  * Hermes 与 Node 环境都无保证）。调用方：导出「保存到本机」经 SAF 写入内容 uri。
+ * 容量假设：整包字节 + base64 字符串（1.33×）+ 跨桥传输 + 原生解码各持一份，
+ * 峰值约 3.3× 包体——常规库几 MB 无碍；备份包到几十 MB 量级时需换直写字节方案。
  */
 export function bytesToBase64(bytes: Uint8Array): string {
   let out = '';

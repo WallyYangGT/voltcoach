@@ -11,10 +11,10 @@
  */
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
-import { EncodingType, StorageAccessFramework } from 'expo-file-system/legacy';
+import { deleteAsync, EncodingType, StorageAccessFramework } from 'expo-file-system/legacy';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button, Dialog, Divider, Portal, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { File } from 'expo-file-system';
@@ -112,6 +112,9 @@ export default function DataScreen() {
    * 没有「保存到文件」目标的设备（用户真机实测）无法经分享落盘，这是独立出口。
    * 先要目录授权再打包：用户取消授权就静默返回，不做无谓的全库打包；包字节经
    * base64 写入 SAF 内容 uri（mime 记 zip，文件名与 cache 导出同一套时间戳规则）。
+   * 已知边界：legacy SAF 写入只对 externalstorage 类 provider（本机存储
+   * Download/Documents 等）持有写权限，网盘类目录会报不可写——主用途即本机落盘，
+   * 接受该边界。仅 Android 提供（iOS 无 SAF，保留系统分享路径）。
    */
   const doSaveLocal = async () => {
     if ((pass1 || pass2) && pass1 !== pass2) {
@@ -124,14 +127,23 @@ export default function DataScreen() {
     });
     if (!perms?.granted) return;
     setSaving(true);
+    let createdUri: string | null = null;
     try {
       const { bytes, manifest } = await buildBackup(pass1 ? pass1 : null);
       const stamp = manifest.exported_at.replace(/[-:T]/g, '').slice(0, 14);
       const name = `voltcoach-backup-${stamp}.fitbackup`;
-      const uri = await StorageAccessFramework.createFileAsync(perms.directoryUri, name, 'application/zip');
-      await StorageAccessFramework.writeAsStringAsync(uri, bytesToBase64(bytes), { encoding: EncodingType.Base64 });
+      createdUri = await StorageAccessFramework.createFileAsync(perms.directoryUri, name, 'application/zip');
+      await StorageAccessFramework.writeAsStringAsync(createdUri, bytesToBase64(bytes), { encoding: EncodingType.Base64 });
       Alert.alert(t('data.backup.savedLocal', { name }));
     } catch (e) {
+      // 写入失败清理已建出的半截文件（SAF 建文件即落盘，0 字节包会被误当有效备份）
+      if (createdUri) {
+        try {
+          await deleteAsync(createdUri, { idempotent: true });
+        } catch (cleanupErr) {
+          console.warn('备份包残留清理失败（忽略）:', cleanupErr);
+        }
+      }
       Alert.alert(t('data.err.generic'), describeError(e));
     } finally {
       setSaving(false);
@@ -317,15 +329,18 @@ export default function DataScreen() {
               loading={exporting}>
               {exporting ? t('data.backup.exporting') : t('data.backup.export')}
             </Button>
-            <Button
-              mode="outlined"
-              compact
-              style={{ flex: 1 }}
-              onPress={() => void doSaveLocal()}
-              disabled={exporting || saving || importing}
-              loading={saving}>
-              {saving ? t('data.backup.saving') : t('data.backup.saveLocal')}
-            </Button>
+            {/* 保存到本机走 Android SAF（iOS 无此机制，仅保留系统分享） */}
+            {Platform.OS === 'android' && (
+              <Button
+                mode="outlined"
+                compact
+                style={{ flex: 1 }}
+                onPress={() => void doSaveLocal()}
+                disabled={exporting || saving || importing}
+                loading={saving}>
+                {saving ? t('data.backup.saving') : t('data.backup.saveLocal')}
+              </Button>
+            )}
           </View>
           <Divider style={styles.divider} />
           <Text style={styles.warn}>{t('data.backup.importWarn')}</Text>
@@ -393,9 +408,18 @@ export default function DataScreen() {
         </View>
       </ScrollView>
 
-      {/* 导入确认对话框（先选包后弹）：来源信息 + 口令框（仅口令加密包显示） */}
+      {/* 导入确认对话框（先选包后弹）：来源信息 + 口令框（仅口令加密包显示）。
+          importing 期间不可关闭（遮罩/返回键/取消全禁）——覆盖式导入进行中"看似
+          取消实则继续"的认知落差是数据替换级别，必须锁死 */}
       <Portal>
-        <Dialog visible={pendingImport != null} onDismiss={() => setPendingImport(null)} style={{ backgroundColor: palette.panel }}>
+        <Dialog
+          visible={pendingImport != null}
+          dismissable={!importing}
+          onDismiss={() => {
+            if (!importing) setPendingImport(null);
+          }}
+          style={{ backgroundColor: palette.panel }}
+        >
           <Dialog.Title style={{ color: palette.text }}>{t('data.backup.confirmTitle')}</Dialog.Title>
           <Dialog.Content>
             {pendingImport && (
