@@ -50,7 +50,7 @@ assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-
 | L3 冒烟 | 模拟器/真机 | 渲染与交互、logcat 无报错 | 触碰 UI/数据路径时 |
 | L4 UI 测试 | （未引入） | 组件与交互 | 后置 |
 
-- **黄金 diff**：基准与真实素材都是个人健康数据、**不入库**（`.gitignore`：素材放 `docs/sample-fit-files/`，基准目录默认 `golden/`，可用 `GOLDEN_DIR` 环境变量覆盖）。CI 上缺失时自动跳过该门禁；本机缺失则硬失败。基准 json 可用旧版 Docker/Web 版 fit-reader 的 summary 输出生成。
+- **黄金 diff**：基准与真实素材都是个人健康数据、**不入库**（`.gitignore`：素材放 `docs-private/sample-fit-files/`（gitignored 内部目录），基准目录默认 `golden/`，可用 `GOLDEN_DIR` 环境变量覆盖）。CI 上缺失时自动跳过该门禁；本机缺失则硬失败。基准 json 可用旧版 Docker/Web 版 fit-reader 的 summary 输出生成。
 - **覆盖率口径**：`src/core` 等纯函数层行覆盖 ≥90% 是提交口径（`npm run test:coverage` 查看），刻意不进 CI 硬闸——避免为凑数字写无意义测试；新增分支必须同步补断言。
 - **合成 FIT**：`test/make_test_fit.mjs` 手写 FIT 二进制生成器（可造骑行/跑步/游泳、功率缺失、暂停等场景），端到端测试不依赖真实数据。
 - 测试纪律：纯函数层**不得 import 任何 RN/Expo 模块**（node:test 直测的前提）；相对导入带 `.ts` 扩展名。

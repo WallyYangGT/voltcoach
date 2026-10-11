@@ -55,7 +55,7 @@ git push -u origin feat/xxx      # 开 PR
 
 ## 黄金 diff 的本地素材
 
-真实码表 FIT 文件属个人健康数据，**不入库**。本地自备：`.fit` 文件放 `docs/sample-fit-files/`，summary 基准放 `golden/`（目录均可被忽略规则覆盖，基准路径可用 `GOLDEN_DIR` 环境变量改）。CI 上无素材会自动跳过该门禁，因此**涉及解析/指标的 PR 请在本地跑一次 golden 并在 PR 描述里注明结果**。
+真实码表 FIT 文件属个人健康数据，**不入库**。本地自备：`.fit` 文件放 `docs-private/sample-fit-files/`（gitignored 内部目录），summary 基准放 `golden/`（目录均可被忽略规则覆盖，基准路径可用 `GOLDEN_DIR` 环境变量改）。CI 上无素材会自动跳过该门禁，因此**涉及解析/指标的 PR 请在本地跑一次 golden 并在 PR 描述里注明结果**。
 
 ## 代码约定速览
 

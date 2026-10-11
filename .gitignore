@@ -30,7 +30,9 @@ keystore-b64.txt
 .DS_Store
 
 # ---- 个人真实训练数据（仅本地测试素材，严禁入库/外发）----
-docs/sample-fit-files/
+# 2026-10-11 起放 docs-private/sample-fit-files/（整目录已被 docs-private/ 规则忽略，
+# 此行显式保留：防 docs-private/ 忽略规则被误删时个人健康数据裸露）
+docs-private/sample-fit-files/
 # PoC 4 用训练库由样例 FIT 派生（含个人训练数据），仅本地存在
 assets/poc/*.db
 assets/poc-output/
