@@ -7,9 +7,11 @@ web-build/
 expo-env.d.ts
 *.log
 
-# prebuild 生成的原生工程（CI / 本地构建时重新生成）
-android/
-ios/
+# prebuild 生成的原生工程（CI / 本地构建时重新生成）——必须根锚定：
+# 未锚定的 android/ 会连 modules/<本地模块>/android/ 一并吞掉（本地 Expo 模块的
+# 原生源码是要入库的，与生成物本质不同）
+/android/
+/ios/
 
 # 签名与密钥文件
 *.jks
