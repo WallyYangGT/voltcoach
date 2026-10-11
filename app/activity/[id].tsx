@@ -27,7 +27,13 @@ import { AiReviewPanel, type AiReviewPanelHandle } from '@/components/AiReviewPa
 import type { AskInputInstance } from '@/components/AskInput';
 import type { Summary } from '@/core/analyze';
 import { formatAnomaly } from '@/core/i18n';
-import { buildActivityMetrics, buildCadenceMetrics, type MetricItem, type MetricText } from '@/core/metrics';
+import {
+  buildActivityMetrics,
+  buildCadenceMetrics,
+  formatDurationClock,
+  type MetricItem,
+  type MetricText,
+} from '@/core/metrics';
 import { thinRecords } from '@/core/records';
 import { HR_ZONES, POWER_ZONES, type Zone } from '@/core/settings';
 import { CATEGORY_KEYS, deleteActivity, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
@@ -398,6 +404,40 @@ export default function ActivityDetailScreen() {
           </View>
         )}
 
+        {/* 爬坡段（回补：数据 M1 起随 summary 入库、仅 UI 缺失；位置对齐 Web 版
+            climbsHtml → cadencePowerHtml 相邻顺序，插在踏频-功率分析卡之前。
+            内容同 Web 版 climbsHtml 七列口径，布局按移动端重做：每段两行——
+            首行名称+时长，次行五项小字指标（列头带单位，值直出数字，缺失显示 -） */}
+        {summary.climbs?.length ? (
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{t('climb.title', { n: summary.climbs.length })}</Text>
+            {summary.climbs.map((c, i) => (
+              <View key={c.name} style={[styles.climbBlock, i > 0 && styles.climbSep]}>
+                <View style={styles.climbHead}>
+                  <Text style={styles.climbName}>{c.name}</Text>
+                  <Text style={styles.climbDur}>{formatDurationClock(c.duration_sec)}</Text>
+                </View>
+                <View style={styles.climbMetrics}>
+                  {(
+                    [
+                      [t('climb.col.distance'), String(c.distance_m)],
+                      [t('climb.col.gain'), String(c.elevation_gain_m)],
+                      [t('climb.col.grade'), String(c.avg_grade_pct)],
+                      [t('climb.col.avg_power'), c.avg_power != null ? String(c.avg_power) : '-'],
+                      [t('climb.col.avg_hr'), c.avg_hr != null ? String(c.avg_hr) : '-'],
+                    ] as const
+                  ).map(([label, value]) => (
+                    <View key={label} style={styles.climbMetricCell}>
+                      <Text style={styles.climbMetricLabel}>{label}</Text>
+                      <Text style={styles.climbMetricValue}>{value}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
         {/* 踏频-功率分析（M5 回补：数据 M1 起随 summary 入库、仅 UI 缺失；位置在
             数据质量与异常卡上方，对齐 Web 版 cadencePowerHtml → anomaliesHtml 顺序） */}
         {summary.cadence_power && (
@@ -506,4 +546,19 @@ const styles = StyleSheet.create({
     paddingVertical: 6, // 触控目标 ≥48dp 无障碍建议（行高约 19px + 上下 6px）
   },
   dqToggleText: { color: palette.muted, fontSize: 12.5 },
+  // 爬坡段卡：段间细分隔线 + 头行（名称+时长）+ 五列小字指标行
+  climbBlock: { gap: 6 },
+  climbSep: { borderTopWidth: 1, borderTopColor: palette.lineSoft, paddingTop: 10 },
+  climbHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
+  climbName: { color: palette.text, fontSize: 13, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  climbDur: { color: palette.muted, fontSize: 12.5, fontVariant: ['tabular-nums'] },
+  climbMetrics: { flexDirection: 'row' },
+  climbMetricCell: { flex: 1, gap: 1 },
+  climbMetricLabel: { color: palette.faint, fontSize: 10, fontWeight: '700' },
+  climbMetricValue: {
+    color: palette.text,
+    fontSize: 13.5,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
 });
