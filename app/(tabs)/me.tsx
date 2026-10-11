@@ -480,7 +480,7 @@ export default function MeScreen() {
         />
       </View>
 
-      {/* 入口行：AI 记忆（M3 接通）/ 数据管理（M4）/ 关于 */}
+      {/* 入口行：AI 记忆（M3）/ 数据管理（M4）/ 关于（开源维护期接通） */}
       <View style={styles.card}>
         <List.Item
           title={t('me.memory')}
@@ -501,7 +501,8 @@ export default function MeScreen() {
         <List.Item
           title={t('me.about')}
           left={(props) => <Icon {...props} size={20} source="information-outline" color={palette.muted} />}
-          right={() => <Text style={styles.soon}>{t('me.soon')}</Text>}
+          right={(props) => <Icon {...props} size={18} source="chevron-right" color={palette.faint} />}
+          onPress={() => router.push('/about')}
           titleStyle={{ color: palette.text }}
         />
       </View>
@@ -545,7 +546,6 @@ const styles = StyleSheet.create({
   saveRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   saved: { color: palette.green, fontSize: 12 },
   note: { color: palette.faint, fontSize: 11, lineHeight: 16 },
-  soon: { color: palette.faint, fontSize: 12 },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 4 },
   switchLabel: { color: palette.text, fontSize: 13, flex: 1 },
 });

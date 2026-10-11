@@ -317,7 +317,17 @@ export const DICT = {
     'me.memory': 'AI 记忆',
     'me.data': '数据管理',
     'me.about': '关于',
-    'me.soon': '（后续里程碑开放）',
+
+    // ---- 关于页（开源维护期）：素材口径与 README 一致 ----
+    'about.title': '关于',
+    'about.tagline': '数据驱动的骑行私教',
+    'about.intro': '纯本地的运动训练分析工具（骑行为主）：导入码表/手表导出的 .fit 文件，本地计算逐秒指标与训练负荷（NP/IF/TSS、功率/心率分区、峰功率曲线、CTL/ATL/TSB），支持自带 Key 的 AI 训练解读与顽鹿云同步。无服务器、无账号，数据全部留在手机上。',
+    'about.repo': '项目仓库',
+    'about.issues': '问题反馈',
+    'about.contact': '联系作者',
+    'about.licenseTitle': '许可与声明',
+    'about.license': '以 MIT 许可证开源（© 2026 Wally Yang），第三方组件声明见仓库 THIRD_PARTY_NOTICES.md。',
+    'about.onelapNote': '「顽鹿同步」通过社区逆向的非官方接口拉取你自己账号的运动记录，本项目与顽鹿/迈金无任何关联；该接口随时可能变更失效，请仅用于个人数据导出。',
 
     // ---- M4：数据管理（备份导出导入 / 本地快照 / 重复记录检查）；顽鹿同步（data.sync.*）
     //      卡片 M5 收尾后挪至「我的」页 AI 服务下方（src/components/OnelapSyncCard.tsx），键名沿用此命名空间 ----
@@ -640,7 +650,15 @@ export const DICT = {
     'me.memory': 'AI Memory',
     'me.data': 'Data',
     'me.about': 'About',
-    'me.soon': '(later milestone)',
+    'about.title': 'About',
+    'about.tagline': 'Your data-driven cycling coach',
+    'about.intro': 'A fully local training analysis tool (cycling first): import .fit files from bike computers / watches, compute per-second metrics and training load on device (NP/IF/TSS, power & HR zones, peak power curves, CTL/ATL/TSB), with BYOK AI ride analysis and Onelap cloud sync. No servers, no accounts — all data stays on your phone.',
+    'about.repo': 'GitHub repository',
+    'about.issues': 'Report an issue',
+    'about.contact': 'Contact the author',
+    'about.licenseTitle': 'License & notices',
+    'about.license': 'Open source under the MIT License (© 2026 Wally Yang). See THIRD_PARTY_NOTICES.md in the repository for third-party components.',
+    'about.onelapNote': '"Onelap sync" pulls rides from your own account via a community-reversed unofficial API. This project is not affiliated with Onelap/MAGENE; the API may change or break at any time — personal data export only.',
 
     // ---- M4: Data management (backup export/import / local snapshot / Onelap sync) ----
     'data.title': 'Data',

@@ -7,7 +7,7 @@
 技术栈：React Native + Expo（新架构）+ Expo Router + TypeScript；UI 用 React Native Paper 5（Material 3）自定义暗色主题（品牌色 volt 荧光黄 `#d7ff3f`，深色底 `#0a0d11` 系，等宽大数字排版）。**纯本地应用**：无自建服务器，训练库 SQLCipher 加密，AI Key 与同步凭据存 `expo-secure-store`（Android Keystore）。
 
 ```
-app/                    Expo Router 文件路由（底部四 tab + 详情/会话/数据管理/导入等页面）
+app/                    Expo Router 文件路由（底部四 tab + 详情/会话/数据管理/导入/关于等页面）
 src/
   core/                 ★ 纯函数算法层：解析、指标、FTP、规划、去重、报告标题——
                         不 import 任何 RN/Expo 模块，node:test 直接覆盖
