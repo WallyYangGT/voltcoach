@@ -798,9 +798,16 @@ export async function analyzeFile(input: AnalyzeInput): Promise<AnalyzeResult> {
     mode: 'list',
   });
 
+  // 6.x 官方类型把入参窄化为 ArrayBuffer | Buffer（Node 视角），运行时对非 ArrayBuffer
+  // 一律按视图展开（new Uint8Array(content.buffer, content.byteOffset, ...)），Uint8Array
+  // 直传等价——断言只为对齐官方签名。输出仍按本文件 FitParsed 宽松契约消费（注意 6.x
+  // list 模式把 sport 消息收进 sports[] 数组、无单数 sport 键，3.0.2 亦然，生效路径
+  // 一直是 sessions[0].sport 兜底）
   const data: FitParsed = await new Promise((resolve, reject) =>
-    parser.parse(input.bytes, (err: unknown, d: FitParsed) =>
-      err ? reject(err instanceof Error ? err : new Error(String(err))) : resolve(d),
+    parser.parse(
+      input.bytes as unknown as ArrayBuffer,
+      (err, d) =>
+        err || !d ? reject(new Error(err || 'FIT 解析结果为空')) : resolve(d as FitParsed),
     ),
   );
 
