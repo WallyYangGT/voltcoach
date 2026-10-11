@@ -68,8 +68,8 @@ export const DICT = {
     'climb.col.grade': '均坡度 %',
     'climb.col.avg_power': '均功率',
     'climb.col.avg_hr': '均心率',
-    // 踩踏时间分解卡（展示层口径见 core/pedalTime.ts：踩踏 P>0 / 滑行 P=0 且移动 /
-    // 静止 P=0 且速度≈0；不进 summary 不喂 AI）
+    // 踩踏时间分解卡（口径见 core/pedalTime.ts：踩踏 P>0 / 滑行 P=0 且移动 /
+    // 静止 P=0 且速度≈0；0W 根治后数据源为 summary.pedal_time，与 AI 同源）
     'pedal.title': '踩踏时间分解',
     'pedal.pedaling': '踩踏',
     'pedal.coasting': '滑行',
@@ -513,8 +513,9 @@ export const DICT = {
     'climb.col.grade': 'Grade %',
     'climb.col.avg_power': 'Avg power',
     'climb.col.avg_hr': 'Avg HR',
-    // Pedaling-time breakdown card (display-layer scope, see core/pedalTime.ts:
-    // pedaling P>0 / coasting P=0 & moving / stationary P=0 & ≈0 speed; not in summary, not fed to AI)
+    // Pedaling-time breakdown card (see core/pedalTime.ts:
+    // pedaling P>0 / coasting P=0 & moving / stationary P=0 & ≈0 speed;
+    // data source is summary.pedal_time since the 0W root fix, same as the AI prompt)
     'pedal.title': 'Pedaling time breakdown',
     'pedal.pedaling': 'Pedaling',
     'pedal.coasting': 'Coasting',

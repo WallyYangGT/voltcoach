@@ -23,6 +23,7 @@ import {
   hrDriftPct,
   collectDeveloperFields,
   recordsToCsv,
+  patchTruncatedFitHeader,
 } from '../src/core/analyze.ts';
 import { gzip } from 'pako';
 import { parseRecordsCsv, thinRecords, safeName, firstTimestampFromCsvHead, firstRecordTimestampFromGz } from '../src/core/records.ts';
@@ -406,6 +407,64 @@ test('formNote/formatAnomaly: zh/en 双语渲染（zh 文案与旧版逐字一�
     formatAnomaly({ type: 'hr_jump', from: 100, to: 140, at: 'x' }, 'zh'),
     '心率跳变 100→140，位于 x',
   );
+});
+
+// ---------------- 截断 FIT 兜底（patchTruncatedFitHeader，自旧仓 unit.test.mjs 同源搬运） ----------------
+
+/** 构造 FIT 文件头（dataSize 写入 offset 4..8 uint32 LE；".FIT" 魔数在 offset 8） */
+function fitHeader(dataSize, headerSize = 14) {
+  const buf = new Uint8Array(headerSize);
+  buf[0] = headerSize;
+  buf[1] = 0x10;
+  const view = new DataView(buf.buffer);
+  view.setUint16(2, 2140, true);
+  view.setUint32(4, dataSize, true);
+  if (headerSize >= 12) buf.set(new TextEncoder().encode('.FIT'), 8);
+  return buf;
+}
+
+const readDeclared = (buf) => new DataView(buf.buffer, buf.byteOffset, buf.byteLength).getUint32(4, true);
+
+test('patchTruncatedFitHeader: 头声明长度超过实际字节数时改写为可用长度', () => {
+  // 总长 514 = 头 14 + 数据 500，头里声明 1000 → 超出 → 改写为可用 500
+  const content = new Uint8Array(514);
+  content.set(fitHeader(1000));
+  content.fill(0x7f, 14);
+  const patched = patchTruncatedFitHeader(content);
+  assert.ok(patched, '应返回修复后的缓冲');
+  assert.equal(readDeclared(patched), 500); // 可用字节 = 500
+  assert.equal(patched.length, content.length); // 数据长度不变
+  // 头之外的数据一个字节都不改
+  assert.deepEqual(patched.subarray(14), content.subarray(14));
+  // 不改动入参（importFit/顽鹿同步持有同一 Uint8Array，原地改写会污染调用方）
+  assert.equal(readDeclared(content), 1000);
+});
+
+test('patchTruncatedFitHeader: 头声明与实际相符或更小时返回 null', () => {
+  const equal = new Uint8Array(1000);
+  equal.set(fitHeader(500));
+  assert.equal(patchTruncatedFitHeader(equal), null);
+  const smaller = new Uint8Array(1000);
+  smaller.set(fitHeader(100));
+  assert.equal(patchTruncatedFitHeader(smaller), null);
+});
+
+test('patchTruncatedFitHeader: 非法输入安全返回 null', () => {
+  assert.equal(patchTruncatedFitHeader(new Uint8Array(5)), null); // 比头还短
+  const badHeaderSize = new Uint8Array(100);
+  badHeaderSize.set(fitHeader(999, 8));
+  assert.equal(patchTruncatedFitHeader(badHeaderSize), null); // 头长度非法
+  const truncatedHeader = fitHeader(999, 14).subarray(0, 13); // 头本身被截断
+  assert.equal(patchTruncatedFitHeader(truncatedHeader), null);
+});
+
+test('patchTruncatedFitHeader: 非 14 字节头（12 字节）同样按头长换算可用字节', () => {
+  const content = new Uint8Array(312);
+  content.set(fitHeader(1000, 12));
+  content.fill(0x7f, 12);
+  const patched = patchTruncatedFitHeader(content);
+  assert.ok(patched);
+  assert.equal(readDeclared(patched), 300);
 });
 
 // ---------------- FTP 历史估算（M2 搬运：ftp.ts，断言同源自 fit-reader Web 版 test/unit.test.mjs） ----------------

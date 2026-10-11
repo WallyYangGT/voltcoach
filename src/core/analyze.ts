@@ -803,7 +803,7 @@ export function patchTruncatedFitHeader(content: Uint8Array): Uint8Array | null 
   if (declared <= available) return null;
   // slice() 拷贝出独立缓冲（保持数据字节不动，只改头声明）
   const patched = content.slice();
-  new DataView(patched.buffer).setUint32(4, available, true);
+  new DataView(patched.buffer, patched.byteOffset, patched.byteLength).setUint32(4, available, true);
   return patched;
 }
 
@@ -841,11 +841,15 @@ export async function analyzeFile(input: AnalyzeInput): Promise<AnalyzeResult> {
     data = await parse(input.bytes);
   } catch (err) {
     // v5/v6 结构校验变严：截断文件整体报错会从「出部分结果 + 缺失计数」退化为
-    // 整个解析失败——改写头声明后重试一次（自旧仓 analyzeFile 回同步），
-    // 修复后仍失败抛原始错误
+    // 整个解析失败——改写头声明后重试一次（自旧仓 analyzeFile 回同步）；
+    // 修复后仍失败抛原始错误（更贴近用户手上这个文件，口径同旧仓）
     const patched = patchTruncatedFitHeader(input.bytes);
     if (!patched) throw err;
-    data = await parse(patched);
+    try {
+      data = await parse(patched);
+    } catch {
+      throw err;
+    }
   }
 
   const sport = data.sport?.sport || data.sessions?.[0]?.sport || 'unknown';

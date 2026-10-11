@@ -16,8 +16,9 @@
 | `heart_rate` | 平均/最大心率、5 区时间分布、心率漂移（有氧解耦 %） |
 | `cadence` | 平均踏频（**剔除 0 rpm 滑行秒**，与码表/Strava 口径一致；跑步为步频 spm） |
 | `cadence_power` | 踏频-功率联合分析（发力习惯为 `style` 枚举 normal/low_cadence/high_cadence） |
+| `pedal_time` | 踩踏时间三分解（秒数）：`pedaling_sec`（P>0）/ `coasting_sec`（P=0 且速度 ≥2 km/h）/ `stationary_sec`（P=0 且速度 <2 km/h 或缺失）；无功率数据的秒不计入分母，全程无功率不出键。**只披露口径**：NP/TSS/区间数值仍计入 0W，本字段供量化解读 |
 | `climbs` / `interval_set` / `segments` | 爬坡段 / 间歇组 / 圈与赛段 |
-| `anomalies` | 设备异常标注（**结构化对象**：`power_gap`/`record_gap`/`timer_pause`/`hr_jump`，语言中立，展示层本地化） |
+| `anomalies` | 设备异常标注（**结构化对象**：`power_gap`/`record_gap`/`timer_pause`/`stationary`/`hr_jump`，语言中立，展示层本地化；`stationary` 为计时未停的静止段，≥30s 才标注） |
 | `data_quality` | 覆盖率、无时间戳丢弃数、缺失秒数（不含暂停）、暂停秒数 |
 
 ## 核心公式
@@ -51,7 +52,7 @@
 - **间歇识别**：≥105% FTP 的过阈段为工作段；≤10s 瞬时掉功率合并进工作段，<30s 的段丢弃。
 - **爬坡段**：30s 窗口坡度 ≥3% 且累计爬升 ≥15m、长度 ≥300m。
 - **踏频-功率联合分析**：仅统计功率 ≥75% FTP 的「发力时段」（剔除滑行）；低踏频 <80 rpm、高踏频 >90 rpm。
-- **踩踏时间分解**（详情页展示层，现算自已存逐秒数据、不进 summary 不喂 AI）：踩踏 = P>0；滑行 = P=0 且速度 ≥2 km/h；静止 = P=0 且速度 <2 km/h（复用 `DATA_QUALITY.pause_resume_speed_kmh`；速度缺失判静止）。无功率数据的秒不计入分母。静止累计达 60s（≥）时提示「计时未停的静止以 0W 计入功率分区与负荷指标」——功率分区/负荷口径本身不变（0W 计入 Z1，见「分区」节）。
+- **踩踏时间分解**（0W 根治·只披露口径，进 `summary.pedal_time` 喂 AI，与详情页卡片同源）：踩踏 = P>0；滑行 = P=0 且速度 ≥2 km/h；静止 = P=0 且速度 <2 km/h（复用 `DATA_QUALITY.pause_resume_speed_kmh`；速度缺失判静止）。无功率数据的秒不计入分母，全程无功率不出键。**静止段标注**：P=0 且静止的连续段达到 `PEDAL_TIME.stationary_min_sec`（30s）产出 `stationary` 异常；静止累计达 60s（`stationary_hint_sec`）时详情页卡片附「计时未停的静止以 0W 计入指标」披露行。**指标数值口径不变**（0W 计入 Z1 与负荷，见「分区」节），存量训练经 reanalyze_activity 重建时回填本字段与 stationary 异常。
 
 ## 数据可信度口径
 

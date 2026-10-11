@@ -76,9 +76,9 @@ export const DATA_QUALITY = {
   pause_resume_window_sec: 5, // 静止判定窗口（秒）：取恢复记录后该窗口内的最大速度判断
 };
 
-// ============ 踩踏时间分解（详情页展示层口径，pedalTime.ts；不进 summary 不喂 AI） ============
-// 0W 根治后 pedal_time 已进 summary（roadmap 口径拍板：只披露不改数值），本块阈值
-// 供 analyze 装配与详情页共用；静止判据复用 DATA_QUALITY.pause_resume_speed_kmh
+// ============ 踩踏时间分解与静止段标注（pedalTime.ts：analyze 装配 + 详情页共用） ============
+// 0W 根治后 pedal_time 已进 summary 喂 AI、静止段进 anomalies（口径拍板只披露不改数值）；
+// 静止判据复用 DATA_QUALITY.pause_resume_speed_kmh
 export const PEDAL_TIME = {
   stationary_min_sec: 30, // 静止段标注下限（秒）：达到该时长的"计时未停静止"才进 anomalies（短暂红灯不标）
   stationary_hint_sec: 60, // 静止累计提示线：达到该秒数（≥）在卡片附「计时未停的静止以 0W 计入指标」提示

@@ -305,5 +305,12 @@ test('损坏兜底：截断文件修复后仍失败时抛出原始错误', async
   const garbage = new Uint8Array(2014);
   garbage.set(gen.buildRideFit().subarray(0, 14)); // 合法头（含完整声明）
   garbage.fill(0xff, 14);
-  await assert.rejects(() => analyzeFile(fitOf(garbage)));
+  // 钉住「抛原始错误」口径（同旧仓）：重试失败后外泄的是首次解析错误，而非重试错误
+  await assert.rejects(
+    () => analyzeFile(fitOf(garbage)),
+    (e) => {
+      assert.match(e.message, /File data exceeds input length/);
+      return true;
+    },
+  );
 });

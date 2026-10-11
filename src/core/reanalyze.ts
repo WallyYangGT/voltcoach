@@ -20,6 +20,7 @@ import {
   fillShortGaps,
   zoneDistribution,
 } from './analyze.ts';
+import { detectStationarySpans, pedalTimeBreakdown } from './pedalTime.ts';
 import { PEAK_CURVE, HR_ZONES, POWER_ZONES, type AthleteParams } from './settings.ts';
 
 /** segments 里自动识别的间歇段特征（IntervalItem 必有 start/pct_ftp 键；lap 段两者皆无） */
@@ -35,6 +36,9 @@ const isIntervalItem = (s: Record<string, unknown> | IntervalItem): boolean =>
  * 继承（FIT 消息层信息或参数无关）：activity 全部、NP/avg/max/VI/峰曲线、
  * 心率 avg/max/漂移、踏频均值、pace/temperature/swim/developer_fields/climbs、
  * anomalies、data_quality、segments 中的 lap 段。
+ * 回填（f(records) 参数无关，但升级前入库的存量 summary 缺失）：pedal_time
+ * 三分解与 stationary 异常段——0W 根治披露字段，重建时按当前 records 补算
+ * （先滤旧 stationary 条目再并入，重复触发幂等）。
  *
  * @param records 已存逐秒记录（loadStoredRecords 的输出；缺失由调用方拦截）
  * @param prev 库内现有 summary（getActivitySummary 的输出，含 category/note 合并）
@@ -108,6 +112,18 @@ export function rebuildSummaryFromRecords(
     const cadencePower = cadencePowerAnalysis(records, athlete) ?? undefined;
     if (cadencePower) out.cadence_power = cadencePower;
     else delete out.cadence_power;
+  }
+
+  // ---- 0W 根治披露字段回填（f(records) 参数无关，升级前入库的存量 summary 缺该键/
+  // 该类异常——重建时按当前 records 补算，用户改 FTP 触发 reanalyze 即完成历史行追溯；
+  // 先滤掉旧 stationary 条目再并入新识别结果，重复触发幂等） ----
+  const pedal = pedalTimeBreakdown(records);
+  if (pedal) out.pedal_time = pedal;
+  else delete out.pedal_time;
+  const stationary = detectStationarySpans(records);
+  if (stationary.length) {
+    const others = (out.anomalies ?? []).filter((a) => a.type !== 'stationary');
+    out.anomalies = [...others, ...stationary];
   }
 
   return out;
