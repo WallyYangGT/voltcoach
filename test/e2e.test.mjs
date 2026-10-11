@@ -251,3 +251,66 @@ test('开发者字段：自定义字段被统计进 summary', async () => {
     core_temperature: { samples: 1800, avg: 38, min: 38, max: 38 },
   });
 });
+
+test('0W 根治：静止段进 pedal_time 三分解 + stationary 异常标注（数值口径不变）', async () => {
+  // 1200s 骑行：前 900s 踩踏（220W/10m-s），中段 90s 计时未停静止（0W/速度 0），后 210s 踩踏
+  const { summary } = await analyzeFile(
+    fitOf(
+      gen.buildRideFit({
+        durationSec: 1200,
+        altitude: 100,
+        power: (i) => (i >= 900 && i < 990 ? 0 : 220),
+        speedMS: (i) => (i >= 900 && i < 990 ? 0 : 10),
+      }),
+    ),
+  );
+  // 三分解：踩踏 1110 / 滑行 0 / 静止 90，分母=全部 1200 秒（逐秒数据无缺口）
+  assert.deepEqual(summary.pedal_time, {
+    sample_sec: 1200,
+    pedaling_sec: 1110,
+    coasting_sec: 0,
+    stationary_sec: 90,
+  });
+  // stationary 异常：一段 90s，at 为静止起始时刻；按语言渲染（formatAnomaly）
+  const stationary = (summary.anomalies ?? []).filter((a) => a.type === 'stationary');
+  assert.deepEqual(stationary, [
+    { type: 'stationary', duration_sec: 90, at: '2024-01-15T10:15:00.000Z' },
+  ]);
+  assert.match(formatAnomaly(stationary[0], 'zh'), /计时未停的静止 90s/);
+  // 数值口径不变：NP/TSS 仍计入 0W（NP=215 探针钉值，与旧仓黄金基准同源算法）
+  assert.equal(summary.power.normalized_power, 215);
+});
+
+test('损坏兜底：文件被截断仍出部分结果（自旧仓回同步：头声明被改写后重试）', async () => {
+  // 1800 秒的骑行文件截断到 60%：头里 data_size 仍声明完整长度。
+  // fit-file-parser v5/v6 会直接报 "File data exceeds input length"，
+  // analyzeFile 改写头声明后重试，保持「损坏文件仍能分析出部分结果」的旧行为。
+  const full = gen.buildRideFit({ powerGap: [600, 60] });
+  const truncated = full.subarray(0, Math.round(full.length * 0.6));
+  const { summary } = await analyzeFile(fitOf(truncated));
+
+  // 解析出前段记录，但明显少于完整的 1800 秒（丢的是文件尾部，不体现为缺失秒数）
+  const count = summary.data_quality.record_count;
+  assert.ok(count > 0 && count < 1800, `截断文件应解析出部分记录，实际 ${count}`);
+  // 逐秒网格从首条记录连续到末条记录
+  assert.equal(summary.activity.duration_sec, count);
+  // 指标管线跑通：恒定功率 200W → NP 仍是 200
+  assert.equal(summary.power.normalized_power, 200);
+  // 截断把文件尾部的 session 消息也切掉了 → 运动类型回落 unknown（v3 截断时同样如此）
+  assert.equal(summary.activity.sport, 'unknown');
+});
+
+test('损坏兜底：截断文件修复后仍失败时抛出原始错误', async () => {
+  // 头合法但数据字节全是 0xff：改写头声明也无法解析出 FIT 数据
+  const garbage = new Uint8Array(2014);
+  garbage.set(gen.buildRideFit().subarray(0, 14)); // 合法头（含完整声明）
+  garbage.fill(0xff, 14);
+  // 钉住「抛原始错误」口径（同旧仓）：重试失败后外泄的是首次解析错误，而非重试错误
+  await assert.rejects(
+    () => analyzeFile(fitOf(garbage)),
+    (e) => {
+      assert.match(e.message, /File data exceeds input length/);
+      return true;
+    },
+  );
+});

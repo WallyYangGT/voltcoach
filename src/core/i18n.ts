@@ -120,6 +120,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'anom.power_gap': '功率缺失 {duration}s，起始 {at}',
     'anom.record_gap': '记录缺失 {duration}s，起始 {at}',
     'anom.timer_pause': '计时暂停 {duration}s，起始 {at}',
+    'anom.stationary': '计时未停的静止 {duration}s，起始 {at}',
     'anom.hr_jump': '心率跳变 {from}→{to}，位于 {at}',
     'anom.other': '{text}',
   },
@@ -165,6 +166,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'anom.power_gap': 'Power missing {duration}s, starting {at}',
     'anom.record_gap': 'Record missing {duration}s, starting {at}',
     'anom.timer_pause': 'Timer paused {duration}s, starting {at}',
+    'anom.stationary': 'Stationary with the timer running {duration}s, at {at}',
     'anom.hr_jump': 'Heart rate jump {from}→{to} at {at}',
     'anom.other': '{text}',
     'ai.key_type': 'api_key must be a string',
@@ -244,7 +246,7 @@ export function formNote(tsb: number, lang: Lang = 'zh'): string {
 
 /**
  * 结构化异常标注 → 展示文本。
- * 新格式：{ type: "power_gap"|"record_gap"|"timer_pause"|"hr_jump", duration_sec?, from?, to?, at }
+ * 新格式：{ type: "power_gap"|"record_gap"|"timer_pause"|"stationary"|"hr_jump", duration_sec?, from?, to?, at }
  * 旧数据（字符串 anomalies）原样透传，不做翻译。
  */
 export function formatAnomaly(a: unknown, lang: Lang = 'zh'): string {
@@ -258,6 +260,8 @@ export function formatAnomaly(a: unknown, lang: Lang = 'zh'): string {
       return t(lang, 'anom.record_gap', { duration: an.duration_sec, at: an.at });
     case 'timer_pause':
       return t(lang, 'anom.timer_pause', { duration: an.duration_sec, at: an.at });
+    case 'stationary':
+      return t(lang, 'anom.stationary', { duration: an.duration_sec, at: an.at });
     case 'hr_jump':
       return t(lang, 'anom.hr_jump', { from: an.from, to: an.to, at: an.at });
     default:

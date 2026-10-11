@@ -102,3 +102,40 @@ test('rebuildSummaryFromRecords: prev 带 form/category/note 时保留并覆盖�
   assert.equal(rebuilt.activity.category, 'training');
   assert.equal(rebuilt.activity.note, '体感不错');
 });
+
+test('rebuildSummaryFromRecords: 0W 披露字段回填——存量 summary 缺 pedal_time/stationary 时按 records 补算且幂等', async () => {
+  // 1200s 骑行含 90s 计时未停静止段（0W/速度 0）
+  const bytes = buildRideFit({
+    durationSec: 1200,
+    altitude: 100,
+    power: (i) => (i >= 900 && i < 990 ? 0 : 220),
+    speedMS: (i) => (i >= 900 && i < 990 ? 0 : 10),
+  });
+  const { records, summary: prev } = await analyzeFile({ bytes, fileName: 'legacy.fit', athlete: ATHLETE_A });
+  assert.ok(prev.pedal_time); // 前置：新代码产出的 summary 自带披露字段
+
+  // 模拟存量行（升级前入库）：剥掉 pedal_time 与 stationary 条目
+  const legacy = JSON.parse(JSON.stringify(prev));
+  delete legacy.pedal_time;
+  legacy.anomalies = (legacy.anomalies ?? []).filter((a) => a.type !== 'stationary');
+
+  const roundTripped = parseRecordsCsv(recordsToCsv(records));
+  const rebuilt = rebuildSummaryFromRecords(roundTripped, legacy, ATHLETE_A);
+  assert.deepEqual(rebuilt.pedal_time, {
+    sample_sec: 1200,
+    pedaling_sec: 1110,
+    coasting_sec: 0,
+    stationary_sec: 90,
+  });
+  assert.deepEqual(
+    (rebuilt.anomalies ?? []).filter((a) => a.type === 'stationary'),
+    [{ type: 'stationary', duration_sec: 90, at: '2024-01-15T10:15:00.000Z' }],
+  );
+  // 重复触发幂等（对已回填的 summary 再重建不产生重复条目）
+  const again = rebuildSummaryFromRecords(roundTripped, rebuilt, ATHLETE_A);
+  assert.deepEqual(
+    (again.anomalies ?? []).filter((a) => a.type === 'stationary'),
+    (rebuilt.anomalies ?? []).filter((a) => a.type === 'stationary'),
+  );
+  assert.deepEqual(again.pedal_time, rebuilt.pedal_time);
+});
