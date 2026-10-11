@@ -71,6 +71,11 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.read_failed': 'AI 响应读取失败：{msg}',
     'ai.network_failed': 'AI 连接失败：{msg}',
     'ai.retried_note': '（已自动重试 {n} 次）',
+    // 前台服务保活（src/ai/keepalive，2026-10-11 推翻「不做保活」决策）：生成期间
+    // dataSync FGS 的通知文案（传给原生模块前按语言取好）
+    'ai.keepalive_title': 'AI 生成进行中',
+    'ai.keepalive_body': '切到后台也会继续生成，完成后回 App 查看',
+    'ai.keepalive_channel': 'AI 生成',
     // ---- 编排层消息（src/services/aiGenerate，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'srv.ai_key_missing': '未配置 AI 密钥（设置页可配），无法使用对话',
     'srv.mode_invalid': 'mode 需为 follow_up/chat',
@@ -210,6 +215,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.read_failed': 'Failed to read the AI response: {msg}',
     'ai.network_failed': 'AI connection failed: {msg}',
     'ai.retried_note': ' (auto-retried {n}x)',
+    'ai.keepalive_title': 'AI generation in progress',
+    'ai.keepalive_body': 'Generation continues in the background — come back for the result',
+    'ai.keepalive_channel': 'AI generation',
     'srv.ai_key_missing': 'No AI key configured (Settings page) — chat unavailable',
     'srv.mode_invalid': 'mode must be follow_up/chat',
     'srv.message_empty': 'message must not be empty',

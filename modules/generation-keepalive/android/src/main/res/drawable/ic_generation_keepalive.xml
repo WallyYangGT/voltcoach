@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知 small icon（单色闪电，volt 品牌隐喻）：平台要求 small icon 为单色剪影，
+     用 applicationInfo.icon（自适应启动图标）会被蒙版成纯色方块（code-review P2-4） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M13,2L4.5,13.5h5.5L8.5,22l8,-11.5h-5.5z" />
+</vector>

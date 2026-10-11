@@ -18,6 +18,7 @@ import {
   type AiProviderPreset,
 } from '@/ai/providerPresets';
 import { OnelapSyncCard } from '@/components/OnelapSyncCard';
+import { KeepAliveCard } from '@/components/KeepAliveCard';
 import type { FormSnapshot } from '@/core/form';
 import type { AthleteParams } from '@/core/settings';
 import { computeForm, getAiConfig, getAthleteState, getProfile, setAiConfig, setAthlete, setProfile } from '@/db';
@@ -462,6 +463,10 @@ export default function MeScreen() {
         </View>
         <Text style={styles.note}>{t('set.ai.note')}</Text>
       </View>
+
+      {/* 后台生成保活（2026-10-11 推翻「不做保活」决策后新增：白名单状态 + 一键申请 +
+          OEM 引导；AI 生成期间的前台服务机制在 src/ai/keepalive.ts） */}
+      <KeepAliveCard />
 
       {/* 顽鹿同步（M5 收尾后自数据管理页挪入：账号绑定与 AI 服务同属账号类配置，原位置太深） */}
       <OnelapSyncCard />
