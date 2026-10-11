@@ -78,7 +78,7 @@ export const DATA_QUALITY = {
 
 // ============ 踩踏时间分解（详情页展示层口径，pedalTime.ts；不进 summary 不喂 AI） ============
 export const PEDAL_TIME = {
-  stationary_hint_sec: 60, // 静止累计提示线：超过该秒数在卡片附「计时未停的静止以 0W 计入指标」提示（移动/静止判据复用 DATA_QUALITY.pause_resume_speed_kmh）
+  stationary_hint_sec: 60, // 静止累计提示线：达到该秒数（≥）在卡片附「计时未停的静止以 0W 计入指标」提示（移动/静止判据复用 DATA_QUALITY.pause_resume_speed_kmh）
 };
 
 // ============ 功率峰曲线缺口容忍（analyze.ts：fillShortGaps 插值后再算峰功率/FTP 估算） ============

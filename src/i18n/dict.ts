@@ -60,10 +60,9 @@ export const DICT = {
     'cad.style.normal': '踏频功率匹配正常',
     'cad.style.low_cadence': '偏低踏频高扭矩发力（力量型，可考虑提高踏频降低肌肉负担）',
     'cad.style.high_cadence': '偏高踏频发力（心肺型，注意高踏频下的心率成本）',
-    // 爬坡段卡片（与 Web 版 i18n.js climb.* 逐字一致；表列头带单位，值直出数字）
+    // 爬坡段卡片（标题照搬 Web 版 i18n.js climb.title；列头带单位、值直出数字。
+    // Web 版表格的 climb.col.name/duration 两列头在移动端头行布局中无对应文案，不搬）
     'climb.title': '爬坡段（{n}）',
-    'climb.col.name': '名称',
-    'climb.col.duration': '时长',
     'climb.col.distance': '长度 m',
     'climb.col.gain': '爬升 m',
     'climb.col.grade': '均坡度 %',
@@ -490,10 +489,10 @@ export const DICT = {
     'cad.style.normal': 'Cadence and power well matched',
     'cad.style.low_cadence': 'Low-cadence, high-torque riding (strength style — consider higher cadence to reduce muscle strain)',
     'cad.style.high_cadence': 'High-cadence riding (aerobic style — mind the HR cost of high cadence)',
-    // Climb card (verbatim from Web i18n.js climb.*; column headers carry units, values are plain numbers)
+    // Climb card (title verbatim from Web i18n.js climb.title; column headers carry units,
+    // values are plain numbers. The Web table headers climb.col.name/duration have no
+    // counterpart in the mobile head-row layout, so they are not ported)
     'climb.title': 'Climbs ({n})',
-    'climb.col.name': 'Name',
-    'climb.col.duration': 'Duration',
     'climb.col.distance': 'Length m',
     'climb.col.gain': 'Gain m',
     'climb.col.grade': 'Grade %',

@@ -86,8 +86,10 @@ export function buildCadenceMetrics(cp: CadencePower, t: MetricText): MetricItem
 /**
  * 踩踏时间分解 → 卡片指标格（展示层口径见 pedalTime.ts，不进 summary 不喂 AI）。
  * 值为占比（四舍五入到整数 %，三项之和因舍入可能 ≠100%），小字为时长钟面格式。
+ * 不变量：b.sample_sec > 0（pedalTimeBreakdown 对空样本返回 null，此为防御式兜底）。
  */
 export function buildPedalTimeMetrics(b: PedalTimeBreakdown, t: MetricText): MetricItem[] {
+  if (!b.sample_sec) return [];
   const pct = (sec: number) => Math.round((sec / b.sample_sec) * 100);
   return [
     { label: t('pedal.pedaling'), value: `${pct(b.pedaling_sec)}%`, sub: formatDurationClock(b.pedaling_sec) },
