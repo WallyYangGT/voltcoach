@@ -84,8 +84,9 @@ export function buildCadenceMetrics(cp: CadencePower, t: MetricText): MetricItem
 }
 
 /**
- * 踩踏时间分解 → 卡片指标格（展示层口径见 pedalTime.ts，不进 summary 不喂 AI）。
- * 值为占比（四舍五入到整数 %，三项之和因舍入可能 ≠100%），小字为时长钟面格式。
+ * 踩踏时间分解 → 卡片指标格（口径见 pedalTime.ts；0W 根治后 summary.pedal_time
+ * 进 summary 喂 AI，本装配只管渲染：值为占比（四舍五入到整数 %，三项之和因舍入
+ * 可能 ≠100%），小字为时长钟面格式。
  * 不变量：b.sample_sec > 0（pedalTimeBreakdown 对空样本返回 null，此为防御式兜底）。
  */
 export function buildPedalTimeMetrics(b: PedalTimeBreakdown, t: MetricText): MetricItem[] {

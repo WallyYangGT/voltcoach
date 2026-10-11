@@ -153,7 +153,9 @@ export default function ActivityDetailScreen() {
           const stored = await loadStoredRecords(fileName);
           if (alive) {
             setThinned(stored ? thinRecords(stored) : null);
-            setPedal(stored ? pedalTimeBreakdown(stored) : null);
+            // 0W 根治后 summary.pedal_time 为权威数据源（与 AI 同源）；旧数据（升级前
+            // 入库的 summary 无该字段）回退 records 现算，口径同 core/pedalTime
+            setPedal(s.pedal_time ?? (stored ? pedalTimeBreakdown(stored) : null));
           }
         }
       } catch (e) {
@@ -463,10 +465,10 @@ export default function ActivityDetailScreen() {
           </View>
         )}
 
-        {/* 踩踏时间分解（roadmap「0W/踩踏时间分解」展示层轻量实现：从已存逐秒数据现算，
-            不进 summary 不喂 AI；静止判据复用暂停阈值，口径见 core/pedalTime.ts。
+        {/* 踩踏时间分解（0W 根治：summary.pedal_time 三分解——与 AI 提示词同源，
+            数值口径不变只做披露；静止判据复用暂停阈值，口径见 core/pedalTime.ts。
             位置在踏频-功率分析卡之后——同为发力/踏频侧数据，先于数据质量与异常卡；
-            静止累计超提示线时附「0W 计入指标」披露行） */}
+            静止累计超提示线时附「0W 计入指标」披露行；旧 summary 无字段回退 records 现算） */}
         {pedal && (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>{t('pedal.title')}</Text>

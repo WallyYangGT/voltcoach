@@ -11,6 +11,7 @@
  */
 
 import FitParser from 'fit-file-parser';
+import { detectStationarySpans, pedalTimeBreakdown, type PedalTimeBreakdown } from './pedalTime.ts';
 import {
   ATHLETE,
   CADENCE_ANALYSIS,
@@ -65,7 +66,7 @@ export interface FitParsed {
 
 /** 结构化异常标注（语言中立，展示时经 formatAnomaly 按语言渲染） */
 export type Anomaly =
-  | { type: 'power_gap' | 'record_gap' | 'timer_pause'; duration_sec: number; at: string }
+  | { type: 'power_gap' | 'record_gap' | 'timer_pause' | 'stationary'; duration_sec: number; at: string }
   | { type: 'hr_jump'; from: number; to: number; at: string };
 
 /** 当日 CTL/ATL/TSB（入库后由 App 层注入 summary.athlete_context） */
@@ -179,6 +180,8 @@ export interface Summary {
   };
   developer_fields?: Record<string, { samples: number; avg: number; min: number; max: number }>;
   cadence_power?: CadencePower;
+  /** 踩踏时间三分解（0W 根治·只披露口径：NP/TSS/区间数值不变；无功率数据不出键） */
+  pedal_time?: PedalTimeBreakdown;
   climbs?: Climb[];
   interval_set?: IntervalSet;
   segments?: (Record<string, unknown> | IntervalItem)[];
@@ -964,6 +967,8 @@ export async function analyzeFile(input: AnalyzeInput): Promise<AnalyzeResult> {
     else
       anomalies.push({ type: 'record_gap', duration_sec: g.duration_sec, at: g.start });
   }
+  // 计时未停的静止段标注（0W 根治：静止以 0W 进入指标的口径不变，但必须显形）
+  anomalies.push(...detectStationarySpans(records));
   // 心率跳变检测（相邻秒差 > 25）
   for (let i = 1; i < records.length; i++) {
     const a = records[i - 1].heart_rate,
@@ -1111,6 +1116,8 @@ export async function analyzeFile(input: AnalyzeInput): Promise<AnalyzeResult> {
     developer_fields: collectDeveloperFields(raw) ?? undefined,
     // 踏频-功率联合分析是骑行专属口径（阈值按 FTP 设定）
     cadence_power: sport === 'cycling' ? cadencePowerAnalysis(records, athlete) ?? undefined : undefined,
+    // 踩踏时间三分解（无功率数据时 undefined，随空壳字段清理删键）
+    pedal_time: pedalTimeBreakdown(records) ?? undefined,
     climbs: detectClimbs(records) ?? undefined,
     interval_set: intervalResult?.interval_set,
     segments: segments.length ? segments : undefined,
