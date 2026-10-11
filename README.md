@@ -2,7 +2,7 @@
 
 **VoltCoach**——数据驱动的骑行私教：纯本地的运动训练分析工具（骑行为主）。导入码表/手表导出的 `.fit` 文件，本地计算逐秒指标与训练负荷（NP/TSS/CTL/ATL/TSB、功率/心率分区、峰功率曲线），并支持自带 Key 的 AI 训练解读。无服务器、无账号，数据全部留在手机上。
 
-由 Docker/Web 版项目 **fit-reader**（另行维护的旧仓库）移植而来——fit-reader 是"读 FIT 文件"时代的名字，只描述了底层能力；本 App 的产品本质是**骑行私教**，故更名 VoltCoach（volt 荧光黄品牌色 × 功率/电能隐喻 × Coach 点明品类）。
+**VoltCoach** 是主仓库：本项目自「读 FIT 文件」的 Web 工具起步，产品本质是**数据驱动的骑行私教**，故更名 VoltCoach（volt 荧光黄品牌色 × 功率/电能隐喻 × Coach 点明品类）。原 Docker/Web 版以 **voltcoach-for-docker**（GitHub: Sicheng886/voltcoach-for-docker，原名 fit-reader）继续维护，可视为本 App 的 Docker 桌面版——两者共享同一套指标口径与提示词，功能演进以本 App 为主。
 
 **功能特性**
 
@@ -18,6 +18,18 @@
 ## 下载安装
 
 从 [GitHub Releases](../../releases) 下载 APK 安装。正式发版为 release 签名；早期产物可能有 debug 签名版本（Release 正文会注明，不能覆盖安装正式签名包）。Android 版本要求与 ABI 说明见产物页。
+
+## 权限说明
+
+| 权限 | 用途 |
+|---|---|
+| `INTERNET` | 连接你自配的 AI 端点（BYOK）与顽鹿云同步；无任何自建服务器 |
+| `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` | AI 生成期间的**后台保活前台服务**（仅生成期间存在，结束即停）——退后台/锁屏不断流 |
+| `WAKE_LOCK` | 生成期间保持 CPU 唤醒，防止熄屏后 SSE 流断续（15 分钟硬上限） |
+| `POST_NOTIFICATIONS` | 显示「AI 生成进行中」常驻通知；**拒绝不影响后台保活**，只是看不到通知 |
+| `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` | 可选的电池优化白名单（设置页手动申请），深度省电场景的兜底 |
+
+> **小米/澎湃 OS 提示**：HyperOS 2.0 会把常驻通知自动收纳进通知栏的「更多」折叠区——生成期间看不到那条通知属正常现象，后台保活不受影响（可在设置里查看保活状态）。
 
 ## 本地开发
 
@@ -52,6 +64,8 @@ npx expo start --android  # Metro 开发服务 + 模拟器/真机
 
 - `app/` — Expo Router 页面路由（底部四 tab：首页/训练/AI/我的）
 - `src/` — 业务代码（`core/` 纯函数算法层；`prompts/skills/` AI 技能知识库源文件）
+- `modules/` — 本地 Expo 原生模块（`generation-keepalive/`：AI 生成后台保活前台服务，android-only）
+- `plugins/` — 本地 config plugin（prebuild 时注入 manifest 声明）
 - `scripts/` — 守卫与工具脚本（除 fflate 外仅用 Node 内置库）
 - `test/` — node:test 单元测试（含合成 FIT 二进制生成器）
 - `docs/` — 公开文档体系（见上方文档地图）
