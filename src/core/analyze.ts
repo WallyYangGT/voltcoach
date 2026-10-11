@@ -786,6 +786,28 @@ export function cadencePowerAnalysis(records: SecRecord[], athlete: AthleteParam
 // ---------------- 单文件分析流程（依赖注入版） ----------------
 
 /**
+ * 修复被截断的 FIT 头：把 data_size（头内 offset 4..8，uint32 LE）改写为实际可用字节数。
+ * fit-file-parser v5 起始终校验结构边界——头声明长度超过实际字节数时直接报错
+ * "File data exceeds input length"，不再像 v3 那样静默按 EOF 截断；未传完/损坏的文件
+ * 因此会从「出部分结果 + 缺失计数」退化为整个解析失败。数据本身一个字节都不改，
+ * 只让头声明与实际长度自洽即可恢复旧行为（恢复出的记录数与 v3 截断口径一致）。
+ * 声明值与实际相符（无需修复）时返回 null。
+ * 自旧仓 index.js patchTruncatedFitHeader 回同步（反向缺口：新仓缺此兜底）。
+ */
+export function patchTruncatedFitHeader(content: Uint8Array): Uint8Array | null {
+  if (content.length < 12) return null;
+  const headerSize = content[0];
+  if (headerSize < 12 || headerSize > content.length) return null;
+  const declared = new DataView(content.buffer, content.byteOffset, content.byteLength).getUint32(4, true);
+  const available = content.length - headerSize;
+  if (declared <= available) return null;
+  // slice() 拷贝出独立缓冲（保持数据字节不动，只改头声明）
+  const patched = content.slice();
+  new DataView(patched.buffer).setUint32(4, available, true);
+  return patched;
+}
+
+/**
  * 解析 FIT 字节并产出逐秒记录 + 汇总指标。
  * 与旧版（fit-reader Web 版 index.js analyzeFile）的差异：不落盘 CSV/JSON、不直接写训练库、
  * 不读全局骑手参数——三者全部由调用方处理，入库注入的 athlete_context form 字段
@@ -806,13 +828,25 @@ export async function analyzeFile(input: AnalyzeInput): Promise<AnalyzeResult> {
   // 直传等价——断言只为对齐官方签名。输出仍按本文件 FitParsed 宽松契约消费（注意 6.x
   // list 模式把 sport 消息收进 sports[] 数组、无单数 sport 键；旧版仓库现装 5.2.1 行为
   // 相同，生效路径一直是 sessions[0].sport 兜底，黄金 diff 钉住）
-  const data: FitParsed = await new Promise((resolve, reject) =>
-    parser.parse(
-      input.bytes as unknown as ArrayBuffer,
-      (err, d) =>
-        err || !d ? reject(new Error(err || 'FIT 解析结果为空')) : resolve(d as FitParsed),
-    ),
-  );
+  const parse = (buf: Uint8Array) =>
+    new Promise<FitParsed>((resolve, reject) =>
+      parser.parse(
+        buf as unknown as ArrayBuffer,
+        (err, d) =>
+          err || !d ? reject(new Error(err || 'FIT 解析结果为空')) : resolve(d as FitParsed),
+      ),
+    );
+  let data: FitParsed;
+  try {
+    data = await parse(input.bytes);
+  } catch (err) {
+    // v5/v6 结构校验变严：截断文件整体报错会从「出部分结果 + 缺失计数」退化为
+    // 整个解析失败——改写头声明后重试一次（自旧仓 analyzeFile 回同步），
+    // 修复后仍失败抛原始错误
+    const patched = patchTruncatedFitHeader(input.bytes);
+    if (!patched) throw err;
+    data = await parse(patched);
+  }
 
   const sport = data.sport?.sport || data.sessions?.[0]?.sport || 'unknown';
 
