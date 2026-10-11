@@ -19,9 +19,9 @@ jobs:
       group: release-${{ github.ref }} # 同 ref 串行发版，防连打 tag 时 Release 竞态
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24 # 单测跑 .ts 需要 Node ≥ 23.6 原生 type stripping
           cache: npm
@@ -35,7 +35,7 @@ jobs:
           npm test
           npm run golden
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 17
@@ -93,11 +93,14 @@ jobs:
       - name: 注入 release 签名配置
         run: node scripts/patch-release-signing.mjs
 
+      # 只打 arm64-v8a（2026-10-11 起）：现代安卓手机均为 arm64，四套 ABI 的通用包
+      # ≈140MB vs 单 ABI ≈55MB——体积收益远大于老 32 位设备兼容（需通用包时本地自建，
+      # 见 docs/RELEASING.md「产物变体」）
       - name: 打包 release APK
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
 
       - name: 发版包体检（check:apk，bundle 端点口径）
         run: npm run check:apk
@@ -109,14 +112,14 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"; VERSION="${VERSION//\//-}"
           cp android/app/build/outputs/apk/release/app-release.apk "VoltCoach-${VERSION}.apk"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: VoltCoach-APK
           path: VoltCoach-*.apk
 
       - name: 发布 GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: VoltCoach-*.apk
           body: ${{ env.SIGNING_NOTE }} # debug 签名产物在下载页自曝
