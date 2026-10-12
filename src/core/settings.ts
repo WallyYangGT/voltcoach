@@ -89,6 +89,12 @@ export const PEAK_CURVE = {
   max_interp_gap_sec: 10, // 允许线性插值补齐的连续缺口上限（秒）：功率计偶发掉几秒不应让 20min 峰功率整体作废；更长缺口仍视为不连续
 };
 
+// ============ 功率校准系数界限（AI 经 recalibrate_activity_power 缩放重算时的夹逼） ============
+export const POWER_CALIBRATION = {
+  min_scale: 0.5, // 系数下限：低于它意味着功率计读数虚高 2 倍以上——更可能是数据本身不可信（应 set_power_flag 标记而非缩放）
+  max_scale: 1.5, // 系数上限：同理，超高 2 倍以上的读数不建议用线性缩放"修复"
+};
+
 // ============ FTP 历史估算阈值（ftp.js：窗口内功率峰曲线 + 心率交叉验证，M3 搬运） ============
 export const FTP_ESTIMATION = {
   window_days: 42, // 回看窗口（天）：取最近 6 周内的骑行做联合估算
