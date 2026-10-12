@@ -15,12 +15,20 @@
  *
  * 自动同步：前台 AppState 触发（国内 ROM 后台限制多，打开时拉最可靠），
  * 模块级 1h 节流；失败仅警告不中断应用。并发防双跑：进行中的同步共享同一 Promise。
+ * 保活：同步期间复用 AI 生成的 dataSync 前台服务壳（src/ai/keepalive 引用计数，
+ * 2026-10-13 接入）——首次全量同步是分钟级任务，退后台/锁屏不被进程冻结打断。
  */
 
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import { loadDefaultFetch } from '@/ai/http';
 import {
+  acquireGenerationKeepAlive,
+  type KeepAliveHandle,
+} from '@/ai/keepalive';
+import { t } from '@/core/i18n';
+import {
+  getLang,
   getSyncState,
   listActivityFileNames,
   setSyncState,
@@ -179,30 +187,48 @@ async function runSyncOnce(): Promise<SyncOutcome> {
     return { imported: 0, skipped: 0, duplicates: 0, failed: 0, error: { ...NO_ACCOUNT }, failureFloor: null };
   }
 
-  const state = await getSyncState();
-  const outcome = await pullActivities(account, state);
-  const err = outcome.error;
-  // 水位线推进锚点：正常→当前时刻；有失败活动→最旧失败活动时间（下次窗口重试，
-  // 成功项按文件名幂等跳过）；本轮出错（未拉到列表）→不动
-  const nextSyncAt = err
-    ? state.last_sync_at
-    : outcome.failureFloor ?? new Date().toISOString();
-  const next: SyncState = {
-    ...state,
-    last_sync_at: nextSyncAt,
-    last_result: err ? 'error' : 'ok',
-    last_error: err?.message || null,
-    last_counts: err
-      ? state.last_counts
-      : {
-          imported: outcome.imported,
-          skipped: outcome.skipped,
-          duplicates: outcome.duplicates,
-          failed: outcome.failed,
-        },
-  };
-  await setSyncState(next);
-  return outcome;
+  // 同步保活（2026-10-13，decisions §15 壳复用）：首次 90 天全量是分钟级任务（逐活动
+  // 2 个请求 + 300–800ms jitter），期间 dataSync 前台服务使进程不被 Cached Apps Freezer
+  // 冻结，退后台/锁屏同步照常推进。与 AI 生成共用同一 FGS/引用计数：并发时只发一次
+  // start、共用一条通知（文案以先到者为准，release 只删自己的令牌不会误停对方）。
+  // 15 分钟 wake lock 硬上限只影响 CPU 保活，FGS 本身无时限（Android 15 dataSync
+  // 6h/天额度远够），超长同步仍受冻结保护。放在账号校验之后——fast-fail 不闪通知。
+  let keepAlive: KeepAliveHandle | null = null;
+  try {
+    const lang = await getLang();
+    keepAlive = await acquireGenerationKeepAlive({
+      title: t(lang, 'sync.keepalive_title'),
+      body: t(lang, 'sync.keepalive_body'),
+      channel: t(lang, 'sync.keepalive_channel'),
+    });
+
+    const state = await getSyncState();
+    const outcome = await pullActivities(account, state);
+    const err = outcome.error;
+    // 水位线推进锚点：正常→当前时刻；有失败活动→最旧失败活动时间（下次窗口重试，
+    // 成功项按文件名幂等跳过）；本轮出错（未拉到列表）→不动
+    const nextSyncAt = err
+      ? state.last_sync_at
+      : outcome.failureFloor ?? new Date().toISOString();
+    const next: SyncState = {
+      ...state,
+      last_sync_at: nextSyncAt,
+      last_result: err ? 'error' : 'ok',
+      last_error: err?.message || null,
+      last_counts: err
+        ? state.last_counts
+        : {
+            imported: outcome.imported,
+            skipped: outcome.skipped,
+            duplicates: outcome.duplicates,
+            failed: outcome.failed,
+          },
+    };
+    await setSyncState(next);
+    return outcome;
+  } finally {
+    await keepAlive?.release();
+  }
 }
 
 /** 联调端点覆盖（EXPO_PUBLIC_ONELAP_BASE 打包期内联；生产构建不设即为 undefined） */

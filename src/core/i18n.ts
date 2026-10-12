@@ -80,6 +80,11 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.keepalive_title': 'AI 生成进行中',
     'ai.keepalive_body': '切到后台也会继续生成，完成后回 App 查看',
     'ai.keepalive_channel': 'AI 生成',
+    // 同步保活（顽鹿同步复用同一保活壳，decisions §15）：首次 90 天全量是分钟级任务，
+    // 同步期间退后台不被冻结；渠道 ID 固定为原生侧 generation_keepalive，此处仅显示名
+    'sync.keepalive_title': '顽鹿同步进行中',
+    'sync.keepalive_body': '正在从云端拉取训练数据，可切后台等待',
+    'sync.keepalive_channel': '数据同步',
     // ---- 编排层消息（src/services/aiGenerate，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'srv.ai_key_missing': '未配置 AI 密钥（设置页可配），无法使用对话',
     'srv.mode_invalid': 'mode 需为 follow_up/chat',
@@ -228,6 +233,9 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.keepalive_title': 'AI generation in progress',
     'ai.keepalive_body': 'Generation continues in the background — come back for the result',
     'ai.keepalive_channel': 'AI generation',
+    'sync.keepalive_title': 'Onelap sync in progress',
+    'sync.keepalive_body': 'Pulling training data from the cloud — you can leave the app',
+    'sync.keepalive_channel': 'Data sync',
     'srv.ai_key_missing': 'No AI key configured (Settings page) — chat unavailable',
     'srv.mode_invalid': 'mode must be follow_up/chat',
     'srv.message_empty': 'message must not be empty',
