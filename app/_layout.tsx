@@ -125,6 +125,11 @@ function RootStack() {
         name="memory"
         options={{ animation: 'slide_from_right' }}
       />
+      {/* v2：个人训练档案页（四组长期基线只读 + 手动重建） */}
+      <Stack.Screen
+        name="dossier"
+        options={{ animation: 'slide_from_right' }}
+      />
       {/* M4：数据管理页（备份导出导入 / 顽鹿同步 / 本地快照） */}
       <Stack.Screen
         name="data"

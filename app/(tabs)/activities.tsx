@@ -12,7 +12,7 @@ import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } fr
 import { FAB } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { formatDuration } from '@/core/metrics';
-import { deleteActivity, listActivities, type ActivityListItem } from '@/db';
+import { deleteActivity, listActivities, rebuildDossierQuietly, type ActivityListItem } from '@/db';
 import { useI18n } from '@/i18n';
 import { deleteStoredRecord } from '@/records-store';
 import { invalidateReportTitles } from '@/services/aiTitle';
@@ -72,6 +72,7 @@ export default function ActivitiesScreen() {
               console.warn('逐秒数据清理失败（训练已删除）:', e);
             }
             invalidateReportTitles(fileName);
+            void rebuildDossierQuietly(); // 档案基线剔除该骑行（fire-and-forget）
             await load();
           })();
         },
