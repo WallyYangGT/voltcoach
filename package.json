@@ -66,11 +66,16 @@
     "react-native-worklets": "0.10.1"
   },
   "devDependencies": {
+    "@testing-library/react-native": "^14.1.0",
+    "@types/jest": "^30.0.0",
     "@types/react": "~19.2.2",
     "eslint": "^9.39.4",
     "eslint-config-expo": "^57.0.2",
     "eslint-import-resolver-typescript": "^3.10.1",
     "globals": "^17.13.0",
+    "jest": "^29.7.0",
+    "jest-expo": "^57.0.6",
+    "react-test-renderer": "19.2.3",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -84,7 +89,8 @@
     "icons": "node scripts/make-app-icons.mjs",
     "check:apk": "node scripts/check-release-bundle.mjs",
     "lint": "eslint . --max-warnings=0",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "test:components": "jest"
   },
   "private": true
 }

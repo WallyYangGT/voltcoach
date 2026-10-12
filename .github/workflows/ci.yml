@@ -50,3 +50,8 @@ jobs:
 
       - name: 单元测试
         run: npm test
+
+      # L4 组件测试（jest-expo + RNTL，2026-10-13 引入）：中间层交互行为回归从
+      # 模拟器冒烟预算移出到 CI 的承接面；不依赖模拟器，纯 node 环境
+      - name: 组件测试
+        run: npm run test:components

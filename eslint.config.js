@@ -34,4 +34,11 @@ export default [
     files: ['test/**/*.mjs', 'scripts/**/*.mjs'],
     languageOptions: { globals: { ...globals.node } },
   },
+  // L4 组件测试（jest-expo preset，2026-10-13 引入）：describe/it/expect/jest 走隐式
+  // globals（RNTL 的 afterEach 自动清理依赖全局 afterEach 存在，不用 @jest/globals
+  // 显式 import 的原因）；匹配器来自 RNTL 自动 extend-expect，无需额外配置
+  {
+    files: ['test/components/**/*.{ts,tsx}', 'jest.setup.js'],
+    languageOptions: { globals: { ...globals.jest } },
+  },
 ];

@@ -3,6 +3,9 @@
   "compilerOptions": {
     "strict": true,
     "allowImportingTsExtensions": true,
+    "types": [
+      "jest"
+    ],
     "paths": {
       "@/*": [
         "./src/*"
