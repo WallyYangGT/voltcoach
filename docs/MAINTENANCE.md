@@ -42,7 +42,7 @@ assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-
 - **个人训练档案（v2）**：`src/core/dossier` 以**最新骑行日为锚**聚合 90 天峰功率 PB/爬坡踏频画像/强度结构/8 周负荷四组基线（确定性计算，零 AI token），缓存于 settings 表 `dossier` 行（指纹 = 活动总数 + FTP，miss 自愈重建）；导入/删除/合并/FTP 变更/功率标记/重算各触发点 fire-and-forget 重建。档案段注入四场景报告与对话（空库整段省略）。
 - **记忆分层（v2）**：`ai_memories.scope`——`short` 短期记忆**过 7 天或新增 3 次活动先到即失效**（判定单一事实源在 `src/core/memory.ts`，注入期过滤、不物理删）；`long` 默认长期。`category='strategy'`（与教练商定的训练策略）单独成「既定结论」权威段置顶注入，规则要求分析以其为前提、修订须显式声明。
 - **功率可信度标记（v2）**：`activities.power_flagged`（详情页开关或 AI `set_power_flag` 工具，可逆）——被标记骑行从档案一切功率派生基线排除（峰功率/分区/爬坡/踏频风格/周 TSS），**心率漂移与时长仍采信**；`recalibrate_activity_power` 工具按系数（夹逼 0.5–1.5）缩放重算单骑全部功率派生指标并写回，逐秒原始数据不改写（重导原 FIT 可回退）。
-- **顽鹿同步行为口径**：只回溯**最近 90 天**（`SYNC_WINDOW_DAYS`；水位线 = 上次成功同步前移 24h 缓冲、与 90 天窗口取较晚者，列表遇早于窗口起点的记录即停止翻页）；活动之间 300–800ms 随机间隔摊平请求突发（控制对非官方接口的请求强度）；令牌缓存复用到 401 自动重登一次（token 与 AI Key 同级存 `expo-secure-store`、不随备份包迁移）；「测试连接」只探测登录域与数据域可达性（任何 HTTP 状态码都算链路通）；同步侧下载前按文件名预检省流量，入库前再按内容指纹判重（与手动导入同一入库管线）。
+- **顽鹿同步行为口径**：只回溯**最近 90 天**（`SYNC_WINDOW_DAYS`；水位线 = 上次成功同步前移 24h 缓冲、与 90 天窗口取较晚者，列表遇早于窗口起点的记录即停止翻页）；活动之间 300–800ms 随机间隔摊平请求突发（控制对非官方接口的请求强度）；令牌缓存复用到 401 自动重登一次（token 与 AI Key 同级存 `expo-secure-store`、不随备份包迁移）；「测试连接」只探测登录域与数据域可达性（任何 HTTP 状态码都算链路通）；同步侧下载前按文件名预检省流量，入库前再按内容指纹判重（与手动导入同一入库管线）；**同步期间复用 AI 生成的 dataSync 前台服务保活壳**（引用计数，与 AI 生成并发时共用一次启动/一条通知，账号未配置的 fast-fail 不闪通知）。
 - **AI 生成可靠性口径**：传输级失败（空/破损正文、正文读取中断、连接失败、429/5xx）自动重试一次（共用总超时预算、已吐字的流不重试、请求侧 400 不重试）；**无 tools 的请求重试时改走流式**（非流式长请求零字节流动，最易被网关空闲超时掐断）；**生成期间由 `dataSync` 前台服务 + partial wake lock 保活**（引用计数：报告/对话多任务共用，全部结束后停止——Android 12+ 的 Cached Apps Freezer 会冻结后台进程导致断流，这是必须前台等待的根因；失败只降级不打断生成），进程仍被强杀（force-stop、划掉通知、部分 OEM 策略）时**回前台/冷启动自动续跑 30 分钟内的 pending 残留**作兜底；重试/重新生成按钮状态一律由 db status + 进程内注册表派生，不依赖组件局部 state。
 - **记录型数据缺失统一 `null`**，不用 0 或空串充数；时间戳落库一律 UTC。
 - AI 提示词语言：zh/en 双语模板，数据（用户自填内容）原样透传不翻译。
@@ -55,11 +55,12 @@ assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-
 | L1 单元测试 | Node 内置 `node:test`（原生跑 TS，需 Node ≥23.6） | `src/core` 等全部纯函数层 + 合成 FIT 端到端 | 每次提交 |
 | L2 黄金 diff | `npm run golden` | 真实 FIT 的 summary 与既定基准逐字段比对，**防解析管线走样** | 算法口径变更后必跑 |
 | L3 冒烟 | 模拟器/真机 | 渲染与交互、logcat 无报错 | 触碰 UI/数据路径时 |
-| L4 UI 测试 | （未引入） | 组件与交互 | 后置 |
+| L4 组件测试 | jest-expo + `@testing-library/react-native`（`npm run test:components`） | 组件与交互（`test/components/`：输入/状态机/轮询/弹窗确认等中间层行为），CI 门禁一环 | 每次提交（CI 上必跑） |
 
 - **黄金 diff**：基准与真实素材都是个人健康数据、**不入库**（`.gitignore`：素材放 `docs-private/sample-fit-files/`（gitignored 内部目录），基准目录默认 `golden/`，可用 `GOLDEN_DIR` 环境变量覆盖）。CI 上缺失时自动跳过该门禁；本机缺失则硬失败。基准 json 可用旧版 Docker/Web 版 fit-reader 的 summary 输出生成。
 - **覆盖率口径**：`src/core` 等纯函数层行覆盖 ≥90% 是提交口径（`npm run test:coverage` 查看），刻意不进 CI 硬闸——避免为凑数字写无意义测试；新增分支必须同步补断言。
 - **合成 FIT**：`test/make_test_fit.mjs` 手写 FIT 二进制生成器（可造骑行/跑步/游泳、功率缺失、暂停等场景），端到端测试不依赖真实数据。
+- **组件测试（L4，2026-10-13 引入）**：jest-expo preset（`@/*` 别名映射由 preset 按 tsconfig 自动处理）；`jest.setup.js` mock AsyncStorage 并把语言检测钉为 zh（jest 环境无持久化值，否则 I18nProvider 会翻成 en）。交互回归（按钮禁用态、状态机、轮询、Alert 确认流）以 L4 断言为准、从模拟器冒烟预算移出；新增交互组件随改动同步补断言。
 - 测试纪律：纯函数层**不得 import 任何 RN/Expo 模块**（node:test 直测的前提）；相对导入带 `.ts` 扩展名。
 - **数据路径改动的固定回归项**：涉及备份/导入/records 落盘的改动，冒烟必须包含「导入成功 → 杀进程重启 → 数据仍在」。
 
