@@ -28,7 +28,8 @@ import {
 
 const manifest = (overrides = {}) => ({
   format: 'fitbackup',
-  schema_version: 1,
+  // 导出端口径 = 当前 SCHEMA_VERSION（v2 起档案/记忆分层/功率标记）
+  schema_version: 2,
   app_version: '0.1.0',
   exported_at: '2026-09-22T10:00:00.000Z',
   device: 'android/Medium_Phone',
@@ -40,7 +41,7 @@ const manifest = (overrides = {}) => ({
 test('validateBackupManifest: 合法清单原样规整返回', () => {
   const m = validateBackupManifest(manifest());
   assert.equal(m.format, 'fitbackup');
-  assert.equal(m.schema_version, 1);
+  assert.equal(m.schema_version, 2);
   assert.equal(m.db_key, 'a'.repeat(64));
   assert.deepEqual(m.counts, { activities: 3, records: 2 });
 });
@@ -73,13 +74,13 @@ for (const [label, value] of badCases) {
 
 test('checkSchemaVersion: 包版本高于本机 → unsupported_version（提示升级 App）', () => {
   assert.throws(
-    () => checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 2 })), 1),
+    () => checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 3 })), 2),
     (e) => e instanceof BackupError && e.code === 'unsupported_version',
   );
 });
 
 test('checkSchemaVersion: 包版本等于/低于本机放行（旧包由迁移链补齐）', () => {
-  checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 1 })), 1);
+  checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 2 })), 2);
   checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 1 })), 2);
 });
 

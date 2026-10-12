@@ -21,7 +21,7 @@ import { OnelapSyncCard } from '@/components/OnelapSyncCard';
 import { KeepAliveCard } from '@/components/KeepAliveCard';
 import type { FormSnapshot } from '@/core/form';
 import type { AthleteParams } from '@/core/settings';
-import { computeForm, getAiConfig, getAthleteState, getProfile, setAiConfig, setAthlete, setProfile } from '@/db';
+import { computeForm, getAiConfig, getAthleteState, getProfile, rebuildDossierQuietly, setAiConfig, setAthlete, setProfile } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -113,6 +113,7 @@ export default function MeScreen() {
       await setAthlete({ ftp_watts: Number(ftp), max_hr: Number(maxhr), weight_kg: Number(weight) }, lang);
       await load();
       flashSaved('athlete');
+      void rebuildDossierQuietly(); // 爬坡强度 %FTP 分母变了，档案随之更新
     } catch (e) {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
     } finally {
@@ -485,8 +486,16 @@ export default function MeScreen() {
         />
       </View>
 
-      {/* 入口行：AI 记忆（M3）/ 数据管理（M4）/ 关于（开源维护期接通） */}
+      {/* 入口行：训练档案（v2）/ AI 记忆（M3）/ 数据管理（M4）/ 关于（开源维护期接通） */}
       <View style={styles.card}>
+        <List.Item
+          title={t('me.dossier')}
+          left={(props) => <Icon {...props} size={20} source="chart-box-outline" color={palette.muted} />}
+          right={(props) => <Icon {...props} size={18} source="chevron-right" color={palette.faint} />}
+          onPress={() => router.push('/dossier')}
+          titleStyle={{ color: palette.text }}
+        />
+        <Divider />
         <List.Item
           title={t('me.memory')}
           left={(props) => <Icon {...props} size={20} source="brain" color={palette.muted} />}

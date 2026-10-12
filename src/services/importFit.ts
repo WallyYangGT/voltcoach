@@ -16,7 +16,7 @@ import { rollLocalSnapshotQuietly } from '@/backup/export';
 import { analyzeFile, type Summary } from '@/core/analyze';
 import { findDuplicateOf } from '@/core/dedupe';
 import { safeName } from '@/core/records';
-import { computeForm, getEffectiveAthlete, listActivityRideKeys, upsertActivity } from '@/db';
+import { computeForm, getEffectiveAthlete, listActivityRideKeys, rebuildDossierQuietly, upsertActivity } from '@/db';
 import { saveRecords } from '@/records-store';
 import { invalidateReportTitles } from './aiTitle';
 
@@ -107,5 +107,6 @@ export async function importFitBytes(bytes: Uint8Array, fileName: string): Promi
   // 触发点：入库成功后静默滚一份本地快照（fire-and-forget 串行链，失败仅警告）
   void rollLocalSnapshotQuietly();
   invalidateReportTitles(safe); // 同名重导入可能换了内容 → 起骑时刻缓存失效
+  void rebuildDossierQuietly(); // 训练档案基线随之更新（fire-and-forget，指纹兜底自愈）
   return { summary, duplicateOf: null };
 }

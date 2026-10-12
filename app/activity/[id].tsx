@@ -10,7 +10,7 @@
  * 本页只做排版；系列切换沿用 chips。时序图由 ChartScroller 承载横向滚动（900px
  * 内容宽口径）。
  */
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
@@ -38,11 +38,12 @@ import {
 import { pedalTimeBreakdown, type PedalTimeBreakdown } from '@/core/pedalTime';
 import { thinRecords } from '@/core/records';
 import { HR_ZONES, PEDAL_TIME, POWER_ZONES, type Zone } from '@/core/settings';
-import { CATEGORY_KEYS, deleteActivity, getActivitySummary, setActivityCategory, setActivityNote } from '@/db';
+import { CATEGORY_KEYS, deleteActivity, getActivityPowerFlag, getActivitySummary, rebuildDossierQuietly, setActivityCategory, setActivityNote } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import { MetricGrid } from '@/components/MetricGrid';
 import { deleteStoredRecord, loadStoredRecords } from '@/records-store';
 import { invalidateReportTitles } from '@/services/aiTitle';
+import { setPowerFlagAndRefresh } from '@/services/power-calib';
 import { palette } from '@/theme';
 
 /** 分区定义 × 基准值（FTP/最大心率）→ 各区范围文本（口径同 server.js zoneRanges） */
@@ -85,6 +86,8 @@ export default function ActivityDetailScreen() {
   const [thinned, setThinned] = useState<Awaited<ReturnType<typeof thinRecords>> | null>(null);
   // 踩踏时间分解（从完整逐秒数据现算——不是抽稀后的 thinned，占比才准）
   const [pedal, setPedal] = useState<PedalTimeBreakdown | null>(null);
+  // 功率可信度标记（v2）：true = 该骑行功率不可信，已从训练档案功率基线排除
+  const [powerFlagged, setPowerFlagged] = useState(false);
   const [visible, setVisible] = useState<Set<string>>(new Set(DEFAULT_VISIBLE));
   // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
   const [note, setNote] = useState('');
@@ -141,6 +144,21 @@ export default function ActivityDetailScreen() {
     return () => clearTimeout(timer);
   }, [kbVisible, kbHeight, lastFocus, rescrollTick, windowDp.height]);
 
+  // 聚焦刷新标记态（AI 在对话里 set_power_flag 后回到本页要对上）：只读单个布尔，廉价
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      getActivityPowerFlag(fileName)
+        .then((v) => {
+          if (alive) setPowerFlagged(v);
+        })
+        .catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }, [fileName]),
+  );
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -149,6 +167,7 @@ export default function ActivityDetailScreen() {
         if (!alive) return;
         setSummary(s);
         setNote(s?.activity.note ?? '');
+        setPowerFlagged(await getActivityPowerFlag(fileName));
         if (s) {
           const stored = await loadStoredRecords(fileName);
           if (alive) {
@@ -195,6 +214,7 @@ export default function ActivityDetailScreen() {
               console.warn('逐秒数据清理失败（训练已删除）:', e);
             }
             invalidateReportTitles(fileName);
+            void rebuildDossierQuietly(); // 档案基线剔除该骑行（fire-and-forget）
             router.back();
           })();
         },
@@ -220,6 +240,28 @@ export default function ActivityDetailScreen() {
     } catch (e) {
       Alert.alert(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  /** 标记/取消「功率不可信」（v2）：档案功率基线随之排除/恢复该骑行；可逆操作 */
+  const togglePowerFlag = () => {
+    const next = !powerFlagged;
+    Alert.alert(t('activity.flag_title'), t(next ? 'activity.flag_msg' : 'activity.unflag_msg'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      {
+        text: t('activity.flag_confirm'),
+        style: next ? 'destructive' : 'default',
+        onPress: () => {
+          void (async () => {
+            try {
+              await setPowerFlagAndRefresh(fileName, next, lang);
+              setPowerFlagged(next);
+            } catch (e) {
+              Alert.alert(e instanceof Error ? e.message : String(e));
+            }
+          })();
+        },
+      },
+    ]);
   };
 
   const series = useMemo<SeriesSpec[]>(() => {
@@ -296,6 +338,13 @@ export default function ActivityDetailScreen() {
           accessibilityLabel={t('btn.ai_review')}
           onPress={() => panelRef.current?.analyze()}
         />
+        {/* 语义与警示条一致：被标记 = 橙色告警盾，未标记 = 灰色通过盾 */}
+        <Appbar.Action
+          icon={powerFlagged ? 'shield-alert-outline' : 'shield-check-outline'}
+          color={powerFlagged ? palette.orange : palette.muted}
+          accessibilityLabel={t('activity.flag_title')}
+          onPress={togglePowerFlag}
+        />
         {/* 删除训练（M5）：与列表左滑删除同一口径，删完返回列表（useFocusEffect 自动重载） */}
         <Appbar.Action
           icon="delete-outline"
@@ -317,6 +366,14 @@ export default function ActivityDetailScreen() {
         scrollEventThrottle={16}>
         {/* 概览指标网格（列数随屏宽 2–4；内容与小字注释对齐 Web 版 metric-grid） */}
         <MetricGrid items={metrics} />
+
+        {/* 功率不可信警示（v2）：被标记骑行的功率派生指标仅供展示，档案基线已排除它 */}
+        {powerFlagged && (
+          <View style={styles.flagCard}>
+            <Icon source="shield-alert-outline" size={18} color={palette.orange} />
+            <Text style={styles.flagText}>{t('activity.flag_banner')}</Text>
+          </View>
+        )}
 
         {/* 分类与备注（M2：写库即时生效，AI 复盘时纳入考量） */}
         <View style={styles.card}>
@@ -560,6 +617,19 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   cardTitle: { color: palette.text, fontSize: 14, fontWeight: '700' },
+  // 功率不可信警示条：橙色调边框卡 + 图标 + 小字说明
+  flagCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: palette.panel,
+    borderColor: palette.orange,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  flagText: { color: palette.orange, fontSize: 12.5, lineHeight: 18, flex: 1 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   chip: { height: 30, borderColor: palette.line },
   noteInput: { backgroundColor: palette.panel2 },

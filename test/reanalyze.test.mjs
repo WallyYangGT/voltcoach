@@ -139,3 +139,125 @@ test('rebuildSummaryFromRecords: 0W 披露字段回填——存量 summary 缺 p
   );
   assert.deepEqual(again.pedal_time, rebuilt.pedal_time);
 });
+
+// ---------------- 功率缩放（校准口径） ----------------
+
+// 1.5 在 IEEE754 精确表示，150/280 × 1.5 均为整数——缩放记录与直跑 FIT 逐字节同源
+const SCALE = 1.5;
+
+test('rebuildSummaryFromRecords: powerScale 黄金对比——缩放重建 == analyzeFile 直跑 s×功率 FIT', async () => {
+  const bytes = rideBytes();
+  const { records, summary: prev } = await analyzeFile({ bytes, fileName: 'ride.fit', athlete: ATHLETE_A });
+  const scaledBytes = buildRideFit({ power: (i) => intervalPower(i) * SCALE, heartRate: (i) => 130 + Math.round(i / 60) });
+  const { summary: expected } = await analyzeFile({ bytes: scaledBytes, fileName: 'ride.fit', athlete: ATHLETE_A });
+
+  const rebuilt = rebuildSummaryFromRecords(
+    parseRecordsCsv(recordsToCsv(records)),
+    prev,
+    ATHLETE_A,
+    { powerScale: SCALE },
+  );
+  // 校准留痕是重建附加的口径标记（非缩放口径本身，P0-1 测试单独断言），整体黄金
+  // 对比先剥掉再比
+  delete rebuilt.power.calibration_scale;
+  // 缩放重建与"同参数直跑放大后的 FIT"整体一致（NP/avg/max/VI/峰曲线/IF/TSS/区间/间歇/踏频-功率全在重算集）
+  assert.deepEqual(rebuilt, expected);
+});
+
+test('rebuildSummaryFromRecords: powerScale 数学性质——NP 线性、TSS 平方、峰曲线线性', async () => {
+  const bytes = rideBytes();
+  const { records, summary: prev } = await analyzeFile({ bytes, fileName: 'ride.fit', athlete: ATHLETE_A });
+  const rebuilt = rebuildSummaryFromRecords(
+    parseRecordsCsv(recordsToCsv(records)),
+    prev,
+    ATHLETE_A,
+    { powerScale: SCALE },
+  );
+  // NP/峰功率对 scale 线性（两侧各有一次取整，容差 ±1W）
+  assert.ok(Math.abs(rebuilt.power.normalized_power - prev.power.normalized_power * SCALE) <= 1);
+  assert.ok(Math.abs(rebuilt.power.avg - prev.power.avg * SCALE) <= 1);
+  assert.ok(Math.abs(rebuilt.power.peak_curve['20min'] - prev.power.peak_curve['20min'] * SCALE) <= 1);
+  // TSS ∝ scale²（IF 与 NP 同步线性 → IF² 即平方关系，容差 ±2）
+  assert.ok(Math.abs(rebuilt.power.tss - prev.power.tss * SCALE * SCALE) <= 2);
+  // VI 不变（NP 与 avg 同比例缩放）
+  assert.equal(rebuilt.power.variability_index, prev.power.variability_index);
+});
+
+test('rebuildSummaryFromRecords: 非法 powerScale（0/负数/NaN/1）按未缩放处理', async () => {
+  const bytes = rideBytes();
+  const { records, summary: prev } = await analyzeFile({ bytes, fileName: 'ride.fit', athlete: ATHLETE_A });
+  const rt = parseRecordsCsv(recordsToCsv(records));
+  for (const bad of [0, -1.2, NaN, Infinity, 1]) {
+    const rebuilt = rebuildSummaryFromRecords(rt, prev, ATHLETE_A, { powerScale: bad });
+    assert.deepEqual(rebuilt, prev, `powerScale=${bad} 应等价于不缩放`);
+  }
+});
+
+test('rebuildSummaryFromRecords: powerScale 爬坡段 avg_power 线性换算、段边界不变', async () => {
+  const bytes = rideBytes();
+  const { records, summary: prev } = await analyzeFile({ bytes, fileName: 'ride.fit', athlete: ATHLETE_A });
+  const withClimb = {
+    ...JSON.parse(JSON.stringify(prev)),
+    climbs: [{
+      name: '测试坡', start: '2024-01-15T10:10:00.000Z', duration_sec: 600,
+      distance_m: 3000, elevation_gain_m: 120, avg_grade_pct: 4,
+      avg_power: 200, avg_hr: 150,
+    }],
+  };
+  const rebuilt = rebuildSummaryFromRecords(
+    parseRecordsCsv(recordsToCsv(records)),
+    withClimb,
+    ATHLETE_A,
+    { powerScale: 0.5 },
+  );
+  assert.equal(rebuilt.climbs[0].avg_power, 100);
+  assert.equal(rebuilt.climbs[0].avg_grade_pct, 4); // 边界/坡度字段不动
+  assert.equal(rebuilt.climbs[0].elevation_gain_m, 120);
+});
+
+test('rebuildSummaryFromRecords: powerScale lap 段 avg/max_power 线性换算（P1-1）', async () => {
+  const bytes = rideBytes();
+  const { records, summary: prev } = await analyzeFile({ bytes, fileName: 'ride.fit', athlete: ATHLETE_A });
+  // 模拟 FIT 消息层的 lap 段（带功率均值/峰值——make_test_fit 对函数式功率置无效，
+  // 黄金夹具覆盖不到，此处手工植入断言换算）。注意 lap 不得带 start/pct_ftp 键——
+  // 那是 isIntervalItem 判别间歇段的特征
+  const withLap = {
+    ...JSON.parse(JSON.stringify(prev)),
+    segments: [{ name: 'lap 1', duration_sec: 600, avg_power: 200, max_power: 280 }],
+  };
+  const rebuilt = rebuildSummaryFromRecords(
+    parseRecordsCsv(recordsToCsv(records)),
+    withLap,
+    ATHLETE_A,
+    { powerScale: 0.5 },
+  );
+  const lap = rebuilt.segments.find((s) => !('pct_ftp' in s));
+  assert.equal(lap.avg_power, 100);
+  assert.equal(lap.max_power, 140);
+});
+
+test('rebuildSummaryFromRecords: 校准留痕——校准后的 summary 无参重建仍按系数口径（P0-1）', async () => {
+  const bytes = rideBytes();
+  const { records, summary: prev } = await analyzeFile({ bytes, fileName: 'ride.fit', athlete: ATHLETE_A });
+  const rt = parseRecordsCsv(recordsToCsv(records));
+
+  // 第一次：显式系数校准（FTP 同时 200→260，模拟校准后用户改 FTP 的真实顺序）
+  const calibrated = rebuildSummaryFromRecords(rt, prev, ATHLETE_B, { powerScale: SCALE });
+  assert.equal(calibrated.power.calibration_scale, SCALE); // 留痕落盘
+
+  // 第二次：无参重建（如 FTP 再变触发 reanalyze_activity）——必须沿用留痕系数，
+  // 否则 NP/峰曲线（缩放）与区间/间歇（未缩放）在同一条 summary 里混排
+  const ATHLETE_C = { ftp_watts: 300, max_hr: 205, weight_kg: 75 };
+  const again = rebuildSummaryFromRecords(rt, calibrated, ATHLETE_C);
+  const scaledBytes = buildRideFit({ power: (i) => intervalPower(i) * SCALE, heartRate: (i) => 130 + Math.round(i / 60) });
+  const { summary: expected } = await analyzeFile({ bytes: scaledBytes, fileName: 'ride.fit', athlete: ATHLETE_C });
+  assert.equal(again.power.calibration_scale, SCALE); // 留痕保持
+  delete again.power.calibration_scale; // 留痕剥掉后整体黄金对比
+  assert.deepEqual(again, expected); // 整体黄金对比：与直跑缩放 FIT 同源同值
+
+  // 撤销校准：显式传 1 清留痕，后续无参重建回到未缩放口径
+  const reverted = rebuildSummaryFromRecords(rt, again, ATHLETE_C, { powerScale: 1 });
+  assert.equal(reverted.power.calibration_scale, undefined);
+  const { summary: expectedClean } = await analyzeFile({ bytes, fileName: 'ride.fit', athlete: ATHLETE_C });
+  assert.deepEqual(rebuildSummaryFromRecords(rt, reverted, ATHLETE_C), expectedClean);
+});

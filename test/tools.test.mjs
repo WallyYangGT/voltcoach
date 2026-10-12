@@ -49,6 +49,16 @@ function fakeIo(overrides = {}) {
       io._ftpUpdateLang = lang;
       return { applied: true, old_ftp_w: 210, new_ftp_w: 224, updated_at: '2026-03-25T10:00:00.000Z' };
     },
+    getDossier: async () => io._dossier ?? null,
+    setPowerFlag: async (name, flagged, lang, reason) => {
+      io._powerFlag = { name, flagged, lang, reason };
+      return { ok: true, file_name: name, flagged, reason, dossier_updated: true };
+    },
+    recalibratePower: async (name, scale, lang) => {
+      if (name !== 'a.fit') throw new Error(`训练库中找不到: ${name}`);
+      io._recalibrated = { name, scale, lang };
+      return { ok: true, file_name: name, scale, changes: { np: { old: 200, new: 210 } } };
+    },
     reanalyzeActivity: async (name, lang) => {
       if (name !== 'a.fit') throw new Error(`训练库中找不到: ${name}`);
       io._reanalyze = { name, lang };
@@ -63,11 +73,11 @@ function fakeIo(overrides = {}) {
   return io;
 }
 
-test('toolDefs：12 个工具、双语描述、schema 关键字段', () => {
+test('toolDefs：15 个工具、双语描述、schema 关键字段', () => {
   const zh = toolDefs('zh');
-  assert.equal(zh.length, 12);
+  assert.equal(zh.length, 15);
   const names = zh.map((d) => d.function.name);
-  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'update_ftp', 'reanalyze_activity']) {
+  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'get_dossier', 'set_power_flag', 'recalibrate_activity_power', 'update_ftp', 'reanalyze_activity']) {
     assert.ok(names.includes(n), n);
   }
   assert.equal(zh.every((d) => d.type === 'function'), true);
@@ -80,8 +90,13 @@ test('toolDefs：12 个工具、双语描述、schema 关键字段', () => {
   // save_memory 必填 content；simulate_form 必填 plan；reanalyze_activity 必填 file_name
   const byName = Object.fromEntries(zh.map((d) => [d.function.name, d]));
   assert.deepEqual(byName.save_memory.function.parameters.required, ['content']);
+  assert.deepEqual(byName.save_memory.function.parameters.properties.category.enum, ['general', 'injury', 'schedule', 'goal', 'preference', 'strategy']);
+  assert.deepEqual(byName.save_memory.function.parameters.properties.scope.enum, ['short', 'long']);
   assert.deepEqual(byName.reanalyze_activity.function.parameters.required, ['file_name']);
+  assert.deepEqual(byName.set_power_flag.function.parameters.required, ['file_name', 'flagged']);
+  assert.deepEqual(byName.recalibrate_activity_power.function.parameters.required, ['file_name', 'scale_factor']);
   assert.deepEqual(Object.keys(byName.update_ftp.function.parameters.properties), []); // 零参
+  assert.deepEqual(Object.keys(byName.get_dossier.function.parameters.properties), []); // 零参
 });
 
 test('list_activities：日期范围/运动/分类过滤 + limit 截断 + 非法日期报错', async () => {
@@ -190,8 +205,52 @@ test('save_memory：source 场景标记写入、错误兜 {error} 不抛异常',
   assert.equal(ok.ok, true);
   assert.equal(ok.memory_id, 42);
   assert.equal(io._savedMemory.source, 'chat'); // 场景标记随 ctx 注入
+  assert.equal(io._savedMemory.scope, undefined); // 未传 scope 不臆造
   const empty = JSON.parse(await exec('save_memory', { content: '' }));
   assert.match(empty.error, /记忆内容不能为空/); // db 层双语 Error 被兜为 {error}
+});
+
+test('save_memory：scope 短期透传', async () => {
+  const io = fakeIo();
+  const exec = createExecuteTool(io, { source: 'chat', lang: 'zh' });
+  await exec('save_memory', { content: '本周三出差', scope: 'short' });
+  assert.equal(io._savedMemory.scope, 'short');
+});
+
+test('get_dossier：档案透传；空库返回 dossier_empty 错误', async () => {
+  const io = fakeIo();
+  io._dossier = { anchor_date: '2026-10-01', peak_power: { all_time: [] } };
+  const exec = createExecuteTool(io, { lang: 'zh' });
+  const ok = JSON.parse(await exec('get_dossier', {}));
+  assert.equal(ok.anchor_date, '2026-10-01');
+  const empty = createExecuteTool(fakeIo(), { lang: 'zh' });
+  const err = JSON.parse(await empty('get_dossier', {}));
+  assert.match(err.error, /暂无骑行数据/);
+});
+
+test('set_power_flag：布尔校验、reason 截断透传；file_name 穿越拒绝', async () => {
+  const io = fakeIo();
+  const exec = createExecuteTool(io, { lang: 'zh' });
+  const ok = JSON.parse(await exec('set_power_flag', { file_name: 'a.fit', flagged: true, reason: 'x'.repeat(500) }));
+  assert.equal(ok.ok, true);
+  assert.equal(io._powerFlag.flagged, true);
+  assert.equal(io._powerFlag.reason.length, 200); // 截到 200 字
+  const notBool = JSON.parse(await exec('set_power_flag', { file_name: 'a.fit', flagged: 'yes' }));
+  assert.match(notBool.error, /flagged 需为布尔值/);
+  const trav = JSON.parse(await exec('set_power_flag', { file_name: '../etc/passwd', flagged: true }));
+  assert.match(trav.error, /file_name 非法/);
+});
+
+test('recalibrate_activity_power：数值校验、透传服务层；训练不存在兜 {error}', async () => {
+  const io = fakeIo();
+  const exec = createExecuteTool(io, { lang: 'zh' });
+  const ok = JSON.parse(await exec('recalibrate_activity_power', { file_name: 'a.fit', scale_factor: 1.05 }));
+  assert.equal(ok.ok, true);
+  assert.equal(io._recalibrated.scale, 1.05);
+  const notNum = JSON.parse(await exec('recalibrate_activity_power', { file_name: 'a.fit', scale_factor: 'abc' }));
+  assert.match(notNum.error, /scale_factor 需为数值/);
+  const missing = JSON.parse(await exec('recalibrate_activity_power', { file_name: 'zz.fit', scale_factor: 1.05 }));
+  assert.match(missing.error, /训练库中找不到/);
 });
 
 test('update_ftp：零参透传编排层结果，lang 随 ctx 注入；en 场景同构', async () => {

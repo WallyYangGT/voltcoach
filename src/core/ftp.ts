@@ -27,6 +27,8 @@ export interface CyclingRideInput {
   date: string;
   duration_sec: number | null;
   summary: Summary;
+  /** 该骑行是否被标记「功率不可信」（v2）：估算样本剔除（功率失真的锚点只会产出失真的 FTP） */
+  power_flagged?: boolean;
 }
 
 /** 方法一：CP 模型结果（p5/p20 为窗口内最佳峰功率锚点） */
@@ -126,8 +128,15 @@ export function estimateFtpFromHistory(
   const notes: string[] = [];
   const warnings: string[] = []; // 影响置信度的内部标记
 
-  // ---- 1. 样本筛选：仅采信功率覆盖率达标且有 power 段的骑行 ----
-  const withPower = activities.filter((a) => a.summary?.power);
+  // ---- 1. 样本筛选：被标记「功率不可信」的骑行剔除（功率失真的锚点只会产出失真的
+  // FTP——特别是系统性偏高会借 power_above_hr 降级路径把虚高值写进用户配置），
+  // 其余仅采信功率覆盖率达标且有 power 段的骑行 ----
+  const flaggedCount = activities.filter((a) => a.power_flagged === true).length;
+  if (flaggedCount > 0) {
+    dataNeeds.push(t(lang, 'ftp.flagged_excluded', { n: flaggedCount }));
+  }
+  const notFlagged = activities.filter((a) => a.power_flagged !== true);
+  const withPower = notFlagged.filter((a) => a.summary?.power);
   const usable = withPower.filter(
     (a) =>
       (a.summary.data_quality?.power_coverage_pct ?? 100) >=

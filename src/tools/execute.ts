@@ -62,7 +62,13 @@ export interface ToolIo {
   /** 某日 CTL/ATL 快照；训练库为空返回 null */
   computeForm(date: string): Promise<{ ctl: number; atl: number } | null>;
   /** 保存 AI 记忆，返回 id（非法输入抛双语 Error，本层兜为 {error}） */
-  saveMemory(input: { content?: unknown; category?: unknown; source?: string | null; supersedes_id?: unknown }, lang: Lang): Promise<number>;
+  saveMemory(input: { content?: unknown; category?: unknown; scope?: unknown; source?: string | null; supersedes_id?: unknown }, lang: Lang): Promise<number>;
+  /** 个人训练档案（本地聚合长期基线）；无骑行数据返回 null */
+  getDossier(): Promise<unknown | null>;
+  /** 标记/取消「功率不可信」（编排见 services/power-calib：db 标记 + 档案重建），返回结果对象 */
+  setPowerFlag(fileName: string, flagged: boolean, lang: Lang, reason: string | null): Promise<unknown>;
+  /** 按系数缩放重算一次训练的功率派生指标并写回（编排见 services/power-calib），返回结果对象 */
+  recalibratePower(fileName: string, scaleFactor: number, lang: Lang): Promise<unknown>;
   /**
    * AI 触发的 FTP 更新（估算 → 采纳门槛 → 写回，编排见 services/ftp-apply）。
    * 拒绝不抛错，返回 {applied:false, reason, estimate}；成功返回 {applied:true, ...}。
@@ -234,12 +240,13 @@ const toolGenerateWorkout: ToolImpl = async (args, ctx, io) => {
   return toResult({ ftp_watts: athlete.ftp_watts, ...result }, lang);
 };
 
-/** save_memory：写 ai_memories（唯一写工具）；ctx.source 为场景标记，ctx.lang 为消息语言 */
+/** save_memory：写 ai_memories（scope 分层：short 一周/3 次训练失效）；ctx.source 为场景标记 */
 const toolSaveMemory: ToolImpl = async (args, ctx, io) => {
   const id = await io.saveMemory(
     {
       content: args?.content,
       category: args?.category,
+      scope: args?.scope,
       source: ctx?.source ?? null,
       supersedes_id: args?.supersedes_id,
     },
@@ -253,6 +260,34 @@ const toolSaveMemory: ToolImpl = async (args, ctx, io) => {
     },
     ctx?.lang || 'zh',
   );
+};
+
+/** get_dossier：个人训练档案长期基线（评估进步/规划前的对照基准；空库返回提示） */
+const toolGetDossier: ToolImpl = async (_args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  const dossier = await io.getDossier();
+  if (!dossier) return errResult(t(lang, 'tool.dossier_empty'));
+  return toResult(dossier, lang);
+};
+
+/** set_power_flag：标记/取消「功率不可信」（可逆；绑定层负责档案重建） */
+const toolSetPowerFlag: ToolImpl = async (args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  const name = safeName(String(args?.file_name ?? ''));
+  if (!name) return errResult(t(lang, 'tool.name_invalid'));
+  if (typeof args?.flagged !== 'boolean') return errResult(t(lang, 'tool.flag_invalid'));
+  const reason = typeof args?.reason === 'string' ? args.reason.slice(0, 200) : null;
+  return toResult(await io.setPowerFlag(name, args.flagged, lang, reason), lang);
+};
+
+/** recalibrate_activity_power：按系数缩放重算并写回（夹逼界限在 settings.POWER_CALIBRATION，服务层执行） */
+const toolRecalibratePower: ToolImpl = async (args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  const name = safeName(String(args?.file_name ?? ''));
+  if (!name) return errResult(t(lang, 'tool.name_invalid'));
+  const scale = Number(args?.scale_factor);
+  if (!Number.isFinite(scale)) return errResult(t(lang, 'tool.scale_invalid'));
+  return toResult(await io.recalibratePower(name, scale, lang), lang);
 };
 
 /** update_ftp：AI 教练按当前最佳估算更新 FTP（零参——数值只来自估算器，模型无自定数值入口） */
@@ -280,6 +315,9 @@ const TOOL_IMPL: Record<string, ToolImpl> = {
   simulate_form: toolSimulateForm,
   generate_workout: toolGenerateWorkout,
   save_memory: toolSaveMemory,
+  get_dossier: toolGetDossier,
+  set_power_flag: toolSetPowerFlag,
+  recalibrate_activity_power: toolRecalibratePower,
   update_ftp: toolUpdateFtp,
   reanalyze_activity: toolReanalyzeActivity,
 };

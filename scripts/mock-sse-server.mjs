@@ -21,6 +21,12 @@
  *   MOCK_TOOL_SCRIPT=ftp —— M5 FTP 剧本：estimate_ftp → update_ftp → reanalyze_activity
  *   （目标文件用 MOCK_REANALYZE_FILE=<file_name> 指定）三轮工具后回正文，
  *   用于「AI 更新 FTP + 重新分析」端到端冒烟。
+ *   MOCK_ECHO_PROMPT=1 —— 正文请求改为回显收到的最后一条 user 消息前 600 字符
+ *   （前缀 [ECHO]），用于冒烟断言提示词里确实注入了新段落（如训练档案/策略段）
+ *   —— mock 只回它"看到"的，App 侧报告正文即请求侧 prompt 的镜像。
+ *   配合 MOCK_ECHO_CONTAIN=<子串>：不回显原文，改回「prompt N chars, contains
+ *   "<子串>": YES/NO」——档案/策略段在 prompt 深处（skills 之后），盲回显 600 字
+ *   够不着，用关键词断言直接给结论。
  */
 import http from 'node:http';
 
@@ -29,6 +35,8 @@ const REPLY =
   'NP（Normalized Power，标准化功率）是 Coggan 功率体系的核心指标：' +
   '把逐秒功率先做 30 秒滚动平均、再取四次方均值后开四次方根，' +
   '用以反映变强度骑行的真实生理负荷，比平均功率更能刻画疲劳代价。'.repeat(2);
+const ECHO_PROMPT = process.env.MOCK_ECHO_PROMPT === '1'; // 回显最后一条 user 消息（prompt 注入断言用）
+const ECHO_CONTAIN = process.env.MOCK_ECHO_CONTAIN || ''; // 关键词包含断言（优先于盲回显）
 
 const FAIL_EMPTY = Number(process.env.MOCK_FAIL_EMPTY || 0); // 前 N 次正文请求注入空正文
 const TRUNCATE = Number(process.env.MOCK_TRUNCATE || 0); // 前 N 次正文请求注入截半正文
@@ -152,10 +160,19 @@ const server = http.createServer((req, res) => {
       return;
     }
     const respond = () => {
+      // 回显模式：把最后一条 user 消息的开头镜像回报告正文（prompt 注入冒烟断言）
+      let reply = REPLY;
+      if (ECHO_PROMPT) {
+        const lastUser = [...(parsed.messages ?? [])].reverse().find((m) => m.role === 'user');
+        const content = String(lastUser?.content ?? '');
+        reply = ECHO_CONTAIN
+          ? `[ECHO] prompt ${content.length} chars, contains "${ECHO_CONTAIN}": ${content.includes(ECHO_CONTAIN) ? 'YES' : 'NO'}`
+          : '[ECHO]' + content.slice(0, 600);
+      }
       if (!stream) {
         const full = JSON.stringify({
           id: 'mock-1',
-          choices: [{ index: 0, message: { role: 'assistant', content: REPLY }, finish_reason: 'stop' }],
+          choices: [{ index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
         });
         // 截半下发：真机"正文被中间层掐断"的形态（客户端报「不是完整 JSON」）
@@ -174,7 +191,7 @@ const server = http.createServer((req, res) => {
       res.flushHeaders();
       // 按 4 字一段切块推送，模拟真实 token 流
       const chunkSize = 4;
-      const pieces = REPLY.match(new RegExp(`.{1,${chunkSize}}`, 'gu')) ?? [];
+      const pieces = reply.match(new RegExp(`.{1,${chunkSize}}`, 'gu')) ?? [];
       let i = 0;
       const timer = setInterval(() => {
         if (CUT_AFTER > 0 && i >= CUT_AFTER) {

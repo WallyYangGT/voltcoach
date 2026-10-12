@@ -33,6 +33,7 @@ import {
   mergeActivityExtras,
   retargetActivityRefs,
   type ActivityRideKey,
+  rebuildDossierQuietly,
 } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import { palette } from '@/theme';
@@ -278,6 +279,7 @@ export default function DataScreen() {
       void scanDuplicates(true);
     } finally {
       invalidateReportTitles(); // 保留项可能接管了副本的逐秒数据/引用 → 标题缓存全清
+      void rebuildDossierQuietly(); // 副本行已删，档案基线随之更新
       setMerging(false);
       load();
     }
