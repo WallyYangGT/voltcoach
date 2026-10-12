@@ -24,6 +24,9 @@
  *   MOCK_ECHO_PROMPT=1 —— 正文请求改为回显收到的最后一条 user 消息前 600 字符
  *   （前缀 [ECHO]），用于冒烟断言提示词里确实注入了新段落（如训练档案/策略段）
  *   —— mock 只回它"看到"的，App 侧报告正文即请求侧 prompt 的镜像。
+ *   配合 MOCK_ECHO_CONTAIN=<子串>：不回显原文，改回「prompt N chars, contains
+ *   "<子串>": YES/NO」——档案/策略段在 prompt 深处（skills 之后），盲回显 600 字
+ *   够不着，用关键词断言直接给结论。
  */
 import http from 'node:http';
 
@@ -33,6 +36,7 @@ const REPLY =
   '把逐秒功率先做 30 秒滚动平均、再取四次方均值后开四次方根，' +
   '用以反映变强度骑行的真实生理负荷，比平均功率更能刻画疲劳代价。'.repeat(2);
 const ECHO_PROMPT = process.env.MOCK_ECHO_PROMPT === '1'; // 回显最后一条 user 消息（prompt 注入断言用）
+const ECHO_CONTAIN = process.env.MOCK_ECHO_CONTAIN || ''; // 关键词包含断言（优先于盲回显）
 
 const FAIL_EMPTY = Number(process.env.MOCK_FAIL_EMPTY || 0); // 前 N 次正文请求注入空正文
 const TRUNCATE = Number(process.env.MOCK_TRUNCATE || 0); // 前 N 次正文请求注入截半正文
@@ -160,7 +164,10 @@ const server = http.createServer((req, res) => {
       let reply = REPLY;
       if (ECHO_PROMPT) {
         const lastUser = [...(parsed.messages ?? [])].reverse().find((m) => m.role === 'user');
-        reply = '[ECHO]' + String(lastUser?.content ?? '').slice(0, 600);
+        const content = String(lastUser?.content ?? '');
+        reply = ECHO_CONTAIN
+          ? `[ECHO] prompt ${content.length} chars, contains "${ECHO_CONTAIN}": ${content.includes(ECHO_CONTAIN) ? 'YES' : 'NO'}`
+          : '[ECHO]' + content.slice(0, 600);
       }
       if (!stream) {
         const full = JSON.stringify({
