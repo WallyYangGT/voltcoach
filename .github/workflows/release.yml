@@ -29,10 +29,11 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      - name: 门禁（lint + 单测 + 黄金 diff）
+      - name: 门禁（lint + 单测 + 组件测试 + 黄金 diff）
         run: |
           npm run lint
           npm test
+          npm run test:components
           npm run golden
 
       - uses: actions/setup-java@v6
