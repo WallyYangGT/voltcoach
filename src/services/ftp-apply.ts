@@ -15,7 +15,7 @@ import {
   type FtpHistoryEstimate,
 } from '@/core/ftp';
 import { FTP_ESTIMATION } from '@/core/settings';
-import { cyclingSummariesSince, getAthleteState, getFtpMeta, setAthlete } from '@/db';
+import { cyclingSummariesSince, getAthleteState, getFtpMeta, rebuildDossierQuietly, setAthlete } from '@/db';
 
 /** applyAiFtpUpdate 返回：拒绝时 reason 为已本地化的文案（estimate 供 AI 解释） */
 export interface AiFtpUpdateResult {
@@ -62,6 +62,7 @@ export async function applyAiFtpUpdate(lang: Lang = 'zh'): Promise<AiFtpUpdateRe
   const e = result.estimate;
   const updated = await setAthlete({ ftp_watts: e.ftp_w }, lang, { source: 'ai_coach' });
   const meta = await getFtpMeta();
+  void rebuildDossierQuietly(); // 爬坡强度 %FTP 分母变了，档案随之更新（fire-and-forget）
   return {
     applied: true,
     old_ftp_w: e.current_ftp_w,

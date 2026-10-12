@@ -13,7 +13,7 @@ import { rollLocalSnapshotQuietly } from '@/backup/export';
 import { t, type Lang } from '@/core/i18n';
 import { rebuildSummaryFromRecords } from '@/core/reanalyze';
 import type { Summary } from '@/core/analyze';
-import { computeForm, getActivitySummary, getEffectiveAthlete, upsertActivity } from '@/db';
+import { computeForm, getActivitySummary, getEffectiveAthlete, rebuildDossierQuietly, upsertActivity } from '@/db';
 import { loadStoredRecords } from '@/records-store';
 
 /** 重新分析结果：changes 仅列有变化的字段（旧→新），供 AI 在回答中向用户说明 */
@@ -81,6 +81,7 @@ export async function reanalyzeActivity(fileName: string, lang: Lang = 'zh'): Pr
   }
 
   void rollLocalSnapshotQuietly(); // 数据被改写，滚静默快照（失败仅警告，fire-and-forget 串行链）
+  void rebuildDossierQuietly(); // 分析结果可能变化，档案基线随之更新
 
   return {
     ok: true,

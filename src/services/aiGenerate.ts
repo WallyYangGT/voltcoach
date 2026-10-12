@@ -22,6 +22,7 @@ import {
   getAiChat,
   getAiConfig,
   getAiReport,
+  getDossier,
   getEffectiveAthlete,
   getAthleteState,
   getProfile,
@@ -52,13 +53,14 @@ import { t, type Lang } from '@/core/i18n';
 import { withinResumeWindow } from '@/core/report-status';
 import { safeName, thinRecords } from '@/core/records';
 
-import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildMemorySection } from '@/prompts/prompts';
+import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildDossierSection, buildMemorySection } from '@/prompts/prompts';
 import { buildSkillsSection } from '@/prompts/skills';
 import { buildChatSystemSection } from '@/prompts/chat';
 import { toolDefs, createExecuteTool, type ToolIo } from '@/tools';
 import { loadStoredRecords } from '@/records-store';
 import { applyAiFtpUpdate } from './ftp-apply';
 import { reanalyzeActivity } from './reanalyze';
+import { setPowerFlagAndRefresh, recalibrateActivityPower } from './power-calib';
 
 // ---------------- ToolIo 绑定（db + records-store → 工具层数据访问） ----------------
 
@@ -78,6 +80,9 @@ function buildToolIo(): ToolIo {
     cyclingSummariesSince: (days) => cyclingSummariesSince(days),
     computeForm: (date) => computeForm(date, 'zh'),
     saveMemory: (input, lang) => saveMemory(input, lang),
+    getDossier: () => getDossier(),
+    setPowerFlag: (name, flagged, lang, reason) => setPowerFlagAndRefresh(name, flagged, lang, reason),
+    recalibratePower: (name, scale, lang) => recalibrateActivityPower(name, scale, lang),
     applyFtpUpdate: (lang) => applyAiFtpUpdate(lang),
     reanalyzeActivity: (name, lang) => reanalyzeActivity(name, lang),
   };
@@ -136,12 +141,15 @@ export async function buildReportPrompt(
 ): Promise<string> {
   const [profile, athlete] = await Promise.all([getProfile(), getEffectiveAthlete()]);
   const skills = buildSkillsSection(lang);
+  // 个人训练档案段（本地聚合长期基线；无骑行数据为 null 整段省略——首次使用/
+  // 空库时提示词与旧形态一致）
+  const dossierSection = buildDossierSection(await getDossier(), lang);
   if (mode === 'review') {
     const name = safeName(String(context.file_name ?? ''));
     const summary = name ? await getActivitySummary(name) : null;
     if (!summary)
       throw new Error(t(lang, 'tool.summary_not_found', { name: context.file_name ?? '(未提供)' }));
-    return buildReviewPrompt(summary, athlete, profile, skills, lang);
+    return buildReviewPrompt(summary, athlete, profile, skills, lang, new Date(), dossierSection);
   }
   if (mode === 'plan') {
     const daily = await recentFormDaily(56);
@@ -156,6 +164,8 @@ export async function buildReportPrompt(
       profile,
       skills,
       lang,
+      new Date(),
+      dossierSection,
     );
   }
   if (mode === 'taper') {
@@ -180,6 +190,8 @@ export async function buildReportPrompt(
       profile,
       skills,
       lang,
+      new Date(),
+      dossierSection,
     );
   }
   if (mode === 'compare') {
@@ -188,7 +200,7 @@ export async function buildReportPrompt(
     const sa = a ? await getActivitySummary(a) : null;
     const sb = b ? await getActivitySummary(b) : null;
     if (!sa || !sb) throw new Error(t(lang, 'srv.compare_not_found'));
-    return buildComparePrompt(sa, sb, athlete, profile, skills, lang);
+    return buildComparePrompt(sa, sb, athlete, profile, skills, lang, new Date(), dossierSection);
   }
   throw new Error(t(lang, 'srv.unknown_mode', { mode }));
 }
@@ -349,7 +361,12 @@ export async function submitChatMessage(
 
 /** 对话系统段：按当前状态重拼（记忆/备注/profile 修改即时生效） */
 async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAiChat>>>, agentic: boolean, lang: Lang): Promise<string> {
-  const [athlete, profile, memories] = await Promise.all([getEffectiveAthlete(), getProfile(), listMemories()]);
+  const [athlete, profile, memories, dossier] = await Promise.all([
+    getEffectiveAthlete(),
+    getProfile(),
+    listMemories(),
+    getDossier(),
+  ]);
   // 专业知识库只注入 chat 直接对话；follow_up 快答场景不注入（口径同旧版）
   const skills = chat.mode === 'chat' ? buildSkillsSection(lang) : null;
   // follow_up：关联报告正文 + 压缩训练数据（报告可能已被滚动清理，缺则仅靠训练数据）
@@ -364,6 +381,7 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
       skills,
       memories,
       now: new Date(),
+      dossierSection: buildDossierSection(dossier, lang),
       reportMarkdown: rep?.markdown ?? null,
       summary,
     },
