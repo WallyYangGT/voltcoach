@@ -3,6 +3,8 @@
   "compilerOptions": {
     "strict": true,
     "allowImportingTsExtensions": true,
+    // types 收窄为 jest（L4 全局断言 API）：代价是非测试代码误写 describe/expect
+    // 不再报错——取舍可接受，换取测试文件无需 import 类型即可 typecheck
     "types": [
       "jest"
     ],

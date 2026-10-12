@@ -7,7 +7,7 @@
  * 词条（data.sync.* 键沿用原命名空间，避免词典大面积改名）。
  */
 import { useFocusEffect } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Button, Divider, Switch, TextInput } from 'react-native-paper';
 import { getSyncState, setSyncState, type SyncState } from '@/db';
@@ -33,6 +33,15 @@ export function OnelapSyncCard() {
   const [pinging, setPinging] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
   const [lastOutcome, setLastOutcome] = useState<SyncOutcome | null>(null);
+  // 「已保存 ✓」flash 的定时器：组件卸载时清理（否则定时器在卸载后 setState，
+  // 且 jest 域里会让 worker 进程挂着定时器无法优雅退出）
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     try {
@@ -60,7 +69,8 @@ export function OnelapSyncCard() {
       setHasAccount(true);
       setPassword('');
       setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 2000);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setSavedFlash(false), 2000);
     } catch (e) {
       Alert.alert(t('data.err.generic'), String(e));
     }

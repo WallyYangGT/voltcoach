@@ -30,6 +30,8 @@ import { renderWithProviders } from './helpers/render';
 jest.mock('@/db', () => ({
   getSyncState: jest.fn(),
   setSyncState: jest.fn(),
+  // 真实 '@/i18n' 顶层从 '@/db' 取 setLang（语言切换时用）——防御性补齐防图谱缺键
+  setLang: jest.fn(),
 }));
 
 jest.mock('@/services/syncOnelap', () => ({
