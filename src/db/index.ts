@@ -21,19 +21,22 @@ import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import type { Summary } from '@/core/analyze';
+import { buildDossier, type AthleteDossier } from '@/core/dossier';
 import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '@/core/form';
 import type { CyclingRideInput } from '@/core/ftp';
 import { t, type Lang } from '@/core/i18n';
+import { isShortMemoryExpired, type MemoryScope } from '@/core/memory';
 import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
 import { ATHLETE, AI_CONFIG, FTP_ESTIMATION, type AiConfig, type AthleteParams } from '@/core/settings';
+import { migrationsFor, SCHEMA_VERSION } from './migrations';
 
 // 供编排层/设置页引用的配置类型（db 层是 AiConfig 的存取入口，re-export 同源导出）
 export type { AiConfig };
+// schema 版本单源在 ./migrations（迁移步骤与版本同文件防漂移），此处转发旧出口
+export { SCHEMA_VERSION };
 
 const DB_NAME = 'fitness.db';
 const DB_KEY_STORE = 'voltcoach.dbkey'; // SecureStore 键名（随 2026-09-19 更名用新前缀）
-/** 建库 schema 版本（备份包 manifest.schema_version 与导入迁移链共用此口径，M4 导出） */
-export const SCHEMA_VERSION = 1;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -47,12 +50,122 @@ export async function getDbKey(): Promise<string> {
   return key;
 }
 
+/** 全新库的整体建表脚本（列内联到最新 schema，CREATE IF NOT EXISTS 幂等可重放；末尾盖版本戳） */
+const CREATE_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS activities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_name TEXT NOT NULL UNIQUE,
+    date TEXT NOT NULL,
+    sport TEXT,
+    duration_sec INTEGER,
+    distance_km REAL,
+    elevation_gain_m REAL,
+    tss REAL,
+    np REAL,
+    avg_power REAL,
+    intensity_factor REAL,
+    summary_json TEXT NOT NULL,
+    category TEXT DEFAULT 'training',
+    note TEXT,
+    power_flagged INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_activities_date ON activities(date);
+
+  CREATE TABLE IF NOT EXISTS ai_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mode TEXT NOT NULL,
+    file_name TEXT,
+    race_date TEXT,
+    compare_with TEXT,
+    prompt TEXT NOT NULL,
+    markdown TEXT NOT NULL,
+    status TEXT DEFAULT 'completed',
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_reports_mode_created ON ai_reports(mode, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_ai_reports_status ON ai_reports(status);
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ai_chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mode TEXT NOT NULL,
+    report_id INTEGER,
+    file_name TEXT,
+    title TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_chats_mode ON ai_chats(mode, id DESC);
+
+  CREATE TABLE IF NOT EXISTS ai_chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    status TEXT DEFAULT 'completed',
+    error TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_chat ON ai_chat_messages(chat_id, id);
+
+  CREATE TABLE IF NOT EXISTS ai_memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    content TEXT NOT NULL,
+    category TEXT DEFAULT 'general',
+    source TEXT,
+    scope TEXT NOT NULL DEFAULT 'long',
+    created_at TEXT DEFAULT (datetime('now')),
+    superseded_by INTEGER
+  );
+
+  PRAGMA user_version = ${SCHEMA_VERSION};
+`;
+
+/**
+ * 开库后的 schema 就位：读 user_version 分支——
+ *  - 已是最新：无事可做（每次开库的最常见路径）；
+ *  - 0 且无表：全新库，整体建表（脚本末尾盖版本戳）；
+ *  - 0 但 activities 已存在：v1 建库脚本中途崩溃的残留（建表跑了、版本戳没写），
+ *    按 v1 走迁移；
+ *  - 0 < v < 最新：按 ./migrations 步进 ALTER 后盖戳。
+ * ALTER 无幂等声明，「duplicate column」按已就位容错跳过（半新表二次进入时的自愈）。
+ */
+async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
+  const current = row?.user_version ?? 0;
+  if (current === SCHEMA_VERSION) return;
+  if (current === 0) {
+    const hasTables = await db.getFirstAsync<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activities'`,
+    );
+    if (!hasTables) {
+      await db.execAsync(CREATE_SCHEMA_SQL);
+      return;
+    }
+  }
+  const steps = migrationsFor(current === 0 ? 1 : current, SCHEMA_VERSION);
+  for (const stmt of steps) {
+    try {
+      await db.execAsync(stmt);
+    } catch (e) {
+      if (!/duplicate column/i.test(String(e))) throw e;
+    }
+  }
+  await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+}
+
 /**
  * 懒打开数据库：SQLCipher 密钥就绪后开库（db 落在 expo-sqlite 默认的
- * documentDirectory/SQLite/ 目录，备份导出时从该路径取整库文件）、建表。
+ * documentDirectory/SQLite/ 目录，备份导出时从该路径取整库文件）、schema 就位。
  * SQLCipher 由 app.json 插件（expo-sqlite useSQLCipher: true）在原生层启用；
  * 开库后第一条语句必须是 `PRAGMA key`（hex 密钥无引号转义问题）。
- * 建表 SQL 与旧版 db.js 平移一致（列直接建齐，user_version = 1 驱动备份迁移链）。
+ * schema 演进自 v2 起走编号步进迁移（见 ./migrations 与 migrateSchema）。
  */
 export function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
@@ -60,79 +173,7 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
       const key = await getDbKey();
       const db = await SQLite.openDatabaseAsync(DB_NAME);
       await db.execAsync(`PRAGMA key = "${key}";`);
-      await db.execAsync(`
-        CREATE TABLE IF NOT EXISTS activities (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          file_name TEXT NOT NULL UNIQUE,
-          date TEXT NOT NULL,
-          sport TEXT,
-          duration_sec INTEGER,
-          distance_km REAL,
-          elevation_gain_m REAL,
-          tss REAL,
-          np REAL,
-          avg_power REAL,
-          intensity_factor REAL,
-          summary_json TEXT NOT NULL,
-          category TEXT DEFAULT 'training',
-          note TEXT,
-          created_at TEXT DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_activities_date ON activities(date);
-
-        CREATE TABLE IF NOT EXISTS ai_reports (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          mode TEXT NOT NULL,
-          file_name TEXT,
-          race_date TEXT,
-          compare_with TEXT,
-          prompt TEXT NOT NULL,
-          markdown TEXT NOT NULL,
-          status TEXT DEFAULT 'completed',
-          error TEXT,
-          created_at TEXT DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_ai_reports_mode_created ON ai_reports(mode, created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_ai_reports_status ON ai_reports(status);
-
-        CREATE TABLE IF NOT EXISTS settings (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS ai_chats (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          mode TEXT NOT NULL,
-          report_id INTEGER,
-          file_name TEXT,
-          title TEXT,
-          created_at TEXT DEFAULT (datetime('now')),
-          updated_at TEXT DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_ai_chats_mode ON ai_chats(mode, id DESC);
-
-        CREATE TABLE IF NOT EXISTS ai_chat_messages (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          chat_id INTEGER NOT NULL,
-          role TEXT NOT NULL,
-          content TEXT NOT NULL,
-          status TEXT DEFAULT 'completed',
-          error TEXT,
-          created_at TEXT DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_chat ON ai_chat_messages(chat_id, id);
-
-        CREATE TABLE IF NOT EXISTS ai_memories (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          content TEXT NOT NULL,
-          category TEXT DEFAULT 'general',
-          source TEXT,
-          created_at TEXT DEFAULT (datetime('now')),
-          superseded_by INTEGER
-        );
-
-        PRAGMA user_version = ${SCHEMA_VERSION};
-      `);
+      await migrateSchema(db);
       return db;
     })();
   }
@@ -481,6 +522,38 @@ export async function setActivityNote(fileName: string, note: string, lang: Lang
     fileName,
   );
   if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
+}
+
+// ---------------- 功率可信度标记（v2：activities.power_flagged） ----------------
+
+/**
+ * 标记/取消某骑行的「功率不可信」（用户在详情页或 AI 经 set_power_flag 触发）。
+ * 语义是"功率失真"而非"整趟作废"：档案聚合层据此把该骑行从功率派生基线
+ * （峰功率/分区/爬坡/踏频风格/周 TSS）排除，心率漂移与时长仍采信。
+ * 训练不存在抛 Error；调用方负责随后触发 rebuildDossierQuietly。
+ */
+export async function setActivityPowerFlag(
+  fileName: string,
+  flagged: boolean,
+  lang: Lang = 'zh',
+): Promise<void> {
+  const db = await getDb();
+  const info = await db.runAsync(
+    `UPDATE activities SET power_flagged = ? WHERE file_name = ?`,
+    flagged ? 1 : 0,
+    fileName,
+  );
+  if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
+}
+
+/** 该骑行是否被标记功率不可信（详情页横幅展示用；不存在返回 false） */
+export async function getActivityPowerFlag(fileName: string): Promise<boolean> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ power_flagged: number }>(
+    `SELECT power_flagged FROM activities WHERE file_name = ?`,
+    fileName,
+  );
+  return !!row?.power_flagged;
 }
 
 // ---------------- 训练记录的去重 / 删除（M5） ----------------
@@ -1262,34 +1335,40 @@ export async function deleteAiChat(id: number): Promise<number> {
 
 // ---------------- AI 记忆（ai_memories，带时间戳与取代链，M3） ----------------
 
-// 记忆分类白名单（非法值归入 general）
-const MEMORY_CATEGORIES = new Set(['general', 'injury', 'schedule', 'goal', 'preference']);
+// 记忆分类白名单（非法值归入 general）；strategy = 与教练商定的训练策略（权威段，见 prompts）
+const MEMORY_CATEGORIES = new Set(['general', 'injury', 'schedule', 'goal', 'preference', 'strategy']);
 // 单条记忆长度上限（AI 用中文概括的完整陈述）
 const MEMORY_MAX_LEN = 500;
 // 库中最多保留条数：超出先删最旧的已被取代记忆，不足再删最旧有效记忆
 const MEMORY_KEEP = 100;
 
-/** 记忆行（listAll 附 active 有效标记） */
+/** 记忆行（listAll 附 active/expired 标记） */
 export interface AiMemoryRow {
   id: number;
   content: string;
   category: string;
   source: string | null;
+  /** 分层：short = 近期上下文（7 天或 3 次训练先到即失效），long = 长期（默认） */
+  scope: string;
   created_at: string;
   superseded_by: number | null;
   active?: boolean;
+  /** 仅短期记忆可能为 true：已过失效线（注入时被过滤、管理页灰显） */
+  expired?: boolean;
 }
 
 /**
- * 保存一条 AI 记忆（用户个人事实：伤病/日程约束/目标变化/明确偏好等），返回 id。
- * content 必填且 ≤500 字；category 非法归 general；supersedes_id 存在时校验目标
- * 记忆存在，并把其 superseded_by 置为新 id（被取代的记忆不再注入但保留可追溯）。
- * 非法输入抛 Error（双语 message，工具层转为 {error} JSON 反馈给 AI）。
+ * 保存一条 AI 记忆（用户个人事实：伤病/日程约束/目标变化/明确偏好/训练策略等），返回 id。
+ * content 必填且 ≤500 字；category 非法归 general；scope 非法归 long；
+ * supersedes_id 存在时校验目标记忆存在，并把其 superseded_by 置为新 id
+ * （被取代的记忆不再注入但保留可追溯）。非法输入抛 Error（双语 message，
+ * 工具层转为 {error} JSON 反馈给 AI）。
  */
 export async function saveMemory(
   input: {
     content?: unknown;
     category?: unknown;
+    scope?: unknown;
     source?: string | null;
     supersedes_id?: unknown;
   },
@@ -1302,6 +1381,7 @@ export async function saveMemory(
   const cat = MEMORY_CATEGORIES.has(input?.category as string)
     ? (input.category as string)
     : 'general';
+  const scope: MemoryScope = input?.scope === 'short' ? 'short' : 'long';
   const db = await getDb();
   let supersedeId: number | null = null;
   if (input?.supersedes_id != null) {
@@ -1314,10 +1394,11 @@ export async function saveMemory(
       throw new Error(t(lang, 'memory.supersede_not_found', { id: supersedeId }));
   }
   const info = await db.runAsync(
-    `INSERT INTO ai_memories (content, category, source) VALUES (?, ?, ?)`,
+    `INSERT INTO ai_memories (content, category, source, scope) VALUES (?, ?, ?, ?)`,
     text,
     cat,
     input?.source ?? null,
+    scope,
   );
   const id = Number(info.lastInsertRowId);
   if (supersedeId != null) {
@@ -1346,25 +1427,46 @@ export async function saveMemory(
   return id;
 }
 
-/** 最近 n 条有效记忆（未被取代，注入提示词用；id DESC，拼装时反转为时间正序） */
+/**
+ * 最近 n 条「可注入」记忆（未被取代，且短期记忆未过失效线），id DESC，拼装时
+ * 反转为时间正序。失效过滤在 JS 侧调 core/memory 的单一判定源（不在 SQL 里复制
+ * 7 天/3 次规则）；表受 MEMORY_KEEP=100 约束，全量取回后过滤的代价可忽略。
+ */
 export async function listMemories(n = 30): Promise<AiMemoryRow[]> {
   const db = await getDb();
-  return db.getAllAsync<AiMemoryRow>(
-    `SELECT id, content, category, source, created_at
+  const rows = await db.getAllAsync<AiMemoryRow>(
+    `SELECT id, content, category, source, scope, created_at
      FROM ai_memories WHERE superseded_by IS NULL
-     ORDER BY id DESC LIMIT ?`,
-    n,
+     ORDER BY id DESC`,
   );
+  const activityTimes = await listActivityCreatedAts();
+  const nowMs = Date.now();
+  return rows.filter((m) => !isShortMemoryExpired(m, nowMs, activityTimes)).slice(0, n);
 }
 
-/** 全部记忆（含已被取代的，管理界面用；id DESC，附 active 有效标记） */
+/** 全部记忆（含已被取代与已过期的，管理界面用；id DESC，附 active/expired 标记） */
 export async function listAllMemories(): Promise<AiMemoryRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<AiMemoryRow>(
-    `SELECT id, content, category, source, created_at, superseded_by
+    `SELECT id, content, category, source, scope, created_at, superseded_by
      FROM ai_memories ORDER BY id DESC`,
   );
-  return rows.map((r) => ({ ...r, active: r.superseded_by == null }));
+  const activityTimes = await listActivityCreatedAts();
+  const nowMs = Date.now();
+  return rows.map((r) => ({
+    ...r,
+    active: r.superseded_by == null,
+    expired: isShortMemoryExpired(r, nowMs, activityTimes),
+  }));
+}
+
+/** 全部活动的入库时刻（短期记忆失效判定的「新增训练数」依据；≤数百行） */
+async function listActivityCreatedAts(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ created_at: string }>(
+    `SELECT created_at FROM activities`,
+  );
+  return rows.map((r) => r.created_at);
 }
 
 /** 删除指定记忆，返回删除条数（0 = 不存在） */
@@ -1372,4 +1474,114 @@ export async function deleteMemory(id: number): Promise<number> {
   const db = await getDb();
   const info = await db.runAsync(`DELETE FROM ai_memories WHERE id = ?`, id);
   return info.changes;
+}
+
+// ---------------- 个人训练档案（settings 表 dossier 行，v2） ----------------
+
+/** 档案缓存行结构：dossier + 指纹（活动总数 + FTP），任一不符即重建 */
+interface DossierCacheEntry {
+  dossier: AthleteDossier;
+  fingerprint: { rides: number; ftp: number };
+}
+
+/**
+ * 当前个人训练档案（提示词注入与档案页共用入口）。
+ * 缓存命中条件 = 指纹一致（活动总数与 FTP 均未变）；导入/删除/合并/改 FTP/
+ * 标记功率/重算等变更点各自显式调 rebuildDossierQuietly，指纹只兜底覆盖
+ * 遗漏路径（备份导入后首次读取、缓存行损坏等）——miss 时同步重建并写回。
+ * 无骑行数据返回 null（提示词侧整段省略、UI 显示空态）。
+ */
+export async function getDossier(): Promise<AthleteDossier | null> {
+  const db = await getDb();
+  const [row, total, athlete] = await Promise.all([
+    db.getFirstAsync<{ value: string }>(`SELECT value FROM settings WHERE key = 'dossier'`),
+    countActivities(),
+    getEffectiveAthlete(),
+  ]);
+  if (row) {
+    try {
+      const parsed = JSON.parse(row.value) as DossierCacheEntry;
+      if (
+        parsed?.dossier &&
+        parsed?.fingerprint?.rides === total &&
+        parsed?.fingerprint?.ftp === athlete.ftp_watts
+      ) {
+        return parsed.dossier;
+      }
+    } catch {
+      // 缓存行损坏走重建
+    }
+  }
+  return rebuildDossier();
+}
+
+/** 全部骑行行 → 档案聚合输入（损坏 summary 行按无数据参与，计数仍准确） */
+async function loadDossierRides() {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    file_name: string;
+    date: string;
+    sport: string | null;
+    duration_sec: number | null;
+    tss: number | null;
+    power_flagged: number;
+    summary_json: string;
+  }>(
+    `SELECT file_name, date, sport, duration_sec, tss, power_flagged, summary_json
+     FROM activities WHERE sport = 'cycling'
+     ORDER BY date ASC, id ASC`,
+  );
+  return rows.map((r) => {
+    let summary: Summary | null = null;
+    try {
+      summary = JSON.parse(r.summary_json) as Summary;
+    } catch {
+      // 存档 JSON 损坏：该行按无 summary 参与（只进时长/计数口径）
+    }
+    return {
+      file_name: r.file_name,
+      date: r.date,
+      sport: r.sport ?? 'unknown',
+      power_flagged: !!r.power_flagged,
+      duration_sec: r.duration_sec,
+      tss: r.tss,
+      summary,
+    };
+  });
+}
+
+/** 重建档案并写缓存（getDossier 与 rebuildDossierQuietly 的共用实现） */
+async function rebuildDossier(): Promise<AthleteDossier | null> {
+  const [rides, athlete, monthly, total] = await Promise.all([
+    loadDossierRides(),
+    getEffectiveAthlete(),
+    monthlySummary(6),
+    countActivities(),
+  ]);
+  const dossier = buildDossier(
+    rides,
+    athlete.ftp_watts,
+    monthly.map((m) => ({ month: m.month, type: m.intensity_type })),
+    new Date(),
+  );
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES ('dossier', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    JSON.stringify({ dossier, fingerprint: { rides: total, ftp: athlete.ftp_watts } }),
+  );
+  return dossier;
+}
+
+/**
+ * 静默重建档案（数据变更触发点的 fire-and-forget 入口：导入成功/删除/合并/
+ * FTP 变更/功率标记变更/重算/校准之后调用；失败仅警告——下次读取时指纹仍会
+ * 自愈重建，不得影响主流程结果，口径同本地快照滚动）。
+ */
+export async function rebuildDossierQuietly(): Promise<void> {
+  try {
+    await rebuildDossier();
+  } catch (e) {
+    console.warn('训练档案重建失败（下次读取时自愈）:', e);
+  }
 }
