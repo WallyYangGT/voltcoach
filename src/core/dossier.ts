@@ -203,7 +203,10 @@ export function buildDossier(
     else if (cp.style === 'normal') style.normal += 1;
   }
 
-  // ---- 强度结构（90 天窗按骑行时长加权；时长缺失的骑行无法加权，跳过） ----
+  // ---- 强度结构（90 天窗按骑行时长加权；时长缺失的骑行无法加权，跳过）。
+  // 已知口径边界（留档）：分区占比在有功率的秒上归一，功率覆盖率低的骑行会被
+  // 时长权重高估——精确权重应改用 power_coverage_pct × duration 或
+  // pedal_time.sample_sec，牵动黄金口径前维持简单加权（code-review P2-10） ----
   const zoneSec: Record<string, number> = {};
   let zoneWeightSec = 0;
   for (const r of cycling) {

@@ -367,6 +367,7 @@ export const DICT = {
     'me.dossier': '训练档案',
     // ---- v2：功率可信度标记（详情页 Appbar 开关 + 警示条） ----
     'activity.flag_title': '功率可信度',
+    'activity.flag_confirm': '确认',
     'activity.flag_msg': '把这次骑行标记为「功率不可信」？它将从训练档案的峰功率/强度基线中排除（心率与时长保留），AI 对比与规划不再参考其功率数据。可随时取消。',
     'activity.unflag_msg': '取消「功率不可信」标记？该骑行会重新计入训练档案的功率基线。',
     'activity.flag_banner': '本次骑行被标记为「功率不可信」（功率计未校准或读数失真）：下方功率派生指标仅供展示，已从训练档案的功率基线排除。',
@@ -733,6 +734,7 @@ export const DICT = {
     'me.dossier': 'Athlete Dossier',
     // ---- v2: power trust flag (activity page appbar toggle + banner) ----
     'activity.flag_title': 'Power trust',
+    'activity.flag_confirm': 'Confirm',
     'activity.flag_msg': 'Flag this ride as power-untrusted? It will be excluded from the dossier peak/intensity baselines (HR and duration kept), and AI comparisons and plans will stop referencing its power. Reversible at any time.',
     'activity.unflag_msg': 'Clear the power-untrusted flag? This ride will count toward the dossier power baselines again.',
     'activity.flag_banner': 'This ride is flagged power-untrusted (uncalibrated meter or distorted readings): the power-derived metrics below are display-only and excluded from the athlete dossier baselines.',

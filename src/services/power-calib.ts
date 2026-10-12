@@ -83,6 +83,8 @@ function diffSummaries(prev: Summary, rebuilt: Summary): PowerCalibOutcome['chan
   pushChange(changes, 'tss', prev.power?.tss ?? null, rebuilt.power?.tss ?? null);
   pushChange(changes, 'intensity_factor', prev.power?.intensity_factor ?? null, rebuilt.power?.intensity_factor ?? null);
   pushChange(changes, 'power_zone_distribution_pct', prev.power?.zone_distribution_pct ?? null, rebuilt.power?.zone_distribution_pct ?? null);
+  // 校准口径留痕（对模型可见：它需要知道该骑行的功率口径与系数）
+  pushChange(changes, 'calibration_scale', prev.power?.calibration_scale ?? null, rebuilt.power?.calibration_scale ?? null);
   pushChange(changes, 'w_per_kg_avg', prev.power?.w_per_kg_avg ?? null, rebuilt.power?.w_per_kg_avg ?? null);
   pushChange(changes, 'ftp_estimate', prev.power?.ftp_estimate ?? null, rebuilt.power?.ftp_estimate ?? null);
   pushChange(changes, 'interval_set', prev.interval_set ?? null, rebuilt.interval_set ?? null);
@@ -102,6 +104,7 @@ export async function recalibrateActivityPower(
 ): Promise<PowerCalibOutcome> {
   const prev = await getActivitySummary(fileName);
   if (!prev) throw new Error(t(lang, 'tool.summary_not_found', { name: fileName }));
+  if (!prev.power) throw new Error(t(lang, 'tool.no_power_data', { name: fileName }));
   const records = await loadStoredRecords(fileName);
   if (!records) throw new Error(t(lang, 'tool.records_not_found', { name: fileName }));
 

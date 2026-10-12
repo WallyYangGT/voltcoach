@@ -50,7 +50,7 @@ export async function getDbKey(): Promise<string> {
   return key;
 }
 
-/** 全新库的整体建表脚本（列内联到最新 schema，CREATE IF NOT EXISTS 幂等可重放；末尾盖版本戳） */
+/** 整体建表脚本（列内联到最新 schema，CREATE IF NOT EXISTS 幂等可重放；版本戳由调用方在成功后写） */
 const CREATE_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS activities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -124,7 +124,6 @@ const CREATE_SCHEMA_SQL = `
     superseded_by INTEGER
   );
 
-  PRAGMA user_version = ${SCHEMA_VERSION};
 `;
 
 /**
@@ -140,15 +139,21 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const current = row?.user_version ?? 0;
   if (current === SCHEMA_VERSION) return;
+  const stamp = () => db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
   if (current === 0) {
     const hasTables = await db.getFirstAsync<{ name: string }>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activities'`,
     );
     if (!hasTables) {
       await db.execAsync(CREATE_SCHEMA_SQL);
+      await stamp();
       return;
     }
+    // user_version 0 但表已存在：v1 建库脚本中途崩溃的残留。先跑一遍幂等建表把
+    // 缺失的表补齐（残留库可能缺 ai_memories 等），再走步进 ALTER（新补的表已带
+    // 最新列，ALTER 报 duplicate column 由下方容错跳过）——code-review P2-2
   }
+  await db.execAsync(CREATE_SCHEMA_SQL);
   const steps = migrationsFor(current === 0 ? 1 : current, SCHEMA_VERSION);
   for (const stmt of steps) {
     try {
@@ -157,7 +162,8 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
       if (!/duplicate column/i.test(String(e))) throw e;
     }
   }
-  await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
+  // 版本戳只在全部步骤成功后写：半途失败重入时靠 duplicate column 容错续跑
+  await stamp();
 }
 
 /**
@@ -169,13 +175,19 @@ async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
  */
 export function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
-    dbPromise = (async () => {
+    const opening = (async () => {
       const key = await getDbKey();
       const db = await SQLite.openDatabaseAsync(DB_NAME);
       await db.execAsync(`PRAGMA key = "${key}";`);
       await migrateSchema(db);
       return db;
     })();
+    dbPromise = opening;
+    // 开库/迁移失败不缓存 rejected promise（否则一次迁移故障把数据库访问永久打死，
+    // 只能杀进程恢复）：失败时复位单例，下次 getDb 重新尝试
+    opening.catch(() => {
+      if (dbPromise === opening) dbPromise = null;
+    });
   }
   return dbPromise;
 }
@@ -641,20 +653,22 @@ export async function retargetActivityRefs(fromFileName: string, toFileName: str
  */
 export async function mergeActivityExtras(keepFileName: string, dropFileName: string): Promise<void> {
   const db = await getDb();
-  const drop = await db.getFirstAsync<{ category: string | null; note: string | null }>(
-    `SELECT category, note FROM activities WHERE file_name = ?`,
+  const drop = await db.getFirstAsync<{ category: string | null; note: string | null; power_flagged: number }>(
+    `SELECT category, note, power_flagged FROM activities WHERE file_name = ?`,
     dropFileName,
   );
   if (!drop) return;
   await db.runAsync(
     `UPDATE activities SET
        category = CASE WHEN ? <> 'training' AND category = 'training' THEN ? ELSE category END,
-       note     = CASE WHEN ? IS NOT NULL AND (note IS NULL OR note = '') THEN ? ELSE note END
+       note     = CASE WHEN ? IS NOT NULL AND (note IS NULL OR note = '') THEN ? ELSE note END,
+       power_flagged = CASE WHEN ? = 1 THEN 1 ELSE power_flagged END
      WHERE file_name = ?`,
     drop.category ?? 'training',
     drop.category ?? 'training',
     drop.note,
     drop.note,
+    drop.power_flagged,
     keepFileName,
   );
 }
@@ -721,9 +735,10 @@ export async function cyclingSummariesSince(days = 42): Promise<CyclingRideInput
     file_name: string;
     date: string;
     duration_sec: number | null;
+    power_flagged: number;
     summary_json: string;
   }>(
-    `SELECT file_name, date, duration_sec, summary_json
+    `SELECT file_name, date, duration_sec, power_flagged, summary_json
      FROM activities
      WHERE sport = 'cycling' AND date >= ?
      ORDER BY date DESC`,
@@ -736,6 +751,7 @@ export async function cyclingSummariesSince(days = 42): Promise<CyclingRideInput
         file_name: r.file_name,
         date: r.date,
         duration_sec: r.duration_sec,
+        power_flagged: !!r.power_flagged,
         summary: JSON.parse(r.summary_json),
       });
     } catch {
@@ -1478,8 +1494,10 @@ export async function deleteMemory(id: number): Promise<number> {
 
 // ---------------- 个人训练档案（settings 表 dossier 行，v2） ----------------
 
-/** 档案缓存行结构：dossier + 指纹（活动总数 + FTP），任一不符即重建 */
+/** 档案缓存行结构：dossier + 指纹（活动总数 + FTP）+ 结构版本（Dossier 字段演进时递增，旧结构直接重建，防深层取值崩掉报告生成链路——code-review P2-4） */
+const DOSSIER_CACHE_SHAPE = 1;
 interface DossierCacheEntry {
+  shape: number;
   dossier: AthleteDossier;
   fingerprint: { rides: number; ftp: number };
 }
@@ -1503,6 +1521,7 @@ export async function getDossier(): Promise<AthleteDossier | null> {
       const parsed = JSON.parse(row.value) as DossierCacheEntry;
       if (
         parsed?.dossier &&
+        parsed?.shape === DOSSIER_CACHE_SHAPE &&
         parsed?.fingerprint?.rides === total &&
         parsed?.fingerprint?.ftp === athlete.ftp_watts
       ) {
@@ -1568,20 +1587,40 @@ async function rebuildDossier(): Promise<AthleteDossier | null> {
   await db.runAsync(
     `INSERT INTO settings (key, value) VALUES ('dossier', ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    JSON.stringify({ dossier, fingerprint: { rides: total, ftp: athlete.ftp_watts } }),
+    JSON.stringify({
+      shape: DOSSIER_CACHE_SHAPE,
+      dossier,
+      fingerprint: { rides: total, ftp: athlete.ftp_watts },
+    }),
   );
   return dossier;
 }
 
+let dossierRolling = false;
+let dossierRerollPending = false;
+
 /**
  * 静默重建档案（数据变更触发点的 fire-and-forget 入口：导入成功/删除/合并/
  * FTP 变更/功率标记变更/重算/校准之后调用；失败仅警告——下次读取时指纹仍会
- * 自愈重建，不得影响主流程结果，口径同本地快照滚动）。
+ * 自愈重建，不得影响主流程结果，口径同本地快照滚动）。并发合并：批量导入/
+ * 顽鹿同步连发 N 次触发只在链尾多补一次，不做 N 次全库重算。
  */
 export async function rebuildDossierQuietly(): Promise<void> {
+  if (dossierRolling) {
+    dossierRerollPending = true;
+    return;
+  }
+  dossierRolling = true;
   try {
-    await rebuildDossier();
-  } catch (e) {
-    console.warn('训练档案重建失败（下次读取时自愈）:', e);
+    do {
+      dossierRerollPending = false;
+      try {
+        await rebuildDossier();
+      } catch (e) {
+        console.warn('训练档案重建失败（下次读取时自愈）:', e);
+      }
+    } while (dossierRerollPending);
+  } finally {
+    dossierRolling = false;
   }
 }

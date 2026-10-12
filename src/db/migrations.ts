@@ -41,6 +41,13 @@ export function migrationsFor(from: number, to: number): string[] {
   if (to > SCHEMA_VERSION)
     throw new Error(`目标版本 v${to} 超出代码支持的 v${SCHEMA_VERSION}`);
   const steps: string[] = [];
-  for (let v = from; v < to; v += 1) steps.push(...(MIGRATIONS[v] ?? []));
+  for (let v = from; v < to; v += 1) {
+    const part = MIGRATIONS[v];
+    // 步骤表条目必须显式存在（无步骤的版本写 []）：bump SCHEMA_VERSION 忘写步骤时
+    // 在此硬失败，而不是静默空迁移后盖新版本戳把库永久标错（code-review P2-2）
+    if (part === undefined)
+      throw new Error(`v${v} 的迁移步骤缺失：升级 SCHEMA_VERSION 必须同步补步骤表（无变更的版本显式写 []）`);
+    steps.push(...part);
+  }
   return steps;
 }

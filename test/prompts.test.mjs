@@ -277,8 +277,8 @@ test('档案段：null 省略；完整档案逐行渲染；被标记披露', () 
   const s = buildDossierSection(dossier, 'zh');
   assert.match(s, /^## 个人训练档案（本地自动汇总的长期基线）/);
   assert.match(s, /截至 2026-10-01，近 90 天 12 次骑行（10 次带功率）/);
-  assert.match(s, /历史最佳：5s 900 \/ 20min 280/);
-  assert.match(s, /近 90 天最佳：20min 280/);
+  assert.match(s, /历史最佳：5s 900 \/ 1min — \/ 5min — \/ 20min 280/); // 缺窗口显式 —
+  assert.match(s, /近 90 天最佳：5s — \/ 1min — \/ 5min — \/ 20min 280/); // 缺窗口显式 —
   assert.match(s, /坡度 5\.2%、强度 88\.3%FTP、心率 152 bpm/);
   assert.match(s, /低踏频 50%、正常 37\.5%、高踏频 12\.5%/);
   assert.match(s, /Z1–Z2 55%、Z3–Z4 35%、Z5–Z7 10%/);
@@ -304,7 +304,7 @@ test('复盘提示词注入档案段（新末参，缺省不影响旧调用）',
 
 test('agentic 工具指引段：11 个工具与 6 条规则（含 FTP 更新/重新分析）', () => {
   const s = buildAgenticSection('zh');
-  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity']) {
+  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'set_power_flag', 'recalibrate_activity_power']) {
     assert.ok(s.includes(`- ${name}：`), name);
   }
   assert.match(s, /1\. 只在上方预装数据不足以回答时才调用工具/);

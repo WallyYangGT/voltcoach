@@ -161,6 +161,14 @@ export interface Summary {
     peak_curve: PeakCurve;
     ftp_estimate?: FtpEstimate;
     zone_distribution_pct: Record<string, number> | null;
+    /**
+     * 功率校准系数留痕（v2，code-review P0-1）：本 summary 的功率派生字段是按
+     * 「逐秒功率 × 该系数」重算的产物（recalibrate_activity_power 写入）。校准是
+     * 一次**持久的口径变更**而非一次性变换——后续任何无参重建（如改 FTP 触发的
+     * reanalyze_activity）都必须沿用该系数，否则 NP/峰曲线（缩放值）与区间/间歇
+     * （未缩放值）会在同一条 summary 里混排自相矛盾。records 原件始终未缩放。
+     */
+    calibration_scale?: number;
   };
   heart_rate: {
     avg: number | null;

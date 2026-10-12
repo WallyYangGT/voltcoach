@@ -6,7 +6,7 @@
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getDossier, rebuildDossierQuietly } from '@/db';
@@ -62,6 +62,9 @@ export default function DossierScreen() {
         // 强制走一遍重建（指纹必然未变也重算——用户显式要求刷新）
         await rebuildDossierQuietly();
         setDossier(await getDossier());
+      } catch (e) {
+        // rebuildDossierQuietly 内部吞错不会抛到这里；getDossier 抛错须让用户看见
+        Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
       } finally {
         setRefreshing(false);
       }

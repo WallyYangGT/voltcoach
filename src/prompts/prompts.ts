@@ -22,7 +22,7 @@ import 'dayjs/locale/zh-cn.js'; // ESM/Metro 双兼容需带 .js 后缀（旧版
 
 // 本模块进 node:test（L1 层），导入须用相对 .ts 路径（Node 原生跑 TS 不解析 tsconfig paths）
 import { ATHLETE, HR_ZONES, POWER_ZONES, type AthleteParams } from '../core/settings.ts';
-import type { AthleteDossier } from '../core/dossier.ts';
+import { PEAK_WINDOWS, type AthleteDossier } from '../core/dossier.ts';
 import type { Lang } from '../core/i18n.ts';
 
 /** 提示词语言缺省值 */
@@ -72,6 +72,9 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'agentic.tool.generate_workout': `- generate_workout：按目标（recovery/endurance/sweet_spot/threshold/vo2max）与可用时长生成单次课表（功率瓦特区间/组数/TSS 估算）`,
     'agentic.tool.update_ftp': `- update_ftp：按当前最佳科学估算更新用户 FTP 配置（零参，数值来自估算器；内部校验数据量/两法一致性/全力锚点/新鲜度，不满足返回拒绝原因）`,
     'agentic.tool.reanalyze_activity': `- reanalyze_activity：按当前骑手参数重新分析一次训练并写回（重算 IF/TSS/区间/间歇等，返回新旧对比）——FTP 更新后对受影响训练使用`,
+    'agentic.tool.get_dossier': `- get_dossier：取个人训练档案长期基线（峰功率历史最佳与近 90 天/爬坡画像/踏频风格/强度结构/8 周负荷）——评估进步退步与定规划前先取它作对照`,
+    'agentic.tool.set_power_flag': `- set_power_flag：标记/取消某骑行的「功率不可信」（可逆）——被标记骑行从训练档案功率基线排除`,
+    'agentic.tool.recalibrate_activity_power': `- recalibrate_activity_power：按系数缩放重算某骑行的功率派生指标并写回（功率计校准偏差修正，0.5–1.5），返回新旧对比`,
     'agentic.rule.0': `1. 只在上方预装数据不足以回答时才调用工具；能直接回答就不要调用。`,
     'agentic.rule.1': `2. 深挖单次训练时先 list_activities 找到 file_name，再用 get_activity_summary / get_activity_records 按名取数。`,
     'agentic.rule.2': `3. 每轮只发起回答所必需的调用，不要批量试探。`,
@@ -428,6 +431,9 @@ export function buildAgenticSection(lang: PromptLang = 'zh'): string {
     'generate_workout',
     'update_ftp',
     'reanalyze_activity',
+    'get_dossier',
+    'set_power_flag',
+    'recalibrate_activity_power',
   ]
     .map((name) => TT(lang, `agentic.tool.${name}`))
     .join('\n');
@@ -505,20 +511,23 @@ export function buildDossierSection(dossier: AthleteDossier | null, lang: Prompt
   if (!dossier) return null;
   const lines: string[] = [];
 
-  const fmtPeaks = (es: { window: string; value_w: number }[]) =>
-    es.map((e) => `${e.window} ${e.value_w}`).join(' / ');
+  const fmtPeaks = (es: { window: string; value_w: number }[]) => {
+    const byWindow = new Map(es.map((e) => [e.window, e.value_w]));
+    // 四窗口固定输出、缺项用 —（让模型明确知道哪些窗口没有数据，而不是误以为已列全）
+    return PEAK_WINDOWS.map((w) => `${w} ${byWindow.get(w) ?? '—'}`).join(' / ');
+  };
   if (dossier.peak_power.all_time.length) {
     lines.push(TT(lang, 'dossier.peak', { v: fmtPeaks(dossier.peak_power.all_time) }));
     if (dossier.peak_power.last_90d.length)
       lines.push(TT(lang, 'dossier.peak.recent', { v: fmtPeaks(dossier.peak_power.last_90d) }));
   }
   const cp = dossier.climb_profile;
-  if (cp.climbs_analyzed > 0 && cp.median_pct_ftp != null) {
+  if (cp.climbs_analyzed > 0) {
     lines.push(
       TT(lang, 'dossier.climb', {
         n: cp.climbs_analyzed,
         g: cp.median_grade_pct ?? '—',
-        p: cp.median_pct_ftp,
+        p: cp.median_pct_ftp ?? '—',
         h: cp.median_avg_hr ?? '—',
       }),
     );

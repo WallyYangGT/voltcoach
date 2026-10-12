@@ -10,7 +10,7 @@
  * 本页只做排版；系列切换沿用 chips。时序图由 ChartScroller 承载横向滚动（900px
  * 内容宽口径）。
  */
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
@@ -144,6 +144,21 @@ export default function ActivityDetailScreen() {
     return () => clearTimeout(timer);
   }, [kbVisible, kbHeight, lastFocus, rescrollTick, windowDp.height]);
 
+  // 聚焦刷新标记态（AI 在对话里 set_power_flag 后回到本页要对上）：只读单个布尔，廉价
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      getActivityPowerFlag(fileName)
+        .then((v) => {
+          if (alive) setPowerFlagged(v);
+        })
+        .catch(() => {});
+      return () => {
+        alive = false;
+      };
+    }, [fileName]),
+  );
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -233,7 +248,7 @@ export default function ActivityDetailScreen() {
     Alert.alert(t('activity.flag_title'), t(next ? 'activity.flag_msg' : 'activity.unflag_msg'), [
       { text: t('common.cancel'), style: 'cancel' },
       {
-        text: t('common.save'),
+        text: t('activity.flag_confirm'),
         style: next ? 'destructive' : 'default',
         onPress: () => {
           void (async () => {
@@ -323,9 +338,10 @@ export default function ActivityDetailScreen() {
           accessibilityLabel={t('btn.ai_review')}
           onPress={() => panelRef.current?.analyze()}
         />
+        {/* 语义与警示条一致：被标记 = 橙色告警盾，未标记 = 灰色通过盾 */}
         <Appbar.Action
-          icon={powerFlagged ? 'shield-check-outline' : 'shield-alert-outline'}
-          color={powerFlagged ? palette.volt : palette.muted}
+          icon={powerFlagged ? 'shield-alert-outline' : 'shield-check-outline'}
+          color={powerFlagged ? palette.orange : palette.muted}
           accessibilityLabel={t('activity.flag_title')}
           onPress={togglePowerFlag}
         />
