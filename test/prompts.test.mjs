@@ -15,6 +15,7 @@ const {
   buildComparePrompt,
   buildAgenticSection,
   buildMemorySection,
+  buildDossierSection,
   buildProfileSection,
   buildDateSection,
   buildChatInstruction,
@@ -218,8 +219,87 @@ test('记忆段：id DESC 反转为时间正序、#id 标注、空态句', () =>
   assert.ok(i3 >= 0 && i5 > i3); // 时间正序：#3 在前
   assert.match(s, /\[2026-03-01\] \(#3, 伤病\)/);
   assert.match(s, /同主题更新时用 supersedes_id 取代旧记忆/);
+  assert.match(s, /5\. 记录时区分时效与类别/); // scope/strategy 指引
   const empty = buildMemorySection([], 'zh');
   assert.match(empty, /（暂无记忆——这是你第一次积累对用户的了解/);
+});
+
+test('记忆分层：strategy 进权威段置顶、short 行内标注、普通记忆维持原格式', () => {
+  const mems = [
+    { id: 9, content: '出差一周', category: 'schedule', scope: 'short', created_at: '2026-03-03 10:00:00' },
+    { id: 8, content: '上坡以心率和功率为主控，踏频允许降到 65-75rpm', category: 'strategy', created_at: '2026-03-02 10:00:00' },
+    { id: 7, content: '左膝伤后恢复中', category: 'injury', created_at: '2026-03-01 09:00:00' },
+  ];
+  const s = buildMemorySection(mems, 'zh');
+  // 策略段置顶且含权威规则
+  assert.match(s, /^## 训练策略（既定结论）/);
+  assert.match(s, /#8\) 上坡以心率和功率为主控/);
+  assert.match(s, /必须显式指出「这与既定策略不同」/);
+  // 策略条目不再出现在普通记忆列表
+  const memListStart = s.indexOf('## 用户记忆');
+  assert.ok(memListStart > 0);
+  assert.equal(s.slice(memListStart).indexOf('#8'), -1);
+  // 短期标注
+  assert.match(s, /\(#9, 日程, 短期\) 出差一周/);
+  // 长期条目原格式
+  assert.match(s, /\(#7, 伤病\) 左膝伤后恢复中/);
+  // en 版本
+  const en = buildMemorySection(mems, 'en');
+  assert.match(en, /^## Training Strategies \(Agreed Conclusions\)/);
+  assert.match(en, /#9, Schedule, short-term\)/);
+});
+
+test('档案段：null 省略；完整档案逐行渲染；被标记披露', () => {
+  assert.equal(buildDossierSection(null, 'zh'), null);
+  const dossier = {
+    generated_at: '2026-10-12T00:00:00.000Z',
+    anchor_date: '2026-10-01',
+    ftp_watts: 250,
+    cycling: { considered: 12, with_power: 10, flagged_excluded: 1, total_flagged: 2 },
+    peak_power: {
+      all_time: [
+        { window: '5s', value_w: 900, date: '2026-08-01', file_name: 'a.fit' },
+        { window: '20min', value_w: 280, date: '2026-09-15', file_name: 'b.fit' },
+      ],
+      last_90d: [{ window: '20min', value_w: 280, date: '2026-09-15', file_name: 'b.fit' }],
+    },
+    climb_profile: { climbs_analyzed: 5, median_grade_pct: 5.2, median_pct_ftp: 88.3, median_avg_hr: 152 },
+    cadence_profile: { rides_analyzed: 8, style_counts: { low: 4, normal: 3, high: 1 } },
+    intensity_structure: {
+      zone_pct: { Z1: 30, Z2: 25, Z3: 20, Z4: 15, Z5: 7, Z6: 2.5, Z7: 0.5 },
+      intensity_types: [{ month: '2026-09', type: 'pyramidal' }],
+    },
+    load_shape: {
+      weeks: Array.from({ length: 8 }, (_, i) => ({ start: `w${i}`, end: `w${i}e`, tss: 200, duration_sec: 36000, rides: 3 })),
+      hr_drift: { median_pct: 3.4, rides: 9 },
+    },
+  };
+  const s = buildDossierSection(dossier, 'zh');
+  assert.match(s, /^## 个人训练档案（本地自动汇总的长期基线）/);
+  assert.match(s, /截至 2026-10-01，近 90 天 12 次骑行（10 次带功率）/);
+  assert.match(s, /历史最佳：5s 900 \/ 20min 280/);
+  assert.match(s, /近 90 天最佳：20min 280/);
+  assert.match(s, /坡度 5\.2%、强度 88\.3%FTP、心率 152 bpm/);
+  assert.match(s, /低踏频 50%、正常 37\.5%、高踏频 12\.5%/);
+  assert.match(s, /Z1–Z2 55%、Z3–Z4 35%、Z5–Z7 10%/);
+  assert.match(s, /月度强度类型：2026-09 pyramidal/);
+  assert.match(s, /周均 TSS 200（峰值 200），周均骑行 10 小时/);
+  assert.match(s, /心率漂移中位 3\.4%（9 次样本/);
+  assert.match(s, /功率可信度：2 次骑行被标记功率不可信/);
+  const en = buildDossierSection(dossier, 'en');
+  assert.match(en, /^## Athlete Dossier/);
+});
+
+test('复盘提示词注入档案段（新末参，缺省不影响旧调用）', () => {
+  const base = buildReviewPrompt(sampleSummary(), ATHLETE, null, null, 'zh', new Date('2026-03-26T10:00:00'));
+  assert.doesNotMatch(base, /个人训练档案/);
+  const withDossier = buildReviewPrompt(
+    sampleSummary(), ATHLETE, null, null, 'zh', new Date('2026-03-26T10:00:00'),
+    '## 个人训练档案（本地自动汇总的长期基线）\n\n测试段',
+  );
+  assert.match(withDossier, /## 个人训练档案（本地自动汇总的长期基线）/);
+  // 档案段在训练数据段之前（profile 之后、数据段之前）
+  assert.ok(withDossier.indexOf('个人训练档案') < withDossier.indexOf('## 训练数据'));
 });
 
 test('agentic 工具指引段：11 个工具与 6 条规则（含 FTP 更新/重新分析）', () => {

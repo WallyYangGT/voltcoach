@@ -22,6 +22,7 @@ import 'dayjs/locale/zh-cn.js'; // ESM/Metro 双兼容需带 .js 后缀（旧版
 
 // 本模块进 node:test（L1 层），导入须用相对 .ts 路径（Node 原生跑 TS 不解析 tsconfig paths）
 import { ATHLETE, HR_ZONES, POWER_ZONES, type AthleteParams } from '../core/settings.ts';
+import type { AthleteDossier } from '../core/dossier.ts';
 import type { Lang } from '../core/i18n.ts';
 
 /** 提示词语言缺省值 */
@@ -96,6 +97,23 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'mem.rule.1': `2. 主动记录，宁多勿漏：只要用户透露训练数据之外的个人事实或倾向，就立即调用 save_memory 记下，不必等用户明确要求。包括：目标与赛事计划、伤病与身体不适、日程/时间约束、训练偏好（室内/户外、时段、课表类型）、器材、对建议的反馈与纠正、自述的主观状态。训练数据本身已有的事实不要重复记。`,
     'mem.rule.2': `3. 每次回答或报告收尾时回顾一遍本次对话：若有符合第 2 条而尚未记录的信息，补记一条 save_memory（工具调用不影响回答内容）。`,
     'mem.rule.3': `4. 每条记忆 ≤500 字、用中文、写成带主语的完整陈述；同主题更新时用 supersedes_id 取代旧记忆（id 见上方 #标注）。`,
+    'mem.rule.4': `5. 记录时区分时效与类别：仅在本次或近一两周有意义的临时上下文（如出差、临时换器材）用 scope='short'——短期记忆超过一周或 3 次训练后自动失效；长期有效的事实不传 scope（默认长期）；与用户商定的训练策略用 category='strategy'（该类记忆会单独进入「训练策略（既定结论）」权威段）。`,
+    'mem.cat.strategy': `策略`,
+    'mem.tag.short': `短期`,
+    'strat.head': `## 训练策略（既定结论）`,
+    'strat.rules': `以上是用户与教练此前讨论确认的训练策略，是分析与建议的既定前提：涉及相关主题时必须以其为出发点；若本次数据或你的专业判断与既定策略冲突，必须显式指出「这与既定策略不同」并给出数据依据，由用户决定是否修订；确需修订时用 save_memory（category='strategy'，supersedes_id 指向旧策略 id）取代，不得默默按相反的假设分析或给建议。`,
+
+    'dossier.head': `## 个人训练档案（本地自动汇总的长期基线）`,
+    'dossier.baseline': `数据基线：截至 {date}，近 90 天 {considered} 次骑行（{with_power} 次带功率）。以下是与本次训练/规划对照的参考基准：`,
+    'dossier.peak': `- 峰功率（W）历史最佳：{v}`,
+    'dossier.peak.recent': `- 峰功率（W）近 90 天最佳：{v}`,
+    'dossier.climb': `- 爬坡画像（{n} 段中位）：坡度 {g}%、强度 {p}%FTP、心率 {h} bpm`,
+    'dossier.cadence': `- 踏频风格（{m} 次骑行占比）：低踏频 {low}%、正常 {normal}%、高踏频 {high}%`,
+    'dossier.zones': `- 90 天强度结构（按时长加权）：Z1–Z2 {low}%、Z3–Z4 {mid}%、Z5–Z7 {high}%`,
+    'dossier.types': `- 月度强度类型：{v}`,
+    'dossier.load': `- 近 8 周负荷：周均 TSS {avg}（峰值 {peak}），周均骑行 {hours} 小时`,
+    'dossier.drift': `- 心率漂移中位 {v}%（{n} 次样本，有氧耐力参考）`,
+    'dossier.flagged': `- 功率可信度：{n} 次骑行被标记功率不可信，已从上述功率基线排除；涉及峰功率/强度的纵向对比时请注明该口径`,
 
     'profile.head': `## 用户背景与训练目标`,
     'profile.identity': `身份：{v}`,
@@ -219,6 +237,23 @@ You are the user's personal AI training advisor. Answer pragmatically and concis
     'mem.rule.1': `2. Record proactively — better too many than too few: whenever the user reveals personal facts or preferences beyond training data, call save_memory immediately rather than waiting to be asked. This includes: goals and race plans, injuries or physical issues, schedule/time constraints, training preferences (indoor/outdoor, time of day, workout types), equipment, feedback on and corrections to your advice, self-reported subjective state. Facts already present in the training data need not be re-recorded.`,
     'mem.rule.2': `3. At the end of each answer or report, review this conversation: if anything per rule 2 is not yet recorded, add one save_memory call (tool calls do not affect answer content).`,
     'mem.rule.3': `4. Each memory ≤500 characters, written in the user's current language as a complete statement with a subject; when updating the same topic, supersede the old memory via supersedes_id (ids are the #annotations above).`,
+    'mem.rule.4': `5. Distinguish freshness and kind when recording: temporary context meaningful only for this or the next week or two (travel, temporary equipment swap) uses scope='short' — short-term memories auto-expire after one week or 3 activities, whichever comes first; long-lived facts take no scope (long by default); training strategies agreed with the user use category='strategy' (rendered separately in the "Training Strategies (Agreed Conclusions)" authoritative block).`,
+    'mem.cat.strategy': `Strategy`,
+    'mem.tag.short': `short-term`,
+    'strat.head': `## Training Strategies (Agreed Conclusions)`,
+    'strat.rules': `The above are training strategies previously agreed between user and coach — the standing premises for analysis and advice: treat them as the starting point for related topics; if today's data or your professional judgment conflicts with an agreed strategy, you must explicitly flag "this differs from the agreed strategy" with data-backed reasoning and let the user decide on any revision; to revise, supersede via save_memory (category='strategy', supersedes_id pointing at the old strategy id). Never silently analyze or advise against an agreed strategy.`,
+
+    'dossier.head': `## Athlete Dossier (auto-aggregated long-term baseline)`,
+    'dossier.baseline': `Baseline: as of {date}, {considered} rides in the last 90 days ({with_power} with power). Reference baselines for contextualizing this ride/plan:`,
+    'dossier.peak': `- Peak power (W) all-time best: {v}`,
+    'dossier.peak.recent': `- Peak power (W) last 90 days: {v}`,
+    'dossier.climb': `- Climb profile (median of {n} segments): grade {g}%, intensity {p}%FTP, HR {h} bpm`,
+    'dossier.cadence': `- Cadence style ({m} rides): low-cadence {low}%, normal {normal}%, high-cadence {high}%`,
+    'dossier.zones': `- 90-day intensity structure (time-weighted): Z1–Z2 {low}%, Z3–Z4 {mid}%, Z5–Z7 {high}%`,
+    'dossier.types': `- Monthly intensity types: {v}`,
+    'dossier.load': `- Last 8 weeks: avg {avg} TSS/week (peak {peak}), avg {hours} h riding/week`,
+    'dossier.drift': `- Median HR drift {v}% ({n} samples, aerobic-endurance reference)`,
+    'dossier.flagged': `- Power trust: {n} rides are flagged as power-untrusted and excluded from the baselines above; note this caveat in any longitudinal power/peak comparisons`,
 
     'profile.head': `## User Background & Training Goals`,
     'profile.identity': `Identity: {v}`,
@@ -295,11 +330,13 @@ export interface PromptProfile {
   goal?: string;
 }
 
-/** 记忆段输入（db 层 listMemories() 输出的形状） */
+/** 记忆段输入（db 层 listMemories() 输出的形状；category='strategy' 进策略权威段） */
 export interface PromptMemory {
   id: number;
   content: string;
   category?: string | null;
+  /** 分层：short = 近期上下文（展示加「短期」标注），long/缺省 = 长期 */
+  scope?: string | null;
   created_at?: string | null;
 }
 
@@ -415,38 +452,147 @@ export function buildChatInstruction(mode: 'follow_up' | 'chat', lang: PromptLan
 }
 
 /**
- * 用户记忆段（AI 在交互中记录的用户个人事实，带时间戳）。
+ * 用户记忆段（AI 在交互中记录的用户个人事实，带时间戳），v2 起分层呈现：
+ *  - category='strategy' 的条目单独进「训练策略（既定结论）」权威段并置顶——
+ *    治「上次商定的策略下次被当问题批评」：分析与建议被要求以既定策略为前提，
+ *    修订必须显式声明并给依据（见 strat.rules 文案）；
+ *  - scope='short' 的条目在列表行内加「短期」标注（注入前已由 db 层滤掉过期的，
+ *    此处都是仍生效的近期上下文）；
+ *  - 其余条目维持原格式。
  * 始终返回该段（无有效记忆时显示"暂无"），保证 save_memory 主动记录指引
- * 对首次/无记忆用户同样注入；有记忆时逐条标注日期与 #id，
- * 写死冲突处理规则（同主题以日期最新者为准）与主动记录指引。
+ * 对首次/无记忆用户同样注入；有记忆时逐条标注日期与 #id。
  * 仅 AI 调用时注入（复制提示词兜底不注入——复制出去的提示词无法回调本机）。
  * memories 为 listMemories() 返回（id DESC），此处反转为时间正序展示。
  */
 export function buildMemorySection(memories: PromptMemory[] | null, lang: PromptLang = 'zh'): string {
   const catLabel = (c: string | null | undefined) =>
     TT(lang, `mem.cat.${c}`) || c || TT(lang, 'mem.cat.general');
-  const lines = [...(memories ?? [])].reverse().map((m) => {
+  const all = [...(memories ?? [])].reverse();
+  const strategies = all.filter((m) => m.category === 'strategy');
+  const rest = all.filter((m) => m.category !== 'strategy');
+
+  const strategyBlock = strategies.length
+    ? `${TT(lang, 'strat.head')}\n\n${strategies
+        .map((m) => `- [${String(m.created_at ?? '').slice(0, 10)}] (#${m.id}) ${m.content}`)
+        .join('\n')}\n\n${TT(lang, 'strat.rules')}`
+    : null;
+
+  const lines = rest.map((m) => {
     const date = String(m.created_at ?? '').slice(0, 10);
     const cat = catLabel(m.category);
-    return `- [${date}] (#${m.id}, ${cat}) ${m.content}`;
+    const scopeTag = m.scope === 'short' ? `, ${TT(lang, 'mem.tag.short')}` : '';
+    return `- [${date}] (#${m.id}, ${cat}${scopeTag}) ${m.content}`;
   });
   const list = lines.length
     ? `${TT(lang, 'mem.list_intro')}\n${lines.join('\n')}`
     : TT(lang, 'mem.empty');
-  return `${TT(lang, 'mem.head')}
+  const memBlock = `${TT(lang, 'mem.head')}
 
 ${list}
 
 ${TT(lang, 'mem.rules_head')}
-${[0, 1, 2, 3].map((i) => TT(lang, `mem.rule.${i}`)).join('\n')}`;
+${[0, 1, 2, 3, 4].map((i) => TT(lang, `mem.rule.${i}`)).join('\n')}`;
+  return [strategyBlock, memBlock].filter(Boolean).join('\n\n');
 }
 
 /**
- * 统一拼装：角色 + 口径 + 当前时间 + 专业知识库（可选）+ 用户背景（可选）+ 各数据段 + 问题清单。
+ * 个人训练档案段（core/dossier 聚合的长期基线，语言中立数据 → 按语言渲染）。
+ * dossier 为 null（无骑行数据）返回 null 整段省略；段内各数据行按有无数据
+ * 独立省略（如库中尚无带功率骑行则无峰功率行）。档案是本地确定性计算的
+ * 事实基线（非 AI 产出），四场景报告与对话/追问均注入。
+ */
+export function buildDossierSection(dossier: AthleteDossier | null, lang: PromptLang = 'zh'): string | null {
+  if (!dossier) return null;
+  const lines: string[] = [];
+
+  const fmtPeaks = (es: { window: string; value_w: number }[]) =>
+    es.map((e) => `${e.window} ${e.value_w}`).join(' / ');
+  if (dossier.peak_power.all_time.length) {
+    lines.push(TT(lang, 'dossier.peak', { v: fmtPeaks(dossier.peak_power.all_time) }));
+    if (dossier.peak_power.last_90d.length)
+      lines.push(TT(lang, 'dossier.peak.recent', { v: fmtPeaks(dossier.peak_power.last_90d) }));
+  }
+  const cp = dossier.climb_profile;
+  if (cp.climbs_analyzed > 0 && cp.median_pct_ftp != null) {
+    lines.push(
+      TT(lang, 'dossier.climb', {
+        n: cp.climbs_analyzed,
+        g: cp.median_grade_pct ?? '—',
+        p: cp.median_pct_ftp,
+        h: cp.median_avg_hr ?? '—',
+      }),
+    );
+  }
+  const cad = dossier.cadence_profile;
+  if (cad.rides_analyzed > 0) {
+    const total = cad.style_counts.low + cad.style_counts.normal + cad.style_counts.high;
+    const pct = (x: number) => (total ? Math.round((x / total) * 1000) / 10 : 0);
+    lines.push(
+      TT(lang, 'dossier.cadence', {
+        m: cad.rides_analyzed,
+        low: pct(cad.style_counts.low),
+        normal: pct(cad.style_counts.normal),
+        high: pct(cad.style_counts.high),
+      }),
+    );
+  }
+  const zp = dossier.intensity_structure.zone_pct;
+  if (zp) {
+    const r1 = (x: number) => Math.round(x * 10) / 10;
+    lines.push(
+      TT(lang, 'dossier.zones', {
+        low: r1((zp.Z1 ?? 0) + (zp.Z2 ?? 0)),
+        mid: r1((zp.Z3 ?? 0) + (zp.Z4 ?? 0)),
+        high: r1((zp.Z5 ?? 0) + (zp.Z6 ?? 0) + (zp.Z7 ?? 0)),
+      }),
+    );
+  }
+  if (dossier.intensity_structure.intensity_types.length) {
+    const joiner = lang === 'en' ? ', ' : '、';
+    lines.push(
+      TT(lang, 'dossier.types', {
+        v: dossier.intensity_structure.intensity_types
+          .map((m) => `${m.month} ${m.type}`)
+          .join(joiner),
+      }),
+    );
+  }
+  const weeks = dossier.load_shape.weeks;
+  const totalRides = weeks.reduce((a, w) => a + w.rides, 0);
+  if (totalRides > 0) {
+    lines.push(
+      TT(lang, 'dossier.load', {
+        avg: Math.round(weeks.reduce((a, w) => a + w.tss, 0) / weeks.length),
+        peak: Math.max(...weeks.map((w) => w.tss)),
+        hours: Math.round((weeks.reduce((a, w) => a + w.duration_sec, 0) / weeks.length / 3600) * 10) / 10,
+      }),
+    );
+  }
+  const hd = dossier.load_shape.hr_drift;
+  if (hd.median_pct != null) {
+    lines.push(TT(lang, 'dossier.drift', { v: hd.median_pct, n: hd.rides }));
+  }
+  if (dossier.cycling.total_flagged > 0) {
+    lines.push(TT(lang, 'dossier.flagged', { n: dossier.cycling.total_flagged }));
+  }
+
+  return `${TT(lang, 'dossier.head')}
+
+${TT(lang, 'dossier.baseline', {
+    date: dossier.anchor_date ?? '—',
+    considered: dossier.cycling.considered,
+    with_power: dossier.cycling.with_power,
+  })}
+${lines.join('\n')}`;
+}
+
+/**
+ * 统一拼装：角色 + 口径 + 当前时间 + 专业知识库（可选）+ 用户背景（可选）+ 训练档案（可选）+ 各数据段 + 问题清单。
  * skills 为 src/prompts/skills.ts buildSkillsSection() 的输出，仅 AI 调用注入
  * （复制提示词兜底也注入——与旧 Web 版返回的提示词一致，知识段对粘贴场景同样有益）；
  * athlete 为生效骑手参数（buildMetricGlossary 用）；
- * now 为当前时刻（buildDateSection 用，非法时该段省略）。
+ * now 为当前时刻（buildDateSection 用，非法时该段省略）；
+ * dossierSection 为个人训练档案段（buildDossierSection 输出，可空）。
  */
 function assemble(
   athlete: AthleteParams,
@@ -456,11 +602,18 @@ function assemble(
   skills: string | null,
   lang: PromptLang,
   now: Date | string | number | null,
+  dossierSection: string | null = null,
 ): string {
   return [
     lang === 'en' ? TEXT.en.role : ROLE,
     buildMetricGlossary(athlete, lang),
-    ...[buildDateSection(now, lang), skills, buildProfileSection(profile, lang), ...dataSections].filter(Boolean),
+    ...[
+      buildDateSection(now, lang),
+      skills,
+      buildProfileSection(profile, lang),
+      dossierSection,
+      ...dataSections,
+    ].filter(Boolean),
     `${TT(lang, 'answer.head')}\n\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`,
   ].join('\n\n');
 }
@@ -633,6 +786,7 @@ export function buildReviewPrompt(
   skills: string | null,
   lang: PromptLang = 'zh',
   now: Date | string | number | null = new Date(),
+  dossierSection: string | null = null,
 ): string {
   const catName = categoryName(summary?.activity?.category, lang);
   const note = String(summary?.activity?.note ?? '').trim();
@@ -657,6 +811,7 @@ export function buildReviewPrompt(
     skills,
     lang,
     now,
+    dossierSection,
   );
 }
 
@@ -678,6 +833,7 @@ export function buildPlanPrompt(
   skills: string | null,
   lang: PromptLang = 'zh',
   now: Date | string | number | null = new Date(),
+  dossierSection: string | null = null,
 ): string {
   return assemble(
     athlete,
@@ -691,6 +847,7 @@ export function buildPlanPrompt(
     skills,
     lang,
     now,
+    dossierSection,
   );
 }
 
@@ -714,6 +871,7 @@ export function buildTaperPrompt(
   skills: string | null,
   lang: PromptLang = 'zh',
   now: Date | string | number | null = new Date(),
+  dossierSection: string | null = null,
 ): string {
   return assemble(
     athlete,
@@ -728,6 +886,7 @@ export function buildTaperPrompt(
     skills,
     lang,
     now,
+    dossierSection,
   );
 }
 
@@ -743,6 +902,7 @@ export function buildComparePrompt(
   skills: string | null,
   lang: PromptLang = 'zh',
   now: Date | string | number | null = new Date(),
+  dossierSection: string | null = null,
 ): string {
   const dateA = summaryA.activity?.date ?? '未知日期';
   const dateB = summaryB.activity?.date ?? '未知日期';
@@ -757,6 +917,7 @@ export function buildComparePrompt(
     skills,
     lang,
     now,
+    dossierSection,
   );
 }
 

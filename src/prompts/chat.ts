@@ -6,9 +6,10 @@
  * 数据（报告正文/训练 summary/记忆/背景/技能段/生效骑手参数）由编排层注入——本模块
  * 无 IO，node:test 可直接断言结构。
  *
- * - follow_up：快答指令 + 当前时间 + 关联报告正文 + 关联训练压缩数据 + 工具指引 + 用户记忆段；
- * - chat：教练角色 + 指标口径 + 当前时间 + 专业知识库 + 用户背景 + 对话指令 + 工具指引 + 用户记忆段。
- * 记忆段只在 agentic 模式注入——其中的 save_memory 指引依赖工具调用能力。
+ * - follow_up：快答指令 + 当前时间 + 关联报告正文 + 关联训练压缩数据 + 训练档案段 + 工具指引 + 用户记忆段；
+ * - chat：教练角色 + 指标口径 + 当前时间 + 专业知识库 + 用户背景 + 训练档案段 + 对话指令 + 工具指引 + 用户记忆段。
+ * 记忆段只在 agentic 模式注入——其中的 save_memory 指引依赖工具调用能力；
+ * 训练档案段是本地确定性数据（非工具指引），两种模式都注入。
  * 专业知识库段只注入 chat 与四场景报告；follow_up 快答场景不注入。
  */
 
@@ -44,6 +45,8 @@ export interface ChatSystemInput {
   memories: PromptMemory[];
   /** 当前时刻（每轮重拼，AI 对「今天」的感知始终最新） */
   now: Date;
+  /** 个人训练档案段（buildDossierSection 输出，可空；两种模式都注入） */
+  dossierSection?: string | null;
   /** follow_up：关联报告正文（报告可能已被滚动清理，缺则仅靠训练数据） */
   reportMarkdown?: string | null;
   /** follow_up：关联训练 summary（压缩后附上，供引用报告未覆盖的细节） */
@@ -66,6 +69,7 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
         JSON.stringify(compactSummaryForPrompt(input.summary, lang)) +
         '\n```';
     }
+    if (input.dossierSection) s += `\n\n${input.dossierSection}`;
     if (agentic) {
       s += '\n\n' + buildAgenticSection(lang);
       s += '\n\n' + buildMemorySection(memories, lang);
@@ -79,6 +83,7 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
     buildDateSection(now, lang),
     skills,
     buildProfileSection(profile, lang),
+    input.dossierSection ?? null,
     buildChatInstruction('chat', lang),
   ].filter(Boolean) as string[];
   if (agentic) {
