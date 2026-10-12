@@ -38,6 +38,7 @@ records/<base>.records.csv.gz       逐活动逐秒数据（<base> = 训练文�
 
 - 包内 `schema_version` **高于**本机 App → 拒绝导入（错误码 `unsupported_version`，提示升级 App）。
 - 低于或等于 → 允许，导入后由开库流程跑迁移链补齐。
+- **迁移链**（实现 `src/db/migrations.ts` 的 `migrationsFor`，按 `PRAGMA user_version` 步进）：v1→2 加 `ai_memories.scope`（记忆分层）与 `activities.power_flagged`（功率可信度标记）；新库（user_version 0）直接按最新 schema 整体创建。**第三方只读消费无需关心迁移**——只在高版本拒绝边界上需要 schema_version 判断。
 
 ## 导入错误码
 
