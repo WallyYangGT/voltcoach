@@ -54,7 +54,7 @@ test('buildSkillsSection 拼装专业知识库段（标题降为三级）', () =
   assert.match(section, /### 技能乙\n\n内容乙/);
 });
 
-test('内嵌 skills/ 目录默认加载六个技能且跳过 _README（zh）', () => {
+test('内嵌 skills/ 目录默认加载七个技能且跳过 _README（zh）', () => {
   const titles = buildSkillsSection('zh');
   assert.match(titles, /Coggan 功率训练体系/);
   assert.match(titles, /TrainingPeaks 负荷模型（CTL \/ ATL \/ TSB）/);
@@ -62,8 +62,9 @@ test('内嵌 skills/ 目录默认加载六个技能且跳过 _README（zh）', (
   assert.match(titles, /训练报告撰写规范/);
   assert.match(titles, /周计划节奏（按星期几安排训练）/);
   assert.match(titles, /功率数据质量与校准/);
+  assert.match(titles, /周期化训练计划：输出约定与执行对比/);
   assert.doesNotMatch(titles, /_README/);
-  assert.equal(SKILL_FILES.zh.length, 6);
+  assert.equal(SKILL_FILES.zh.length, 7);
 });
 
 test('内嵌英文技能：.en.md 归英文，zh 不混入英文技能', () => {
@@ -72,7 +73,8 @@ test('内嵌英文技能：.en.md 归英文，zh 不混入英文技能', () => {
   assert.match(en, /Coggan Power Training System/);
   assert.match(en, /Weekly Planning Rhythm \(Scheduling by Day of Week\)/);
   assert.match(en, /Power Data Quality and Calibration/);
-  assert.equal(SKILL_FILES.en.length, 6);
+  assert.match(en, /Periodized Training Plans: Output Contract and Execution Review/);
+  assert.equal(SKILL_FILES.en.length, 7);
   for (const f of SKILL_FILES.zh) assert.ok(!f.name.endsWith('.en.md'));
   for (const f of SKILL_FILES.en) assert.ok(f.name.endsWith('.en.md'));
 });

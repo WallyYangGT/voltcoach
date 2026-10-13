@@ -153,6 +153,23 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'sec.plan.monthly': `## 逐月训练汇总`,
     'sec.plan.form': `## 近期 CTL/ATL/TSB 走势（逐周取样，每天 0 点值）`,
     'sec.plan.recent': `## 近期训练清单`,
+    'sec.plan.existing': `## 既有计划处理
+
+生成新计划前，先用 get_training_plan 查看当前训练计划：
+- 存在有效期内的计划：默认按续订处理（顺延周期、结合近期执行情况调整），并在回答开头说明是「续订」还是「替换」及差异要点；用户明确要求重开时才整体替换；
+- 存在已过期计划：参考其结构生成新周期，说明与旧计划的关键差异；
+- 没有计划：直接生成。`,
+    'sec.plan.output': `## 计划输出格式（硬性要求）
+
+除正文解读外，你必须在回答**最末尾**输出一个 \`\`\`plan-json 围栏 JSON 块，承载结构化计划——App 会对它做确定性校验并落库为可执行课表（首页计划卡与计划页消费）；格式不合规、日期越界、一天多课会被整体拒收：
+
+- 计划级：valid_from / valid_to（YYYY-MM-DD，跨度 3–42 天且必须覆盖未来，典型为本周一起 4 周）、goal（一句话目标声明）；
+- 逐课次 sessions：**一天至多一课**，字段 date（YYYY-MM-DD，须在有效期内）、type（rest / recovery / endurance / long / sweet_spot / threshold / vo2max）、duration_min（分钟整数 10–600，rest 课传 null）、intensity（强度区间描述如 "95–105% FTP"，可 null）、tss（可省略，App 按课型×时长估算）、note（课表要点，可 null）；
+- 合理性阈值会被校验：同刺激质量课（sweet_spot/threshold/vo2max）间隔 ≥48h（日期上至少隔一天）、每个覆盖 ≥5 天的自然周须有休息日（显式 rest 课或整日无课）、每 3–4 周须有一个减量周（周 TSS 降至窗内最大周的 70% 以下）——宁可保守也不要输出踩线安排；
+- 示例骨架：`,
+    'sec.plan.output_schema': `\`\`\`plan-json
+{"valid_from":"2026-10-19","valid_to":"2026-11-15","goal":"基础期：有氧量与踏频稳定性","sessions":[{"date":"2026-10-19","type":"rest","duration_min":null,"intensity":null,"tss":0,"note":"休息日"},{"date":"2026-10-21","type":"threshold","duration_min":75,"intensity":"95–105% FTP","tss":85,"note":"3×12min 阈值，组间 5min"}]}
+\`\`\``,
     'plan.q.0': `评价最近的 CTL 走势：体能是在增长、停滞还是下滑？增速是否安全（一般认为每周 CTL 增幅不宜超过 5-7 点）？`,
     'plan.q.1': `当前 TSB 与疲劳状态如何？近期是否需要安排减量恢复？`,
     'plan.q.2': `从月汇总的强度分布类型（polarized / pyramidal / sweet_spot）看，目前的强度结构是否合理？`,
@@ -299,6 +316,23 @@ The user has categorized this record as **{cat}**. Interpret it accordingly; if 
     'sec.plan.monthly': `## Monthly Training Summary`,
     'sec.plan.form': `## Recent CTL/ATL/TSB Trend (weekly sampling, 00:00 values)`,
     'sec.plan.recent': `## Recent Activity List`,
+    'sec.plan.existing': `## Handling an Existing Plan
+
+Before generating a new plan, fetch the current training plan with get_training_plan:
+- If a plan is currently valid: treat this as a renewal by default (extend the cycle, adjust based on recent execution), and state at the top of your answer whether this is a "renewal" or a "replacement" and the key differences; replace wholesale only when the user explicitly asks to start over;
+- If only an expired plan exists: use its structure as a reference for the new cycle and state the key differences;
+- No plan: generate directly.`,
+    'sec.plan.output': `## Plan Output Format (mandatory)
+
+Besides the narrative analysis, you MUST end your answer with a \`\`\`plan-json fenced JSON block carrying the structured plan — the app validates it deterministically and stores it as the executable plan (consumed by the home plan card and the plan page); malformed output, out-of-window dates, or multiple sessions on one day get the whole block rejected:
+
+- Plan level: valid_from / valid_to (YYYY-MM-DD, span 3–42 days and must cover the future; typically 4 weeks from Monday), goal (one-sentence objective);
+- Per session: **at most one session per day**, fields date (YYYY-MM-DD, within the window), type (rest / recovery / endurance / long / sweet_spot / threshold / vo2max), duration_min (integer minutes 10–600, null for rest), intensity (zone description like "95–105% FTP", may be null), tss (optional; the app estimates it from type × duration), note (session key points, may be null);
+- Sanity thresholds are enforced: same-stimulus quality sessions (sweet_spot/threshold/vo2max) ≥48h apart (at least one day between dates), every calendar week covering ≥5 days must include a rest day (an explicit rest session or a day with no session), every 3–4 weeks must contain a recovery week (weekly TSS below 70% of the window's max week) — stay conservative rather than borderline;
+- Example skeleton:`,
+    'sec.plan.output_schema': `\`\`\`plan-json
+{"valid_from":"2026-10-19","valid_to":"2026-11-15","goal":"Base phase: aerobic volume and cadence stability","sessions":[{"date":"2026-10-19","type":"rest","duration_min":null,"intensity":null,"tss":0,"note":"Rest day"},{"date":"2026-10-21","type":"threshold","duration_min":75,"intensity":"95–105% FTP","tss":85,"note":"3×12min threshold, 5min recovery"}]}
+\`\`\``,
     'plan.q.0': `Assess the recent CTL trend: is fitness growing, plateauing, or declining? Is the rate safe (weekly CTL increase should generally stay under 5-7 points)?`,
     'plan.q.1': `What is the current TSB and fatigue state? Is a deload/recovery block needed soon?`,
     'plan.q.2': `Looking at the monthly intensity distribution type (polarized / pyramidal / sweet_spot), is the current intensity structure reasonable?`,
@@ -866,9 +900,13 @@ export function buildPlanPrompt(
   return assemble(
     athlete,
     [
+      // v2 训练计划载体：既有计划处理（续订/替换）+ 结构化输出硬性格式（plan-json 围栏，
+      // 生成完成后由编排层提取校验落库——格式要求与 core/training-plan 校验口径一致）
+      TT(lang, 'sec.plan.existing'),
       `${TT(lang, 'sec.plan.monthly')}\n\n${jsonBlock(months)}`,
       `${TT(lang, 'sec.plan.form')}\n\n${jsonBlock(formSeries)}`,
       `${TT(lang, 'sec.plan.recent')}\n\n${jsonBlock(recentActivities)}`,
+      `${TT(lang, 'sec.plan.output')}\n${TT(lang, 'sec.plan.output_schema')}`,
     ],
     [0, 1, 2, 3, 4].map((i) => TT(lang, `plan.q.${i}`)),
     profile,

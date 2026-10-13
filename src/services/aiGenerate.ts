@@ -52,8 +52,10 @@ import {
 } from '@/ai/keepalive';
 import { callAI, runAgentLoop } from '@/ai/agent';
 import { t, type Lang } from '@/core/i18n';
+import { localDay } from '@/core/local-day';
 import { withinResumeWindow } from '@/core/report-status';
 import { safeName, thinRecords } from '@/core/records';
+import { extractPlanFromMarkdown, validateTrainingPlan } from '@/core/training-plan';
 
 import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildDossierSection, buildMemorySection } from '@/prompts/prompts';
 import { buildSkillsSection } from '@/prompts/skills';
@@ -305,6 +307,9 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
       },
     );
     await updateAiReport(reportId, { markdown, status: 'completed', error: null });
+    // v2 训练计划载体：plan 报告完成后提取 ```plan-json 结构化计划落库（失败仅告警，
+    // 不影响报告完成态——首页卡按「上次生成未产出有效计划」降级提示，可重新生成）
+    if (report.mode === 'plan') await extractAndStorePlanFromReport(reportId, markdown, lang);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await updateAiReport(reportId, { status: 'failed', error: msg });
@@ -318,6 +323,34 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
 }
 
 // ---------------- 对话：提交与后台生成 ----------------
+
+/**
+ * plan 报告生成成功后的结构化计划提取：```plan-json 围栏 → create 档校验
+ * （合理性只警告不拒收）→ savePlanVersion 落库。全程自吞异常——提取失败只告警，
+ * 报告保持 completed（正文仍是完整的规划解读；结构化计划可重新生成补齐）。
+ */
+async function extractAndStorePlanFromReport(
+  reportId: number,
+  markdown: string,
+  lang: Lang,
+): Promise<void> {
+  try {
+    const { plan, error } = extractPlanFromMarkdown(markdown, lang);
+    if (!plan) throw new Error(error ?? t(lang, 'tp.no_block'));
+    const v = validateTrainingPlan(plan, localDay(), 'create', lang);
+    if (!v.ok || !v.plan) throw new Error(v.errors.join('；'));
+    await savePlanVersion(v.plan, {
+      origin: 'generate',
+      source_report_id: reportId,
+      warnings: v.warnings,
+    });
+    console.log(
+      `[AI] 结构化计划已从报告 #${reportId} 落库（${v.plan.sessions.length} 课次，合理性提示 ${v.warnings.length} 条）`,
+    );
+  } catch (e) {
+    console.warn(`[AI] 报告 #${reportId} 的结构化计划提取失败（报告已完成，可重新生成）:`, e);
+  }
+}
 
 export interface SubmitChatParams {
   /** 继续既有对话时传 id；缺省新建（title 取首条消息前 50 字） */

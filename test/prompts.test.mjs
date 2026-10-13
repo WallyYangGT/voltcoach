@@ -410,6 +410,22 @@ test('对话系统段：agentic 关闭时无工具指引与记忆段', () => {
   assert.doesNotMatch(s, /## 用户记忆/);
 });
 
+test('周期规划提示词：既有计划处理段 + plan-json 输出格式段（双语，v2 计划载体）', () => {
+  const data = { months: [], formSeries: [], recentActivities: [] };
+  const zh = buildPlanPrompt(data, ATHLETE, null, null, 'zh', new Date('2026-03-26T10:00:00'));
+  assert.match(zh, /## 既有计划处理/);
+  assert.match(zh, /get_training_plan/);
+  assert.match(zh, /「续订」还是「替换」/);
+  assert.match(zh, /## 计划输出格式（硬性要求）/);
+  assert.match(zh, /```plan-json/); // 示例骨架围栏
+  assert.match(zh, /一天至多一课/);
+  assert.match(zh, /减量周/);
+  const en = buildPlanPrompt(data, ATHLETE, null, null, 'en', new Date('2026-03-26T10:00:00'));
+  assert.match(en, /## Handling an Existing Plan/);
+  assert.match(en, /## Plan Output Format \(mandatory\)/);
+  assert.match(en, /at most one session per day/);
+});
+
 test('英文复盘提示词：角色/口径/时间/问题全英', () => {
   const p = buildReviewPrompt(sampleSummary(), ATHLETE, null, null, 'en', new Date('2026-03-26T10:00:00'));
   assert.match(p, /^## Role\n\nYou are a rigorous, pragmatic cycling coach/);
