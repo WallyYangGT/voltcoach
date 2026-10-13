@@ -64,7 +64,7 @@ export function WeeklyPlanCard() {
       // ai.tsx 场景生成同款：draft → 跳报告页（三态与重试都在那边）→ fire 生成
       const id = await createReportDraft('plan', {}, lang);
       router.push(`/ai/session/report-${id}`);
-      void generateReport(id, lang);
+      void generateReport(id, lang).catch((e) => console.warn('计划生成失败:', e));
     } catch (e) {
       Alert.alert(e instanceof Error ? e.message : String(e));
     } finally {

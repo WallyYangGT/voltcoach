@@ -31,8 +31,8 @@ export const PLAN_SESSION_TYPES = [
 ] as const;
 export type PlanSessionType = (typeof PLAN_SESSION_TYPES)[number];
 
-/** 质量课集合（合理性校验的间隔规则作用对象，05 技能口径） */
-const QUALITY_TYPES: readonly string[] = ['sweet_spot', 'threshold', 'vo2max'];
+/** 质量课集合（合理性校验的间隔规则作用对象；UI 课型标签染色同用，勿双处维护） */
+export const QUALITY_TYPES: readonly string[] = ['sweet_spot', 'threshold', 'vo2max'];
 
 /** 课型 → 强度因子（与 WORKOUT_TEMPLATES 各模板 if 同源；long 按 endurance 口径） */
 export const PLAN_TYPE_IF: Record<PlanSessionType, number> = {

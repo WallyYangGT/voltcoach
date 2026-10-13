@@ -1741,21 +1741,29 @@ export async function savePlanVersion(
     change_note: meta.change_note ?? null,
     warnings: meta.warnings ?? [],
   };
-  const [current, history] = await Promise.all([getCurrentPlan(), getPlanHistory()]);
-  const versions = current ? [current, ...history].slice(0, PLAN_VALIDATION.history_keep) : history;
-  if (current) {
+  // 事务包住「旧版挪历史 + 写当前」两步：进程中断在中途会留下当前版同时出现在
+  // history[0] 的重复版本（code-review P3），事务内读写保证原子
+  let versionsTotal = 1;
+  await db.withTransactionAsync(async () => {
+    const [current, history] = await Promise.all([getCurrentPlan(), getPlanHistory()]);
+    const versions = current
+      ? [current, ...history].slice(0, PLAN_VALIDATION.history_keep)
+      : history;
+    if (current) {
+      await db.runAsync(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        PLAN_HISTORY_KEY,
+        JSON.stringify({ shape: PLAN_STORE_SHAPE, versions } satisfies PlanHistoryEntry),
+      );
+    }
     await db.runAsync(
       `INSERT INTO settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      PLAN_HISTORY_KEY,
-      JSON.stringify({ shape: PLAN_STORE_SHAPE, versions } satisfies PlanHistoryEntry),
+      PLAN_CURRENT_KEY,
+      JSON.stringify({ shape: PLAN_STORE_SHAPE, current: entry } satisfies PlanCurrentEntry),
     );
-  }
-  await db.runAsync(
-    `INSERT INTO settings (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    PLAN_CURRENT_KEY,
-    JSON.stringify({ shape: PLAN_STORE_SHAPE, current: entry } satisfies PlanCurrentEntry),
-  );
-  return 1 + versions.length;
+    versionsTotal = 1 + versions.length;
+  });
+  return versionsTotal;
 }

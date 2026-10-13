@@ -35,6 +35,7 @@ import {
   formatPlanIssue,
   planValidity,
   projectPlanForm,
+  QUALITY_TYPES,
   weekStartOf,
   type PlanSession,
   type TrainingPlan,
@@ -46,8 +47,8 @@ import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
 const POLL_MS = 1500;
-/** 质量课集合（课型标签染 volt 色；与 core/training-plan 的合理性规则同一口径） */
-const QUALITY = new Set(['sweet_spot', 'threshold', 'vo2max']);
+/** 质量课集合（课型标签染 volt 色）——单一事实源在 core/training-plan 的 QUALITY_TYPES */
+const QUALITY = new Set(QUALITY_TYPES);
 
 /** 周锚点夹进计划窗（今天在窗前→首周；窗后→末周） */
 function clampWeekToPlan(monday: string, plan: TrainingPlan): string {
@@ -123,7 +124,9 @@ export default function PlanScreen() {
     if (chatId == null) return;
     for (const m of messages) {
       if (m.role === 'assistant' && m.status === 'pending' && !isChatGenerating(chatId, m.id)) {
-        void runChatGeneration(chatId, m.id, lang);
+        void runChatGeneration(chatId, m.id, lang).catch((e) =>
+          console.warn('计划会话残留补跑失败:', e),
+        );
       }
     }
     if (!messages.some((m) => m.status === 'pending')) return;
@@ -135,7 +138,7 @@ export default function PlanScreen() {
         setMessages(c.messages);
         if (!c.messages.some((m) => m.status === 'pending')) {
           clearInterval(timer);
-          void load(); // 调整可能已落新版本——静默刷新计划/历史
+          void load().catch((e) => console.warn('计划页轮询收尾重载失败:', e)); // 调整可能已落新版本
         }
       } catch {
         // 轮询失败下轮再试
@@ -161,7 +164,9 @@ export default function PlanScreen() {
         setChatId(cid);
         const c = await getAiChat(cid);
         if (c) setMessages(c.messages);
-        void runChatGeneration(cid, messageId, lang);
+        void runChatGeneration(cid, messageId, lang).catch((e) =>
+          console.warn('计划会话生成失败:', e),
+        );
       } catch (e) {
         Alert.alert(e instanceof Error ? e.message : String(e));
       } finally {
@@ -174,7 +179,9 @@ export default function PlanScreen() {
   const retry = useCallback(
     (messageId: number) => {
       if (chatId == null) return;
-      void runChatGeneration(chatId, messageId, lang);
+      void runChatGeneration(chatId, messageId, lang).catch((e) =>
+        console.warn('计划会话重试失败:', e),
+      );
     },
     [chatId, lang],
   );
@@ -186,7 +193,7 @@ export default function PlanScreen() {
       // 首页计划卡同款：draft → 跳报告页（三态/保活/轮询都在那边）→ fire 生成
       const id = await createReportDraft('plan', {}, lang);
       router.push(`/ai/session/report-${id}`);
-      void generateReport(id, lang);
+      void generateReport(id, lang).catch((e) => console.warn('计划生成失败:', e));
     } catch (e) {
       Alert.alert(e instanceof Error ? e.message : String(e));
     } finally {
@@ -311,11 +318,17 @@ export default function PlanScreen() {
                     to: plan.valid_to,
                     n: validity.days_left,
                   })
-                : t('plan.banner.valid', {
-                    from: plan.valid_from,
-                    to: plan.valid_to,
-                    n: validity.days_left,
-                  })}
+                : validity.state === 'upcoming'
+                  ? t('plan.banner.upcoming', {
+                      from: plan.valid_from,
+                      to: plan.valid_to,
+                      n: validity.days_left,
+                    })
+                  : t('plan.banner.valid', {
+                      from: plan.valid_from,
+                      to: plan.valid_to,
+                      n: validity.days_left,
+                    })}
               {' · '}
               {t('plan.version', { n: versionNo })}
             </Text>

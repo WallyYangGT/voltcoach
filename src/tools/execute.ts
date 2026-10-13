@@ -295,6 +295,13 @@ const toolGetTrainingPlan: ToolImpl = async (_args, ctx, io) => {
   if (!stored) return toResult({ has_plan: false }, lang);
   // 有效期判定在确定性层（core/training-plan）：state = valid | expired | upcoming
   const { state, days_left } = planValidity(stored.plan, localDay());
+  // 展示字段裁剪（副本，不动存储）：42 课次满额 note/intensity 的原始载荷会越过
+  // 16k 截断线，截断标记会把 JSON 从中间切坏——模型后续调整就失去了整体重发基准
+  const sessions = stored.plan.sessions.map((s) => ({
+    ...s,
+    intensity: s.intensity ? s.intensity.slice(0, 40) : null,
+    note: s.note ? s.note.slice(0, 60) : null,
+  }));
   return toResult(
     {
       has_plan: true,
@@ -305,7 +312,7 @@ const toolGetTrainingPlan: ToolImpl = async (_args, ctx, io) => {
       goal: stored.plan.goal,
       origin: stored.origin,
       created_at: stored.created_at,
-      sessions: stored.plan.sessions,
+      sessions,
     },
     lang,
   );
