@@ -1721,6 +1721,7 @@ export async function getPlanHistory(): Promise<StoredPlan[]> {
 /**
  * 落一版计划：写当前行；已有当前版则先挪入历史头部（裁剪到 PLAN_VALIDATION.history_keep）。
  * 调用方负责先过 validateTrainingPlan（generate 钩子 / update_training_plan 工具），本层不重校验。
+ * 返回落地后的总版本数（当前 1 + 历史条数，UI「第 N 版」用）。
  */
 export async function savePlanVersion(
   plan: TrainingPlan,
@@ -1730,7 +1731,7 @@ export async function savePlanVersion(
     change_note?: string | null;
     warnings?: PlanIssue[];
   },
-): Promise<void> {
+): Promise<number> {
   const db = await getDb();
   const entry: StoredPlan = {
     plan,
@@ -1741,8 +1742,8 @@ export async function savePlanVersion(
     warnings: meta.warnings ?? [],
   };
   const [current, history] = await Promise.all([getCurrentPlan(), getPlanHistory()]);
+  const versions = current ? [current, ...history].slice(0, PLAN_VALIDATION.history_keep) : history;
   if (current) {
-    const versions = [current, ...history].slice(0, PLAN_VALIDATION.history_keep);
     await db.runAsync(
       `INSERT INTO settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
@@ -1756,4 +1757,5 @@ export async function savePlanVersion(
     PLAN_CURRENT_KEY,
     JSON.stringify({ shape: PLAN_STORE_SHAPE, current: entry } satisfies PlanCurrentEntry),
   );
+  return 1 + versions.length;
 }

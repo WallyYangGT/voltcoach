@@ -62,6 +62,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'tp.warn.quality_gap': '{a} 与 {b} 两节质量课仅隔 {n} 天（同刺激质量课间隔需 ≥48h）',
     'tp.warn.no_rest': '{range}（一整周）没有休息日',
     'tp.warn.no_recovery': '{a} 起连续 {n} 周没有减量周（周计划 TSS 均高于最大周的 70%）',
+    'tp.tool.report_source': '训练计划只能在对话中调整，报告生成场景不能修改计划',
+    'tp.tool.adjust_hint': '请向用户解释以上原因，并给出满足训练节奏约束的替代调整方案',
     // ---- agentic 工具层消息（src/tools，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'tool.date_invalid': '{key} 需为 YYYY-MM-DD',
     'tool.name_invalid': 'file_name 非法',
@@ -238,6 +240,8 @@ const DICT: Record<Lang, Record<string, string>> = {
     'tp.warn.quality_gap': 'Quality sessions on {a} and {b} are only {n} days apart (same-stimulus quality sessions need ≥48h)',
     'tp.warn.no_rest': '{range} (a full week) has no rest day',
     'tp.warn.no_recovery': '{n} consecutive weeks from {a} without a recovery week (weekly planned TSS always above 70% of the max week)',
+    'tp.tool.report_source': 'The training plan can only be adjusted in conversations — report generation must not modify it',
+    'tp.tool.adjust_hint': 'Explain these reasons to the user and propose an alternative adjustment that satisfies the training-rhythm constraints',
     'tool.date_invalid': '{key} must be YYYY-MM-DD',
     'tool.name_invalid': 'invalid file_name',
     'tool.summary_not_found': 'not found in training library: {name}',

@@ -73,11 +73,11 @@ function fakeIo(overrides = {}) {
   return io;
 }
 
-test('toolDefs：15 个工具、双语描述、schema 关键字段', () => {
+test('toolDefs：17 个工具、双语描述、schema 关键字段', () => {
   const zh = toolDefs('zh');
-  assert.equal(zh.length, 15);
+  assert.equal(zh.length, 17);
   const names = zh.map((d) => d.function.name);
-  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'get_dossier', 'set_power_flag', 'recalibrate_activity_power', 'update_ftp', 'reanalyze_activity']) {
+  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'get_dossier', 'get_training_plan', 'update_training_plan', 'set_power_flag', 'recalibrate_activity_power', 'update_ftp', 'reanalyze_activity']) {
     assert.ok(names.includes(n), n);
   }
   assert.equal(zh.every((d) => d.type === 'function'), true);
@@ -95,8 +95,10 @@ test('toolDefs：15 个工具、双语描述、schema 关键字段', () => {
   assert.deepEqual(byName.reanalyze_activity.function.parameters.required, ['file_name']);
   assert.deepEqual(byName.set_power_flag.function.parameters.required, ['file_name', 'flagged']);
   assert.deepEqual(byName.recalibrate_activity_power.function.parameters.required, ['file_name', 'scale_factor']);
+  assert.deepEqual(byName.update_training_plan.function.parameters.required, ['plan']);
   assert.deepEqual(Object.keys(byName.update_ftp.function.parameters.properties), []); // 零参
   assert.deepEqual(Object.keys(byName.get_dossier.function.parameters.properties), []); // 零参
+  assert.deepEqual(Object.keys(byName.get_training_plan.function.parameters.properties), []); // 零参
 });
 
 test('list_activities：日期范围/运动/分类过滤 + limit 截断 + 非法日期报错', async () => {
@@ -320,4 +322,106 @@ test('get_activity_records：60s 全秒窄窗不截断（逐秒核对暂停时�
   const parsed = JSON.parse(raw); // 截断标记会破坏 JSON——能 parse 即未截断
   assert.equal(parsed.points.length, 60);
   assert.ok(raw.length <= AGENTIC.tool_result_max_chars + '（结果已截断）'.length);
+});
+
+// ---------------- 训练计划工具（get_training_plan / update_training_plan） ----------------
+
+const { localDay } = await import('../src/core/local-day.ts');
+
+/** 相对今天偏移 n 天的本地日历日（计划窗夹住今天，有效期判定确定化） */
+const day = (offset) =>
+  new Date(Date.parse(localDay() + 'T00:00:00Z') + offset * 86400000).toISOString().slice(0, 10);
+
+/** 课次夹具 */
+const pSession = (date, type = 'endurance', duration_min = 60, extra = {}) => ({
+  date, type, duration_min, intensity: null, tss: null, note: null, ...extra,
+});
+
+/** 两周计划窗夹具（valid_to 相对 today +13，恒为 valid 态） */
+const planObj = (sessions) => ({
+  valid_from: day(-1),
+  valid_to: day(13),
+  goal: '有氧基础',
+  sessions,
+});
+
+test('get_training_plan：无计划返回 has_plan=false；有计划回有效态/课次/来源', async () => {
+  const none = createExecuteTool(fakeIo({ getTrainingPlan: async () => null }), { lang: 'zh' });
+  assert.deepEqual(JSON.parse(await none('get_training_plan', {})), { has_plan: false });
+
+  const stored = {
+    origin: 'generate',
+    created_at: '2026-10-13T08:00:00.000Z',
+    plan: {
+      valid_from: day(-1),
+      valid_to: day(13),
+      goal: '有氧基础',
+      sessions: [pSession(day(0), 'threshold', 60, { tss: 100 })],
+    },
+  };
+  const exec = createExecuteTool(fakeIo({ getTrainingPlan: async () => stored }), { lang: 'zh' });
+  const out = JSON.parse(await exec('get_training_plan', {}));
+  assert.equal(out.has_plan, true);
+  assert.equal(out.state, 'valid');
+  assert.equal(out.goal, '有氧基础');
+  assert.equal(out.origin, 'generate');
+  assert.equal(out.sessions.length, 1);
+  assert.equal(out.sessions[0].tss, 100);
+});
+
+test('update_training_plan：非对话类调用拒写（报告场景名与会话模式名都可能是 plan，以 chat 标记区分）', async () => {
+  const io = fakeIo({});
+  io.savePlanVersion = async () => {
+    throw new Error('不应落库');
+  };
+  for (const source of ['review', 'plan', 'taper', 'compare', null]) {
+    const raw = await createExecuteTool(io, { source, lang: 'zh' })('update_training_plan', {
+      plan: planObj([pSession(day(0))]),
+    });
+    assert.match(JSON.parse(raw).error, /只能在对话中调整/);
+  }
+});
+
+test('update_training_plan：格式硬错返回 error；合理性违规 adjust 档硬拒并附原因与提示', async () => {
+  const io = fakeIo({});
+  io.savePlanVersion = async () => {
+    throw new Error('不应落库');
+  };
+  const exec = createExecuteTool(io, { source: 'plan', chat: true, lang: 'zh' });
+
+  const badDate = JSON.parse(await exec('update_training_plan', { plan: { valid_from: 'nope' } }));
+  assert.match(badDate.error, /YYYY-MM-DD/);
+
+  const clash = JSON.parse(
+    await exec('update_training_plan', {
+      plan: planObj([pSession(day(0), 'threshold', 60), pSession(day(1), 'threshold', 60)]),
+      change_note: '连上两天质量课',
+    }),
+  );
+  assert.equal(clash.ok, false);
+  assert.match(clash.violations[0], /48h/);
+  assert.match(clash.hint, /替代调整方案/);
+});
+
+test('update_training_plan：合规调整落库——TSS 回填/rest 归零/change_note 裁剪/返回总版本数', async () => {
+  const io = fakeIo({});
+  let saved = null;
+  io.savePlanVersion = async (plan, meta) => {
+    saved = { plan, meta };
+    return 2;
+  };
+  const exec = createExecuteTool(io, { source: 'plan', chat: true, lang: 'zh' });
+  const out = JSON.parse(
+    await exec('update_training_plan', {
+      plan: planObj([pSession(day(0), 'threshold', 60), pSession(day(2), 'rest', null)]),
+      change_note: '  微调周节奏  ',
+    }),
+  );
+  assert.equal(out.ok, true);
+  assert.equal(out.versions_total, 2);
+  assert.equal(out.sessions, 2);
+  assert.equal(out.note, '微调周节奏');
+  assert.equal(saved.meta.origin, 'adjust');
+  assert.equal(saved.plan.sessions[0].tss, 100); // 缺失回填：阈值 60min
+  assert.equal(saved.plan.sessions[1].tss, 0); // rest 课负荷归零
 });

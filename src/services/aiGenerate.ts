@@ -22,6 +22,7 @@ import {
   getAiChat,
   getAiConfig,
   getAiReport,
+  getCurrentPlan,
   getDossier,
   getEffectiveAthlete,
   getAthleteState,
@@ -31,6 +32,7 @@ import {
   monthlySummary,
   recentFormDaily,
   addAiChatMessage,
+  savePlanVersion,
   touchAiChat,
   updateAiChatMessage,
   updateAiReport,
@@ -81,6 +83,8 @@ function buildToolIo(): ToolIo {
     computeForm: (date) => computeForm(date, 'zh'),
     saveMemory: (input, lang) => saveMemory(input, lang),
     getDossier: () => getDossier(),
+    getTrainingPlan: getCurrentPlan,
+    savePlanVersion,
     setPowerFlag: (name, flagged, lang, reason) => setPowerFlagAndRefresh(name, flagged, lang, reason),
     recalibratePower: (name, scale, lang) => recalibrateActivityPower(name, scale, lang),
     applyFtpUpdate: (lang) => applyAiFtpUpdate(lang),
@@ -108,12 +112,14 @@ async function callAiMaybeAgentic(
   opts: {
     source: string | null;
     lang: Lang;
+    /** 对话类调用标记（chat/follow_up/plan 会话）：update_training_plan 等写类工具的放行依据 */
+    chat?: boolean;
     onRetry?: (nextAttempt: number, errMsg: string) => void;
   },
 ): Promise<string> {
   const fetchImpl = await loadDefaultFetch();
   if (config.agentic !== false) {
-    return runAgentLoop(fetchImpl, config, messages, toolDefs(opts.lang), createExecuteTool(buildToolIo(), { source: opts.source, lang: opts.lang }), {
+    return runAgentLoop(fetchImpl, config, messages, toolDefs(opts.lang), createExecuteTool(buildToolIo(), { source: opts.source, lang: opts.lang, chat: opts.chat }), {
       lang: opts.lang,
       onRetry: opts.onRetry,
       onToolCall: (name, _args, result) => {
@@ -422,6 +428,7 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
       {
         source: chat.mode, // 场景标记：save_memory 写入 ai_memories.source
         lang,
+        chat: true, // 对话类调用：update_training_plan 等写类工具据此放行
         onRetry: (attempt, errMsg) => {
           chatProgress.set(key, { attempt, note: errMsg });
           console.warn(`[AI chat] ${key} 响应异常，自动重试（第 ${attempt} 次）：${errMsg}`);
