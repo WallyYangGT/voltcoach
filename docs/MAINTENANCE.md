@@ -7,20 +7,22 @@
 技术栈：React Native + Expo（新架构）+ Expo Router + TypeScript；UI 用 React Native Paper 5（Material 3）自定义暗色主题（品牌色 volt 荧光黄 `#d7ff3f`，深色底 `#0a0d11` 系，等宽大数字排版）。**纯本地应用**：无自建服务器，训练库 SQLCipher 加密，AI Key 与同步凭据存 `expo-secure-store`（Android Keystore）。
 
 ```
-app/                    Expo Router 文件路由（底部四 tab + 详情/会话/数据管理/导入/关于等页面）
+app/                    Expo Router 文件路由（底部四 tab + 详情/计划/会话/数据管理/导入/关于等页面）
 src/
-  core/                 ★ 纯函数算法层：解析、指标、FTP、规划、去重、报告标题——
+  core/                 ★ 纯函数算法层：解析、指标、FTP、规划、去重、报告标题、
+                        训练计划（结构化课表校验/周聚合/负荷推演）——
                         不 import 任何 RN/Expo 模块，node:test 直接覆盖
   db/                   训练库（expo-sqlite + SQLCipher；开库后第一条语句必须是 PRAGMA key）
   records-store.ts      逐秒数据 gzip 文件落盘/读取（不进 SQLite，与库行一一对应）
-  services/             编排层：导入管线（解析→查重→入库→落盘→快照）、顽鹿同步编排
+  services/             编排层：导入管线（解析→查重→入库→落盘→快照）、顽鹿同步编排、
+                        AI 报告/对话生成任务（保活接入、plan 报告的结构化计划提取落库）
   ai/                   BYOK AI 客户端（OpenAI 兼容、SSE 流式、agentic 工具循环）+ 服务商预设
   prompts/              AI 提示词模板 + 技能知识库（skills/*.md 构建期内嵌为 skills.ts）
-  tools/                agentic 只读查询与纯计算工具（function calling）
+  tools/                agentic 数据查询、纯计算与低危写工具（function calling）
   sync/                 顽鹿云同步客户端（纯函数 + 环境注入，不 import RN，可 node:test 直测）
   backup/               .fitbackup 备份层（manifest/archive 纯函数 + 设备侧导入导出）
   charts/               react-native-svg 自绘图表（计算层复用 core 逻辑，渲染点数抽稀）
-  components/           共用 UI 组件
+  components/           共用 UI 组件（含 PlanTable 轻量表格、首页训练计划卡）
   i18n/                 前端双语词典（zh 默认 / en）
 modules/                本地 Expo 原生模块（generation-keepalive：AI 生成保活前台服务
                         + 电池优化白名单 API，android-only，autolinking 自动接入）
@@ -40,6 +42,7 @@ assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-
 - **删除训练**只删活动行 + 逐秒数据，**已生成的 AI 报告/对话保留**（松散 `file_name` 引用成为孤儿，报告标题降级显示「训练已删除」）。删除一律二次确认，且**删除后不滚本地快照**（保留误删前的快照才有可恢复性）；相反，**导入成功后滚动快照**。
 - **AI 报告标题在渲染侧拼、不落库**（落库会把标题冻结在生成时的语言）；数据源 = 活动行 + records 首帧时间戳 + created_at，带多级降级模板。改动训练数据的三处入口（导入/删除/合并）都必须清标题缓存。
 - **个人训练档案（v2）**：`src/core/dossier` 以**最新骑行日为锚**聚合 90 天峰功率 PB/爬坡踏频画像/强度结构/8 周负荷四组基线（确定性计算，零 AI token），缓存于 settings 表 `dossier` 行（指纹 = 活动总数 + FTP，miss 自愈重建）；导入/删除/合并/FTP 变更/功率标记/重算各触发点 fire-and-forget 重建。档案段注入四场景报告与对话（空库整段省略）。
+- **结构化训练计划（v2）**：周期规划（plan 场景）报告在正文末尾输出 ```plan-json 围栏块，生成完成后由编排层**提取 → create 档确定性校验 → 落库**（settings 表 `training_plan` 当前 + `training_plan_history` 历史双键，JSON 行带 shape 演进字段，**不动 SCHEMA_VERSION**；历史上限 10 版）。合理性阈值（质量课间隔 ≥48h 日粒度、每周休息日、每 3–4 周减量周）以 `PLAN_VALIDATION` 为代码单源（与技能库 05 周计划节奏口径一致）：**生成时只警告**（随版本存档展示），**会话调整时硬拒**——调整必须经 `update_training_plan` 整体重发并过 adjust 档校验，报告生成场景拒写计划（会话与报告的 source 都可能是 `'plan'`，以显式 chat 标记区分）。计划查询是通用工具 `get_training_plan`（任意场景按需调用），会话锚定 `ai_chats.mode='plan'`（不属任何活动、跨版本存活）；有效期判定/过期提示/周聚合/负荷推演全在 `src/core/training-plan` 确定性层，「今天」一律走 `localDay` 本地日历日（不新增 UTC 日口径）。
 - **记忆分层（v2）**：`ai_memories.scope`——`short` 短期记忆**过 7 天或新增 3 次活动先到即失效**（判定单一事实源在 `src/core/memory.ts`，注入期过滤、不物理删）；`long` 默认长期。`category='strategy'`（与教练商定的训练策略）单独成「既定结论」权威段置顶注入，规则要求分析以其为前提、修订须显式声明。
 - **功率可信度标记（v2）**：`activities.power_flagged`（详情页开关或 AI `set_power_flag` 工具，可逆）——被标记骑行从档案一切功率派生基线排除（峰功率/分区/爬坡/踏频风格/周 TSS），**心率漂移与时长仍采信**；`recalibrate_activity_power` 工具按系数（夹逼 0.5–1.5）缩放重算单骑全部功率派生指标并写回，逐秒原始数据不改写（重导原 FIT 可回退）。
 - **顽鹿同步行为口径**：只回溯**最近 90 天**（`SYNC_WINDOW_DAYS`；水位线 = 上次成功同步前移 24h 缓冲、与 90 天窗口取较晚者，列表遇早于窗口起点的记录即停止翻页）；活动之间 300–800ms 随机间隔摊平请求突发（控制对非官方接口的请求强度）；令牌缓存复用到 401 自动重登一次（token 与 AI Key 同级存 `expo-secure-store`、不随备份包迁移）；「测试连接」只探测登录域与数据域可达性（任何 HTTP 状态码都算链路通）；同步侧下载前按文件名预检省流量，入库前再按内容指纹判重（与手动导入同一入库管线）；**同步期间复用 AI 生成的 dataSync 前台服务保活壳**（引用计数，与 AI 生成并发时共用一次启动/一条通知，账号未配置的 fast-fail 不闪通知）。

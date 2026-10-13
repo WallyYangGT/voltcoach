@@ -22,7 +22,15 @@ import type { AthleteParams } from '../core/settings.ts';
 import { AGENTIC, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from '../core/settings.ts';
 import { estimateFtpFromHistory, type CyclingRideInput } from '../core/ftp.ts';
 import { t, type Lang } from '../core/i18n.ts';
+import { localDay } from '../core/local-day.ts';
 import { safeName, type ThinResult } from '../core/records.ts';
+import {
+  formatPlanIssue,
+  planValidity,
+  validateTrainingPlan,
+  type PlanIssue,
+  type TrainingPlan,
+} from '../core/training-plan.ts';
 import { compactSummaryForPrompt, localizeTimestamps, type PromptProfile } from '../prompts/prompts.ts';
 import { generateWorkout, simulateForm, type PlanDay } from '../planning/planning.ts';
 
@@ -65,6 +73,13 @@ export interface ToolIo {
   saveMemory(input: { content?: unknown; category?: unknown; scope?: unknown; source?: string | null; supersedes_id?: unknown }, lang: Lang): Promise<number>;
   /** 个人训练档案（本地聚合长期基线）；无骑行数据返回 null */
   getDossier(): Promise<unknown | null>;
+  /** 当前结构化训练计划（settings 行）；无计划返回 null */
+  getTrainingPlan(): Promise<{ plan: TrainingPlan; origin: string; created_at: string } | null>;
+  /** 落一版调整后计划（已过 adjust 档校验），返回落地后的总版本数（当前 1 + 历史） */
+  savePlanVersion(
+    plan: TrainingPlan,
+    meta: { origin: 'adjust'; change_note: string | null; warnings: PlanIssue[] },
+  ): Promise<number>;
   /** 标记/取消「功率不可信」（编排见 services/power-calib：db 标记 + 档案重建），返回结果对象 */
   setPowerFlag(fileName: string, flagged: boolean, lang: Lang, reason: string | null): Promise<unknown>;
   /** 按系数缩放重算一次训练的功率派生指标并写回（编排见 services/power-calib），返回结果对象 */
@@ -81,10 +96,13 @@ export interface ToolIo {
   reanalyzeActivity(fileName: string, lang: Lang): Promise<unknown>;
 }
 
-/** 执行上下文：source 场景标记（save_memory 写入 ai_memories.source），lang 消息语言 */
+/** 执行上下文：source 场景标记（save_memory 写入 ai_memories.source），lang 消息语言；
+ * chat 标记对话类调用（chat/follow_up/plan 会话）——报告生成与对话的 source 都可能是
+ * 'plan'（报告场景名 = 会话模式名），写类工具以 chat 标记区分，不能只看 source */
 export interface ToolCallContext {
   source?: string | null;
   lang?: Lang;
+  chat?: boolean;
 }
 
 // ---------------- 参数校验小工具 ----------------
@@ -270,6 +288,77 @@ const toolGetDossier: ToolImpl = async (_args, ctx, io) => {
   return toResult(dossier, lang);
 };
 
+/** get_training_plan：当前结构化训练计划（计划答疑/执行对比/重生成前的查阅入口） */
+const toolGetTrainingPlan: ToolImpl = async (_args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  const stored = await io.getTrainingPlan();
+  if (!stored) return toResult({ has_plan: false }, lang);
+  // 有效期判定在确定性层（core/training-plan）：state = valid | expired | upcoming
+  const { state, days_left } = planValidity(stored.plan, localDay());
+  // 展示字段裁剪（副本，不动存储）：42 课次满额 note/intensity 的原始载荷会越过
+  // 16k 截断线，截断标记会把 JSON 从中间切坏——模型后续调整就失去了整体重发基准
+  const sessions = stored.plan.sessions.map((s) => ({
+    ...s,
+    intensity: s.intensity ? s.intensity.slice(0, 40) : null,
+    note: s.note ? s.note.slice(0, 60) : null,
+  }));
+  return toResult(
+    {
+      has_plan: true,
+      state,
+      days_left,
+      valid_from: stored.plan.valid_from,
+      valid_to: stored.plan.valid_to,
+      goal: stored.plan.goal,
+      origin: stored.origin,
+      created_at: stored.created_at,
+      sessions,
+    },
+    lang,
+  );
+};
+
+/**
+ * update_training_plan：调整后完整计划的落库入口（adjust 档确定性校验在此硬闸——
+ * 合理性违规返回 {ok:false, violations} 由模型向用户转述，不静默放过）。
+ * 只放行对话类调用（ctx.chat）：报告场景名与会话模式名都可能是 'plan'，
+ * 单看 source 分不出「plan 报告生成」和「plan 会话调整」，故用显式 chat 标记。
+ */
+const toolUpdateTrainingPlan: ToolImpl = async (args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  if (!ctx?.chat) return errResult(t(lang, 'tp.tool.report_source'));
+  const v = validateTrainingPlan(args?.plan, localDay(), 'adjust', lang);
+  if (!v.ok || !v.plan) return errResult(v.errors.join('；'));
+  if (v.violations.length) {
+    return toResult(
+      {
+        ok: false,
+        violations: v.violations.map((i) => formatPlanIssue(i, lang)),
+        hint: t(lang, 'tp.tool.adjust_hint'),
+      },
+      lang,
+    );
+  }
+  const note =
+    typeof args?.change_note === 'string' ? args.change_note.trim().slice(0, 200) || null : null;
+  const versionsTotal = await io.savePlanVersion(v.plan, {
+    origin: 'adjust',
+    change_note: note,
+    warnings: [],
+  });
+  return toResult(
+    {
+      ok: true,
+      versions_total: versionsTotal,
+      valid_from: v.plan.valid_from,
+      valid_to: v.plan.valid_to,
+      sessions: v.plan.sessions.length,
+      note,
+    },
+    lang,
+  );
+};
+
 /** set_power_flag：标记/取消「功率不可信」（可逆；绑定层负责档案重建） */
 const toolSetPowerFlag: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
@@ -316,6 +405,8 @@ const TOOL_IMPL: Record<string, ToolImpl> = {
   generate_workout: toolGenerateWorkout,
   save_memory: toolSaveMemory,
   get_dossier: toolGetDossier,
+  get_training_plan: toolGetTrainingPlan,
+  update_training_plan: toolUpdateTrainingPlan,
   set_power_flag: toolSetPowerFlag,
   recalibrate_activity_power: toolRecalibratePower,
   update_ftp: toolUpdateFtp,
@@ -336,7 +427,7 @@ export function createExecuteTool(io: ToolIo, base: ToolCallContext = {}): Execu
     const impl = TOOL_IMPL[name];
     if (!impl) return errResult(t(lang, 'tool.unknown', { name }));
     try {
-      return await impl(args ?? {}, { source: base?.source, lang: base?.lang }, io);
+      return await impl(args ?? {}, { source: base?.source, lang: base?.lang, chat: base?.chat }, io);
     } catch (e) {
       return errResult(t(lang, 'tool.failed', { msg: e instanceof Error ? e.message : String(e) }));
     }

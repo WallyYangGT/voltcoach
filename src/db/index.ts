@@ -27,7 +27,8 @@ import type { CyclingRideInput } from '@/core/ftp';
 import { t, type Lang } from '@/core/i18n';
 import { isShortMemoryExpired, type MemoryScope } from '@/core/memory';
 import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
-import { ATHLETE, AI_CONFIG, FTP_ESTIMATION, type AiConfig, type AthleteParams } from '@/core/settings';
+import { ATHLETE, AI_CONFIG, FTP_ESTIMATION, PLAN_VALIDATION, type AiConfig, type AthleteParams } from '@/core/settings';
+import type { PlanIssue, TrainingPlan } from '@/core/training-plan';
 import { migrationsFor, SCHEMA_VERSION } from './migrations';
 
 // 供编排层/设置页引用的配置类型（db 层是 AiConfig 的存取入口，re-export 同源导出）
@@ -1133,7 +1134,8 @@ export async function listPendingAiReportRefs(): Promise<
 
 // ---------------- AI 对话（ai_chats / ai_chat_messages，追问与直接对话统一，M3） ----------------
 
-export type AiChatMode = 'follow_up' | 'chat';
+/** mode：follow_up 报告追问 / chat 直接对话 / plan 训练计划会话（v2，锚定当前计划而非活动，file_name/report_id 恒空） */
+export type AiChatMode = 'follow_up' | 'chat' | 'plan';
 
 // 每个 mode 滚动保留的对话数上限（沿用 ai_reports 的 id DESC LIMIT 清理模式）
 const AI_CHAT_KEEP = 50;
@@ -1337,6 +1339,19 @@ export async function findFollowUpChat(reportId: number): Promise<number | null>
     `SELECT id FROM ai_chats WHERE mode = 'follow_up' AND report_id = ?
      ORDER BY id DESC LIMIT 1`,
     reportId,
+  );
+  return row?.id ?? null;
+}
+
+/**
+ * 最新的训练计划会话 id（计划页底部追问窗口用）：计划会话不锚定活动/报告，
+ * 跨计划版本存活（调整产生新版本后同一会话继续），全局只有一条活跃线程，
+ * 滚动清理按 mode 独立计数不会误删。没有返回 null。
+ */
+export async function findPlanChat(): Promise<number | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ id: number }>(
+    `SELECT id FROM ai_chats WHERE mode = 'plan' ORDER BY id DESC LIMIT 1`,
   );
   return row?.id ?? null;
 }
@@ -1623,4 +1638,132 @@ export async function rebuildDossierQuietly(): Promise<void> {
   } finally {
     dossierRolling = false;
   }
+}
+
+// ---------------- 结构化训练计划（settings 表 training_plan / training_plan_history 行，v2 训练计划载体） ----------------
+//
+// 存储拍板（decisions §19）：单逻辑文档 + 版本历史，无 SQL 级查询需求——settings JSON 行
+// 而非新表（dossier 先例），不动 SCHEMA_VERSION；settings 是通用 KV，备份整库拷贝透明携带，
+// 旧版 App 忽略未知键，新备份仍可被旧版导入（新表方案会让备份包版本闸门拒收旧版）。
+// 结构演进靠 shape 递增（同 dossier 的 code-review P2-4 口径）。
+
+const PLAN_STORE_SHAPE = 1;
+const PLAN_CURRENT_KEY = 'training_plan';
+const PLAN_HISTORY_KEY = 'training_plan_history';
+
+/** 已入库的一版计划（plan 已过 validateTrainingPlan 并回填 TSS；warnings 随版存档供展示） */
+export interface StoredPlan {
+  plan: TrainingPlan;
+  created_at: string; // 入库时刻 ISO 串（展示用）
+  origin: 'generate' | 'adjust'; // 周期规划生成 / 会话调整
+  source_report_id: number | null; // generate：来源 plan 报告 id（计划页「查看生成报告」跳转）
+  change_note: string | null; // adjust：模型给出的变更说明
+  warnings: PlanIssue[]; // 入库时的合理性提示（adjust 档恒为空）
+}
+
+/** 当前计划行（热键只放当前版本，历史走独立冷键隔离读放大） */
+interface PlanCurrentEntry {
+  shape: number;
+  current: StoredPlan;
+}
+
+/** 历史版本行（versions[0] 最近被替换的版本，上限 PLAN_VALIDATION.history_keep） */
+interface PlanHistoryEntry {
+  shape: number;
+  versions: StoredPlan[];
+}
+
+const parseStoredPlan = (v: unknown): StoredPlan | null => {
+  const p = v as StoredPlan | null;
+  return p && typeof p === 'object' && p.plan && Array.isArray(p.plan.sessions) ? p : null;
+};
+
+/**
+ * 当前训练计划（首页卡 / 计划页 / get_training_plan 工具共用入口）。
+ * 无计划或行损坏（shape 不符/结构缺失）返回 null——损坏按无计划处理，
+ * 下一次生成/调整会覆盖写入，自愈。
+ */
+export async function getCurrentPlan(): Promise<StoredPlan | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`,
+    PLAN_CURRENT_KEY,
+  );
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.value) as PlanCurrentEntry;
+    if (parsed?.shape === PLAN_STORE_SHAPE) return parseStoredPlan(parsed.current);
+  } catch {
+    // 行损坏按无计划处理
+  }
+  return null;
+}
+
+/** 计划版本历史（新序在前，只含被替换的旧版本，不含当前版；无/损坏返回空数组） */
+export async function getPlanHistory(): Promise<StoredPlan[]> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`,
+    PLAN_HISTORY_KEY,
+  );
+  if (!row) return [];
+  try {
+    const parsed = JSON.parse(row.value) as PlanHistoryEntry;
+    if (parsed?.shape === PLAN_STORE_SHAPE && Array.isArray(parsed.versions)) {
+      return parsed.versions.map(parseStoredPlan).filter((v): v is StoredPlan => v != null);
+    }
+  } catch {
+    // 行损坏按无历史处理
+  }
+  return [];
+}
+
+/**
+ * 落一版计划：写当前行；已有当前版则先挪入历史头部（裁剪到 PLAN_VALIDATION.history_keep）。
+ * 调用方负责先过 validateTrainingPlan（generate 钩子 / update_training_plan 工具），本层不重校验。
+ * 返回落地后的总版本数（当前 1 + 历史条数，UI「第 N 版」用）。
+ */
+export async function savePlanVersion(
+  plan: TrainingPlan,
+  meta: {
+    origin: 'generate' | 'adjust';
+    source_report_id?: number | null;
+    change_note?: string | null;
+    warnings?: PlanIssue[];
+  },
+): Promise<number> {
+  const db = await getDb();
+  const entry: StoredPlan = {
+    plan,
+    created_at: new Date().toISOString(),
+    origin: meta.origin,
+    source_report_id: meta.source_report_id ?? null,
+    change_note: meta.change_note ?? null,
+    warnings: meta.warnings ?? [],
+  };
+  // 事务包住「旧版挪历史 + 写当前」两步：进程中断在中途会留下当前版同时出现在
+  // history[0] 的重复版本（code-review P3），事务内读写保证原子
+  let versionsTotal = 1;
+  await db.withTransactionAsync(async () => {
+    const [current, history] = await Promise.all([getCurrentPlan(), getPlanHistory()]);
+    const versions = current
+      ? [current, ...history].slice(0, PLAN_VALIDATION.history_keep)
+      : history;
+    if (current) {
+      await db.runAsync(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        PLAN_HISTORY_KEY,
+        JSON.stringify({ shape: PLAN_STORE_SHAPE, versions } satisfies PlanHistoryEntry),
+      );
+    }
+    await db.runAsync(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      PLAN_CURRENT_KEY,
+      JSON.stringify({ shape: PLAN_STORE_SHAPE, current: entry } satisfies PlanCurrentEntry),
+    );
+    versionsTotal = 1 + versions.length;
+  });
+  return versionsTotal;
 }

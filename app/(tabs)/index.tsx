@@ -1,9 +1,11 @@
 /**
- * 首页仪表盘（M2）：CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练。
+ * 首页仪表盘（M2）：CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 本周训练计划卡 +
+ * 月度汇总 + 最近训练；右下角对话快捷 FAB（直达 /ai/session/chat-new）。
  * 移植自 Web 版 views/dashboard.js：hero 瓦片/趋势/月度/最近训练同在首页（Web 版即此
  * 信息架构），App 侧空库引导语按移动端信息架构改指「训练」tab。数据一次并行取齐：
  * recentFormDaily(90)（趋势图与 hero 大数字同源，序列末端已延伸到今天）/ monthlySummary(6) /
- * listActivities(6)；FTP 科学估算面板见 FtpEstimatePanel（dash.ftp_btn 入口）。
+ * listActivities(6) / getAiConfig（训练计划卡与对话 FAB 共用的「已配置 Key」门）；
+ * FTP 科学估算面板见 FtpEstimatePanel（dash.ftp_btn 入口）。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
@@ -15,6 +17,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { FAB } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { TrendChart, type TrendPoint } from '@/charts/TrendChart';
@@ -24,6 +27,7 @@ import type { MonthlyItem } from '@/core/monthly';
 import { ATHLETE, type AthleteParams } from '@/core/settings';
 import {
   ActivityListItem,
+  getAiConfig,
   getEffectiveAthlete,
   listActivities,
   monthlySummary,
@@ -31,6 +35,7 @@ import {
 } from '@/db';
 import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
+import { WeeklyPlanCard } from '@/components/WeeklyPlanCard';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -50,16 +55,20 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [ftpOpen, setFtpOpen] = useState(false); // FTP 科学估算面板展开态（dash.ftp_btn）
   const [glossOpen, setGlossOpen] = useState(false); // 指标说明弹窗（标题旁「?」）
+  // LLM Key 已配置（训练计划卡自加载，此处只喂对话 FAB；null=加载中不渲染防闪）
+  const [configured, setConfigured] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [athlete, daily, monthly, recent] = await Promise.all([
+      const [athlete, daily, monthly, recent, cfg] = await Promise.all([
         getEffectiveAthlete(),
         recentFormDaily(90),
         monthlySummary(6),
         listActivities(6),
+        getAiConfig(),
       ]);
       setData({ athlete, daily, monthly, recent });
+      setConfigured(cfg.configured);
     } catch (e) {
       console.warn('仪表盘加载失败:', e);
       setData({ athlete: ATHLETE, daily: [], monthly: [], recent: [] });
@@ -76,10 +85,11 @@ export default function HomeScreen() {
   const last = data && data.daily.length ? data.daily[data.daily.length - 1] : null;
 
   return (
-    <ScrollView
-      style={styles.page}
-      contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 96, gap: 12 }}
-      refreshControl={
+    <View style={styles.root}>
+      <ScrollView
+        style={styles.page}
+        contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 96, gap: 12 }}
+        refreshControl={
         <RefreshControl
           refreshing={refreshing}
           tintColor={palette.muted}
@@ -150,6 +160,9 @@ export default function HomeScreen() {
         </View>
       )}
 
+      {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏） */}
+      <WeeklyPlanCard />
+
       {/* 月度汇总（自然月倒序，最多 6 个月） */}
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>{t('dash.monthly')}</Text>
@@ -198,7 +211,19 @@ export default function HomeScreen() {
 
       {/* 指标说明弹窗（Web 版 glossaryHtml 同源词条） */}
       <GlossaryModal visible={glossOpen} onClose={() => setGlossOpen(false)} />
-    </ScrollView>
+      </ScrollView>
+
+      {/* 对话快捷 FAB（activities 页导入 FAB 同款）：直达 /ai/session/chat-new，
+          与底部 AI tab 的「新对话」同一目标页——纯加速入口非替代；未配置 Key 隐藏 */}
+      {configured === true && (
+        <FAB
+          icon="chat"
+          color={palette.bg}
+          style={styles.fab}
+          onPress={() => router.push('/ai/session/chat-new')}
+        />
+      )}
+    </View>
   );
 }
 
@@ -264,7 +289,9 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: palette.bg },
   page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
+  fab: { position: 'absolute', right: 16, bottom: 16, backgroundColor: palette.volt },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: palette.text, fontSize: 22, fontWeight: '700' },
   glossBtn: {

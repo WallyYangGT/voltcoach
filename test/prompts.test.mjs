@@ -302,11 +302,14 @@ test('复盘提示词注入档案段（新末参，缺省不影响旧调用）',
   assert.ok(withDossier.indexOf('个人训练档案') < withDossier.indexOf('## 训练数据'));
 });
 
-test('agentic 工具指引段：11 个工具与 6 条规则（含 FTP 更新/重新分析）', () => {
+test('agentic 工具指引段：16 个工具与 6 条规则（含 FTP 更新/重新分析/训练计划）', () => {
   const s = buildAgenticSection('zh');
-  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'set_power_flag', 'recalibrate_activity_power']) {
+  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'get_training_plan', 'update_training_plan', 'set_power_flag', 'recalibrate_activity_power']) {
     assert.ok(s.includes(`- ${name}：`), name);
   }
+  // update_training_plan 的「整体重发」约束须在指引段硬性出现（follow_up 不注 skills，
+  // 工具清单是该场景唯一的约束来源——code-review P2-1）
+  assert.match(s, /必须整体重发全部课次/);
   assert.match(s, /1\. 只在上方预装数据不足以回答时才调用工具/);
   assert.match(s, /4\. 需要先调用工具时，中间轮只写简短过渡语/);
   // 新增规则：主动更新须在回答中指出旧值→新值；重新分析后说明指标变化
@@ -318,11 +321,14 @@ test('agentic 工具指引段：11 个工具与 6 条规则（含 FTP 更新/重
   assert.match(en, /5\. FTP auto-update/);
   assert.match(en, /"FTP has been updated from X to Y"/);
   assert.match(en, /6\. Re-analysis/);
+  assert.match(en, /ALWAYS resend every session/);
 });
 
 test('对话指令与当前时间段：双语切换', () => {
   assert.match(buildChatInstruction('follow_up', 'zh'), /每次回答控制在 200 字以内/);
   assert.match(buildChatInstruction('chat', 'zh'), /你是用户的随身 AI 训练顾问/);
+  assert.match(buildChatInstruction('plan', 'zh'), /训练计划」对话中/);
+  assert.match(buildChatInstruction('plan', 'zh'), /update_training_plan/);
   assert.match(buildChatInstruction('follow_up', 'en'), /within 200 characters/);
   assert.match(buildDateSection(new Date('2026-03-26T10:00:00'), 'zh'), /今天是 2026-03-26/);
   assert.match(buildDateSection(new Date('2026-03-26T10:00:00'), 'en'), /2026-03-26/);
@@ -378,6 +384,27 @@ test('对话系统段（chat）：角色 + 口径 + 当前时间 + skills + prof
   assert.match(s, /（暂无记忆——/); // 无记忆也注入空态，保持 save_memory 指引
 });
 
+test('对话系统段（plan）：与 chat 同构（角色/口径/skills/profile），指令为计划会话口径', () => {
+  const s = buildChatSystemSection(
+    {
+      mode: 'plan',
+      agentic: true,
+      athlete: ATHLETE,
+      profile: null,
+      skills: '## 专业知识库\n\n### 技能甲\n\n内容',
+      memories: [],
+      now: new Date('2026-03-26T10:00:00'),
+    },
+    'zh',
+  );
+  assert.match(s, /^## 角色/);
+  assert.match(s, /## 专业知识库/); // plan 会话注入 skills（同 chat）
+  assert.match(s, /训练计划」对话中/); // 计划会话专属指令
+  assert.match(s, /get_training_plan/);
+  assert.match(s, /update_training_plan/);
+  assert.doesNotMatch(s, /训练分析报告：/); // 无 follow_up 的报告正文段
+});
+
 test('对话系统段：agentic 关闭时无工具指引与记忆段', () => {
   const s = buildChatSystemSection(
     { mode: 'chat', agentic: false, athlete: ATHLETE, profile: null, skills: null, memories: [], now: new Date() },
@@ -385,6 +412,22 @@ test('对话系统段：agentic 关闭时无工具指引与记忆段', () => {
   );
   assert.doesNotMatch(s, /## 数据查询与计算工具/);
   assert.doesNotMatch(s, /## 用户记忆/);
+});
+
+test('周期规划提示词：既有计划处理段 + plan-json 输出格式段（双语，v2 计划载体）', () => {
+  const data = { months: [], formSeries: [], recentActivities: [] };
+  const zh = buildPlanPrompt(data, ATHLETE, null, null, 'zh', new Date('2026-03-26T10:00:00'));
+  assert.match(zh, /## 既有计划处理/);
+  assert.match(zh, /get_training_plan/);
+  assert.match(zh, /「续订」还是「替换」/);
+  assert.match(zh, /## 计划输出格式（硬性要求）/);
+  assert.match(zh, /```plan-json/); // 示例骨架围栏
+  assert.match(zh, /一天至多一课/);
+  assert.match(zh, /减量周/);
+  const en = buildPlanPrompt(data, ATHLETE, null, null, 'en', new Date('2026-03-26T10:00:00'));
+  assert.match(en, /## Handling an Existing Plan/);
+  assert.match(en, /## Plan Output Format \(mandatory\)/);
+  assert.match(en, /at most one session per day/);
 });
 
 test('英文复盘提示词：角色/口径/时间/问题全英', () => {

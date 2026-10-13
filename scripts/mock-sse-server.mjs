@@ -21,6 +21,10 @@
  *   MOCK_TOOL_SCRIPT=ftp —— M5 FTP 剧本：estimate_ftp → update_ftp → reanalyze_activity
  *   （目标文件用 MOCK_REANALYZE_FILE=<file_name> 指定）三轮工具后回正文，
  *   用于「AI 更新 FTP + 重新分析」端到端冒烟。
+ *   MOCK_TOOL_SCRIPT=plan —— v2 计划剧本：get_training_plan → 末轮正文附
+ *   ```plan-json 块（3 周基础期，过 App 侧确定性校验），用于「周期规划 → 计划落库」冒烟。
+ *   MOCK_TOOL_SCRIPT=plan_adjust —— 计划会话调整剧本：get_training_plan →
+ *   update_training_plan 整体重发（阈值课顺延一天）→ 正文确认，用于「计划调整 → 新版本」冒烟。
  *   MOCK_ECHO_PROMPT=1 —— 正文请求改为回显收到的最后一条 user 消息前 600 字符
  *   （前缀 [ECHO]），用于冒烟断言提示词里确实注入了新段落（如训练档案/策略段）
  *   —— mock 只回它"看到"的，App 侧报告正文即请求侧 prompt 的镜像。
@@ -50,6 +54,47 @@ const REANALYZE_FILE = process.env.MOCK_REANALYZE_FILE || '';
 const FTP_REPLY =
   '已检查你的 FTP 数据：窗口内骑行功率-心率交叉验证通过，' +
   'FTP 已按当前最佳估算更新，并已对目标训练按新参数重新分析，TSS 与区间分布已对齐。';
+
+// 计划剧本（MOCK_TOOL_SCRIPT=plan / plan_adjust）的夹具：以"今天"为锚构造 3 周窗口
+// （3–42 天、覆盖未来），质量课间隔 ≥2 天、每周有休息日——须过 App 侧 create/adjust 校验
+const planDay = (offset) =>
+  new Date(Date.parse(new Date().toISOString().slice(0, 10) + 'T00:00:00Z') + offset * 86400000)
+    .toISOString()
+    .slice(0, 10);
+const pSession = (offset, type, duration_min = null, tss = null, note = null) => ({
+  date: planDay(offset),
+  type,
+  duration_min,
+  intensity: type === 'rest' ? null : '按 %FTP 区间',
+  tss,
+  note,
+});
+const mockPlanJson = (thresholdOffset) => ({
+  valid_from: planDay(1),
+  valid_to: planDay(21),
+  goal: '基础期：有氧量与踏频稳定性（mock 冒烟计划）',
+  sessions: [
+    pSession(thresholdOffset, 'threshold', 75, 85, '3×12min 阈值，组间 5min'),
+    pSession(3, 'rest', null, 0, '休息日'),
+    pSession(4, 'endurance', 90, null, '有氧耐力'),
+    pSession(6, 'rest', null, 0, '休息日'),
+    pSession(8, 'sweet_spot', 60, null, '甜区 2×15min'),
+    pSession(10, 'rest', null, 0, '休息日'),
+    pSession(11, 'endurance', 120, null, '长骑'),
+    pSession(13, 'rest', null, 0, '休息日'),
+    pSession(15, 'vo2max', 45, null, 'VO2max 5×3min'),
+    pSession(17, 'rest', null, 0, '休息日'),
+    pSession(18, 'endurance', 90, null, '有氧耐力（减量周）'),
+    pSession(20, 'rest', null, 0, '休息日'),
+  ],
+});
+const PLAN_REPLY = () =>
+  '## 本周期计划（基础期 3 周）\n\n' +
+  '已结合近期负荷走势生成 3 周基础期计划：周节奏为 1 节质量课 + 有氧骑行 + 休息日，' +
+  '第三周减量。结构化课表见下方数据块。\n\n' +
+  '```plan-json\n' + JSON.stringify(mockPlanJson(1)) + '\n```';
+const ADJUST_REPLY =
+  '已把周一的阈值课顺延到周二（其余课次不变，质量课间隔仍满足 ≥48h），新版本已保存，可在计划页查看。';
 let contentCalls = 0; // 正文请求计数（tool_call 演练轮不计入）
 
 const server = http.createServer((req, res) => {
@@ -68,9 +113,10 @@ const server = http.createServer((req, res) => {
     const stream = parsed.stream === true;
     console.log(`[${new Date().toISOString()}] POST ${req.url} stream=${stream} msgs=${parsed.messages?.length ?? 0}`);
 
-    // agentic 首轮（带 tools 且只有系统段/首条消息）→ 下发一次 save_memory 工具调用
+    // agentic 首轮（带 tools 且只有系统段/首条消息）→ 下发一次 save_memory 工具调用。
+    // 带 TOOL_SCRIPT 剧本时让位：剧本按 role:"tool" 消息数推进，首轮被抢会错位
     const userMsgs = (parsed.messages ?? []).filter((m) => m.role === 'user' || m.role === 'assistant');
-    if (!stream && Array.isArray(parsed.tools) && parsed.tools.length > 0 && userMsgs.length === 1) {
+    if (!TOOL_SCRIPT && !stream && Array.isArray(parsed.tools) && parsed.tools.length > 0 && userMsgs.length === 1) {
       console.log('  -> mock issue save_memory tool_call (agent loop drill)');
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
@@ -96,6 +142,70 @@ const server = http.createServer((req, res) => {
               finish_reason: 'tool_calls',
             },
           ],
+        }),
+      );
+      return;
+    }
+
+    // 计划剧本（MOCK_TOOL_SCRIPT=plan / plan_adjust）：按历史中 role:"tool" 消息数确定轮次
+    if (
+      !stream &&
+      (TOOL_SCRIPT === 'plan' || TOOL_SCRIPT === 'plan_adjust') &&
+      Array.isArray(parsed.tools) &&
+      parsed.tools.length > 0
+    ) {
+      const toolMsgCount = (parsed.messages ?? []).filter((m) => m.role === 'tool').length;
+      const steps =
+        TOOL_SCRIPT === 'plan'
+          ? [{ name: 'get_training_plan', args: {} }]
+          : [
+              { name: 'get_training_plan', args: {} },
+              {
+                name: 'update_training_plan',
+                args: {
+                  plan: mockPlanJson(2), // 阈值课 d1→d2（顺延一天），其余不变
+                  change_note: '周一阈值课顺延至周二',
+                },
+              },
+            ];
+      if (toolMsgCount < steps.length) {
+        const step = steps[toolMsgCount];
+        console.log(`  -> mock script ${TOOL_SCRIPT}: issue ${step.name} (round ${toolMsgCount + 1})`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            id: `mock-plan-${toolMsgCount}`,
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: `mock-plan-call-${toolMsgCount}`,
+                      type: 'function',
+                      function: { name: step.name, arguments: JSON.stringify(step.args) },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      // 剧本工具用尽 → 正文回复（plan 末轮附 plan-json 块，供 App 提取落库）
+      const reply = TOOL_SCRIPT === 'plan' ? PLAN_REPLY() : ADJUST_REPLY;
+      console.log(`  -> mock script ${TOOL_SCRIPT}: final reply`);
+      contentCalls += 1;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          id: `mock-${TOOL_SCRIPT}-final`,
+          choices: [{ index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
         }),
       );
       return;

@@ -45,6 +45,10 @@ const TOOL_TEXT: Record<Lang, Record<string, string>> = {
     'save_memory.scope': '记忆时效：short = 短期（超过一周或 3 次训练自动失效，适合临时上下文）；不传默认 long 长期',
     'save_memory.supersedes_id': '取代某条旧记忆的 id（注入的记忆清单中有 #id 标注），同主题更新时使用',
     get_dossier: '取个人训练档案（本地自动汇总的长期基线）：峰功率历史最佳与近 90 天、爬坡画像（坡度/强度/心率中位）、踏频风格占比、90 天强度结构、近 8 周负荷与心率漂移基线。评估进步/退步、定计划或讨论爬坡/踏频技术策略前先取它作对照，不要凭单次数据下长期结论。',
+    get_training_plan: '取当前结构化训练计划：有效期（valid_from–valid_to 与剩余天数）、目标、逐课次安排（日期/课型/时长/强度区间/TSS/要点）。讨论计划、复盘执行对比、或周期规划生成新计划前先调用——存在现行或过期计划时按续订或替换处理并说明差异，不要无视既有计划直接重开。',
+    update_training_plan: '提交调整后的完整训练计划（整体替换并生成新版本，旧版留档可回看）。仅用于用户明确要求调整时（换课/减量/顺延/加练）；会做格式与合理性校验（质量课间隔 ≥48h、每周休息日、减量周节奏、有效期覆盖未来），不通过返回具体原因——向用户解释原因并给合规替代方案，不要提交明知违规的计划，也不要只提交改动片段（必须整体重发）。',
+    'update_training_plan.plan': '完整计划对象：{valid_from, valid_to, goal, sessions:[{date, type, duration_min, intensity, tss, note}]}。type ∈ rest/recovery/endurance/long/sweet_spot/threshold/vo2max；rest 课 duration_min 留空；tss 可省略（按课型×时长估算回填）；一天至多一课',
+    'update_training_plan.change_note': '一句话变更说明（如「周四阈值课顺延至周五」），记入版本历史供回看',
     set_power_flag: '标记/取消某次骑行的「功率不可信」：功率计未校准、读数明显失真时使用（如 20 分钟峰功率无解释地大幅突进且心率无对应响应）。被标记的骑行会从训练档案的功率基线中排除（心率与时长仍保留），档案随之自动更新。可逆：误标可再次调用（flagged=false）取消。',
     'set_power_flag.file_name': '训练文件名（list_activities 返回的 file_name）',
     'set_power_flag.flagged': 'true = 标记为功率不可信；false = 取消标记',
@@ -91,6 +95,10 @@ const TOOL_TEXT: Record<Lang, Record<string, string>> = {
     'save_memory.scope': "Memory freshness: short = short-term (auto-expires after one week or 3 activities; for temporary context); omit for long (default)",
     'save_memory.supersedes_id': "id of an old memory to supersede (ids are #annotated in the injected memory list); use when updating the same topic",
     get_dossier: "Fetch the athlete dossier (auto-aggregated long-term baseline): all-time and 90-day peak power, climb profile (median grade/intensity/HR), cadence style shares, 90-day intensity structure, last-8-weeks load and HR-drift baseline. Consult it before judging progress, planning, or discussing climbing/cadence technique — never draw long-term conclusions from a single ride.",
+    get_training_plan: "Fetch the current structured training plan: validity window (valid_from–valid_to and days remaining), goal, and per-session layout (date/type/duration/intensity zone/TSS/notes). Call it before discussing the plan, comparing execution, or generating a new plan in periodic planning — when a current or expired plan exists, renew or replace it and state the differences; never ignore the existing plan and start over.",
+    update_training_plan: "Submit the FULLY adjusted training plan (replaces wholesale and creates a new version; old versions are kept for review). Only for explicit user adjustment requests (swap sessions / reduce load / shift days / add work). It runs format and sanity checks (quality-session spacing ≥48h, weekly rest days, recovery-week rhythm, validity covering the future) and returns concrete reasons on failure — explain them to the user and offer a compliant alternative; never submit a plan you know violates the rules, and never send only a diff (always resend the whole plan).",
+    'update_training_plan.plan': 'Full plan object: {valid_from, valid_to, goal, sessions:[{date, type, duration_min, intensity, tss, note}]}. type ∈ rest/recovery/endurance/long/sweet_spot/threshold/vo2max; leave duration_min empty for rest sessions; tss may be omitted (estimated from type × duration); at most one session per day',
+    'update_training_plan.change_note': 'One-line change summary (e.g. "Thursday threshold moved to Friday"), recorded in the version history',
     set_power_flag: "Flag/unflag a ride as power-untrusted: use when the power meter was uncalibrated or readings are clearly distorted (e.g. an unexplained 20-min peak jump with no HR response). Flagged rides are excluded from the dossier's power baselines (HR and duration are kept) and the dossier updates automatically. Reversible: call again with flagged=false to unflag.",
     'set_power_flag.file_name': 'Activity file name (file_name from list_activities)',
     'set_power_flag.flagged': 'true = flag as power-untrusted; false = clear the flag',
@@ -300,6 +308,30 @@ export function toolDefs(lang: Lang = 'zh'): ToolDef[] {
         name: 'get_dossier',
         description: L('get_dossier'),
         parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_training_plan',
+        description: L('get_training_plan'),
+        // 零参：计划全局只有一份当前版
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_training_plan',
+        description: L('update_training_plan'),
+        parameters: {
+          type: 'object',
+          properties: {
+            plan: { type: 'object', description: L('update_training_plan.plan') },
+            change_note: { type: 'string', description: L('update_training_plan.change_note') },
+          },
+          required: ['plan'],
+        },
       },
     },
     {

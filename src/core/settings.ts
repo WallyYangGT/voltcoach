@@ -164,6 +164,20 @@ export const FORM_SIMULATION = {
   tsb_recovery: -20, // generateWorkout 中 TSB 低于该值自动降级为恢复课
 };
 
+// ============ 结构化训练计划校验（v2 训练计划载体，src/core/training-plan） ============
+// 阈值口径与 src/prompts/skills/05-weekly-planning 技能一致（代码单源，技能为知识层文本，
+// 改阈值须两处同步评审）；history_keep 供 db 层版本历史裁剪。
+export const PLAN_VALIDATION = {
+  max_window_days: 42, // 计划窗上限：结构化课表覆盖 ≤6 周（05 技能中期方向 4–8 周，课表层取窄）
+  min_window_days: 3, // 计划窗下限：少于 3 天不构成「计划」
+  from_max_past_days: 7, // valid_from 允许早于今天的最大天数（模型日期笔误的容错窗）
+  quality_gap_days: 2, // 质量课最小日期间隔（「≥48h」的日粒度口径：相邻质量课间隔 ≥2 天为过）
+  recovery_week_ratio: 0.7, // 减量周判定：周计划 TSS ≤ 窗内最大周 × 该系数（05 技能：减量 30–50%）
+  recovery_window_weeks: 4, // 减量节奏：任 N 连周须含一个减量周（05 技能：每 3–4 周）
+  week_min_covered_days: 5, // 自然周「须含休息日」检查的最小窗内覆盖天数（窗边残周不查）
+  history_keep: 10, // 计划版本历史上限（db 层 training_plan_history 裁剪）
+};
+
 // ============ 单次课表模板（M3 src/planning generateWorkout 使用） ============
 // 功率按 FTP 百分比；时长单位分钟；TSS 估算按各段 时长秒 × IF² / 36 逐段求和
 export interface WorkoutTemplate {
