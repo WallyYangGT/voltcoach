@@ -90,6 +90,18 @@ cd .. && npm run check:apk
 | 变体 | 构建方式 | 差异 |
 |---|---|---|
 | arm64 包（**CI 发版默认**，2026-10-11 起） | `./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a` | 只含 arm64-v8a，约 55MB；现代安卓手机均可装 |
-| 通用包（本地自建可选） | `./gradlew assembleRelease` | 含全部四套 ABI（arm64-v8a / armeabi-v7a / x86 / x86_64），约 140MB；仅老 32 位 ARM 设备与 x86 模拟器需要 |
+| 通用包（逃生口） | `VOLTCOACH_UNIVERSAL_APK=1 ./gradlew assembleRelease` | 含全部四套 ABI，约 140MB；仅老 32 位 ARM 设备与 x86 模拟器需要。2026-10-14 起 release 构建默认经补丁脚本强制 arm64（见下），通用包须显式用本环境变量跳过 |
 
-两变体除 ABI 集合外无任何差异。发版流水线固定打 arm64 包（体积减半，老 32 位设备不在支持范围——arm64-v8a 自 Android 5.1 起为主流，纯 32 位机型已属边缘）；确需覆盖老设备或 x86 模拟器时按上表本地自建通用包。
+release 的 arm64-only 由 `scripts/patch-release-signing.mjs` 在 prebuild 后注入（`ndk.abiFilters`），CI 的 `-PreactNativeArchitectures=arm64-v8a` 与其同口径双保险；debug 构建不受影响（模拟器 x86_64 冒烟可用）。
+
+## 本地测试包（beta 变体，2026-10-14 起）
+
+单机用户要在**正常使用正式版的同时**侧载测试预发版：`buildTypes.beta`（`scripts/patch-release-signing.mjs` 注入）提供独立包名 `net.wallygood.voltcoach.app.beta`（桌面名「VoltCoach β」，`src/beta/res` 覆盖 app_name），与正式版**并存共存**——签名冲突、versionCode、数据（训练库/AI Key 均独立沙箱）互不影响，debug 签名即可（独立包名无需正式证书）。
+
+```bash
+npx expo prebuild --platform android --no-install
+node scripts/patch-release-signing.mjs
+cd android && ./gradlew assembleBeta -PreactNativeArchitectures=arm64-v8a
+```
+
+产物 `android/app/build/outputs/apk/beta/app-beta.apk`（release 同款运行时：JS 内联、非 debuggable、minify 同 release）。注意：beta 沙箱是全新的——AI Key 需在 β 应用内单独配置；想用真实数据测试可从正式版导出 `.fitbackup` 再导入 β。模拟器冒烟用 x86_64：`VOLTCOACH_UNIVERSAL_APK=1 ./gradlew assembleBeta -PreactNativeArchitectures=x86_64`。
