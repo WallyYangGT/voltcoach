@@ -106,7 +106,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'sync.keepalive_channel': '数据同步',
     // ---- 编排层消息（src/services/aiGenerate，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'srv.ai_key_missing': '未配置 AI 密钥（设置页可配），无法使用对话',
-    'srv.mode_invalid': 'mode 需为 follow_up/chat',
+    'srv.mode_invalid': 'mode 需为 follow_up/chat/plan',
     'srv.message_empty': 'message 不能为空',
     'srv.message_too_long': 'message 过长（上限 {n} 字）',
     'srv.chat_id_invalid': 'chat_id 参数无效',
@@ -274,7 +274,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'sync.keepalive_body': 'Pulling training data from the cloud — you can leave the app',
     'sync.keepalive_channel': 'Data sync',
     'srv.ai_key_missing': 'No AI key configured (Settings page) — chat unavailable',
-    'srv.mode_invalid': 'mode must be follow_up/chat',
+    'srv.mode_invalid': 'mode must be follow_up/chat/plan',
     'srv.message_empty': 'message must not be empty',
     'srv.message_too_long': 'message too long (max {n} chars)',
     'srv.chat_id_invalid': 'invalid chat_id',

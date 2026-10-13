@@ -86,6 +86,12 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'chat.direct': `## 回答要求
 
 你是用户的随身 AI 训练顾问。回答务实简洁、结合训练库中的具体数据，不限字数；用户没有指明某次训练时，先用数据查询工具了解近期训练与负荷走势再作答，不要凭空猜测。`,
+    'chat.plan': `## 回答要求
+
+你正在「训练计划」对话中，围绕用户的周期化训练计划做答疑与调整。要求：
+- 解答前先用 get_training_plan 查看当前计划（有效期、逐课次安排），不要凭空猜测计划内容；
+- 用户要求调整计划（换课/减量/顺延等）时，把调整后的完整计划经 update_training_plan 提交：它会做确定性合理性校验（质量课间隔/休息日/减量周节奏），不通过会返回具体原因——如实向用户解释原因并给出合规的替代方案，不要口头承诺绕过校验的改法；
+- 调整被接受后向用户复述关键变化（动了哪些课次）；其余遵循直接对话口径（务实简洁、结合训练库数据）。`,
 
     'mem.head': `## 用户记忆`,
     'mem.rules_head': `规则：`,
@@ -226,6 +232,12 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     'chat.direct': `## Answer Requirements
 
 You are the user's personal AI training advisor. Answer pragmatically and concisely, grounded in concrete data from the training library, with no length limit; when the user does not name a specific workout, first use the data-query tools to review recent training and load trends before answering — never guess blindly.`,
+    'chat.plan': `## Answer Requirements
+
+You are in the "training plan" conversation, answering questions about and adjusting the user's periodic training plan. Requirements:
+- Before answering, fetch the current plan with get_training_plan (validity window, per-session layout) — never guess its content;
+- When the user asks for an adjustment (swap sessions / reduce load / shift days), submit the FULLY adjusted plan via update_training_plan: it runs deterministic sanity checks (quality-session spacing / rest days / recovery-week rhythm) and returns concrete reasons on failure — explain them honestly and offer a compliant alternative; never promise changes that bypass the checks;
+- After an accepted adjustment, recap the key changes (which sessions moved); otherwise follow the direct-conversation style (pragmatic, concise, grounded in library data).`,
 
     'mem.head': `## User Memory`,
     'mem.rules_head': `Rules:`,
@@ -451,10 +463,17 @@ ${rules}`;
  * 对话场景回答指令（对话系统段拼装用）：
  * - follow_up：报告追问的快问快答口径——≤200 字、结合具体数据、不分点罗列，
  *   工具查询过程不计入回答字数；
- * - chat：直接对话——务实简洁、结合数据，不限字数。
+ * - chat：直接对话——务实简洁、结合数据，不限字数；
+ * - plan：训练计划会话——先查计划再答疑、调整必须整体走 update_training_plan
+ *   过确定性校验、接受后复述关键变化（v2 训练计划载体）。
  */
-export function buildChatInstruction(mode: 'follow_up' | 'chat', lang: PromptLang = 'zh'): string {
-  return mode === 'follow_up' ? TT(lang, 'chat.followup') : TT(lang, 'chat.direct');
+export function buildChatInstruction(
+  mode: 'follow_up' | 'chat' | 'plan',
+  lang: PromptLang = 'zh',
+): string {
+  if (mode === 'follow_up') return TT(lang, 'chat.followup');
+  if (mode === 'plan') return TT(lang, 'chat.plan');
+  return TT(lang, 'chat.direct');
 }
 
 /**

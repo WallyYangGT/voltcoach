@@ -7,10 +7,11 @@
  * 无 IO，node:test 可直接断言结构。
  *
  * - follow_up：快答指令 + 当前时间 + 关联报告正文 + 关联训练压缩数据 + 训练档案段 + 工具指引 + 用户记忆段；
- * - chat：教练角色 + 指标口径 + 当前时间 + 专业知识库 + 用户背景 + 训练档案段 + 对话指令 + 工具指引 + 用户记忆段。
+ * - chat：教练角色 + 指标口径 + 当前时间 + 专业知识库 + 用户背景 + 训练档案段 + 对话指令 + 工具指引 + 用户记忆段；
+ * - plan：与 chat 同构，对话指令换成计划会话口径（先查计划/调整走 update_training_plan 过校验，v2 训练计划载体）。
  * 记忆段只在 agentic 模式注入——其中的 save_memory 指引依赖工具调用能力；
- * 训练档案段是本地确定性数据（非工具指引），两种模式都注入。
- * 专业知识库段只注入 chat 与四场景报告；follow_up 快答场景不注入。
+ * 训练档案段是本地确定性数据（非工具指引），各模式都注入。
+ * 专业知识库段只注入 chat/plan 与四场景报告；follow_up 快答场景不注入。
  */
 
 // 本模块进 node:test（L1 层），导入须用相对 .ts 路径（Node 原生跑 TS 不解析 tsconfig paths）
@@ -32,14 +33,14 @@ import {
 
 /** 对话系统段输入（数据由编排层取好注入） */
 export interface ChatSystemInput {
-  mode: 'follow_up' | 'chat';
+  mode: 'follow_up' | 'chat' | 'plan';
   /** agentic 开关（记忆段与工具指引仅开启时注入） */
   agentic: boolean;
   /** 生效骑手参数（指标口径段展示） */
   athlete: AthleteParams;
   /** 用户背景与训练目标（可空） */
   profile: PromptProfile | null;
-  /** 专业知识库段（buildSkillsSection 输出；仅 chat 注入，follow_up 不注入） */
+  /** 专业知识库段（buildSkillsSection 输出；chat/plan 注入，follow_up 不注入） */
   skills: string | null;
   /** 有效记忆清单（listMemories 输出，id DESC） */
   memories: PromptMemory[];
@@ -76,7 +77,7 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
     }
     return s;
   }
-  // chat：无报告上下文的直接对话，取数全靠 agentic 工具调用
+  // chat / plan：无报告上下文的直接对话（plan 额外带计划查询/调整指令），取数全靠 agentic 工具调用
   const parts = [
     lang === 'en' ? ROLE_EN : ROLE,
     buildMetricGlossary(athlete, lang),
@@ -84,7 +85,7 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
     skills,
     buildProfileSection(profile, lang),
     input.dossierSection ?? null,
-    buildChatInstruction('chat', lang),
+    buildChatInstruction(mode, lang),
   ].filter(Boolean) as string[];
   if (agentic) {
     parts.push(buildAgenticSection(lang));

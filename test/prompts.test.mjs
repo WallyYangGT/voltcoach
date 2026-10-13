@@ -323,6 +323,8 @@ test('agentic 工具指引段：11 个工具与 6 条规则（含 FTP 更新/重
 test('对话指令与当前时间段：双语切换', () => {
   assert.match(buildChatInstruction('follow_up', 'zh'), /每次回答控制在 200 字以内/);
   assert.match(buildChatInstruction('chat', 'zh'), /你是用户的随身 AI 训练顾问/);
+  assert.match(buildChatInstruction('plan', 'zh'), /训练计划」对话中/);
+  assert.match(buildChatInstruction('plan', 'zh'), /update_training_plan/);
   assert.match(buildChatInstruction('follow_up', 'en'), /within 200 characters/);
   assert.match(buildDateSection(new Date('2026-03-26T10:00:00'), 'zh'), /今天是 2026-03-26/);
   assert.match(buildDateSection(new Date('2026-03-26T10:00:00'), 'en'), /2026-03-26/);
@@ -376,6 +378,27 @@ test('对话系统段（chat）：角色 + 口径 + 当前时间 + skills + prof
   assert.match(s, /你是用户的随身 AI 训练顾问/);
   assert.match(s, /## 数据查询与计算工具/);
   assert.match(s, /（暂无记忆——/); // 无记忆也注入空态，保持 save_memory 指引
+});
+
+test('对话系统段（plan）：与 chat 同构（角色/口径/skills/profile），指令为计划会话口径', () => {
+  const s = buildChatSystemSection(
+    {
+      mode: 'plan',
+      agentic: true,
+      athlete: ATHLETE,
+      profile: null,
+      skills: '## 专业知识库\n\n### 技能甲\n\n内容',
+      memories: [],
+      now: new Date('2026-03-26T10:00:00'),
+    },
+    'zh',
+  );
+  assert.match(s, /^## 角色/);
+  assert.match(s, /## 专业知识库/); // plan 会话注入 skills（同 chat）
+  assert.match(s, /训练计划」对话中/); // 计划会话专属指令
+  assert.match(s, /get_training_plan/);
+  assert.match(s, /update_training_plan/);
+  assert.doesNotMatch(s, /训练分析报告：/); // 无 follow_up 的报告正文段
 });
 
 test('对话系统段：agentic 关闭时无工具指引与记忆段', () => {

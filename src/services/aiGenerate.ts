@@ -332,7 +332,7 @@ export async function submitChatMessage(
   lang: Lang = 'zh',
 ): Promise<{ chatId: number; messageId: number }> {
   await requireAiConfig(lang);
-  if (params.mode !== 'follow_up' && params.mode !== 'chat')
+  if (params.mode !== 'follow_up' && params.mode !== 'chat' && params.mode !== 'plan')
     throw new Error(t(lang, 'srv.mode_invalid'));
   const message = String(params.message ?? '').trim();
   if (!message) throw new Error(t(lang, 'srv.message_empty'));
@@ -367,8 +367,8 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
     listMemories(),
     getDossier(),
   ]);
-  // 专业知识库只注入 chat 直接对话；follow_up 快答场景不注入（口径同旧版）
-  const skills = chat.mode === 'chat' ? buildSkillsSection(lang) : null;
+  // 专业知识库注入 chat 直接对话与 plan 计划会话；follow_up 快答场景不注入（口径同旧版）
+  const skills = chat.mode === 'follow_up' ? null : buildSkillsSection(lang);
   // follow_up：关联报告正文 + 压缩训练数据（报告可能已被滚动清理，缺则仅靠训练数据）
   const rep = chat.report_id != null ? await getAiReport(chat.report_id) : null;
   const summary = chat.mode === 'follow_up' && chat.file_name ? await getActivitySummary(chat.file_name) : null;
