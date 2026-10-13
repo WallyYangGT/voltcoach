@@ -222,6 +222,10 @@ const server = http.createServer((req, res) => {
     if (!stream && TOOL_SCRIPT === 'memory' && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
       const toolMsgCount = (parsed.messages ?? []).filter((m) => m.role === 'tool').length;
       if (toolMsgCount < 1) {
+        const memContent =
+          memoryWrites === 0
+            ? '冒烟测试短期记忆（主轮写入）：由 mock memory 剧本写入（两周/5 次失效口径）'
+            : '冒烟测试短期记忆（回顾轮写入）：报告后确定性回顾轮补记';
         memoryWrites += 1;
         console.log(`  -> mock script memory: issue save_memory #${memoryWrites} (short scope)`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -241,10 +245,7 @@ const server = http.createServer((req, res) => {
                       function: {
                         name: 'save_memory',
                         arguments: JSON.stringify({
-                          content:
-                            memoryWrites === 0
-                              ? '冒烟测试短期记忆（主轮写入）：由 mock memory 剧本写入（两周/5 次失效口径）'
-                              : '冒烟测试短期记忆（回顾轮写入）：报告后确定性回顾轮补记',
+                          content: memContent,
                           category: 'general',
                           scope: 'short',
                         }),
