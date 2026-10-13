@@ -258,7 +258,7 @@ const toolGenerateWorkout: ToolImpl = async (args, ctx, io) => {
   return toResult({ ftp_watts: athlete.ftp_watts, ...result }, lang);
 };
 
-/** save_memory：写 ai_memories（scope 分层：short 一周/3 次训练失效）；ctx.source 为场景标记 */
+/** save_memory：写 ai_memories（scope 分层：short 两周/5 次训练失效）；ctx.source 为场景标记 */
 const toolSaveMemory: ToolImpl = async (args, ctx, io) => {
   const id = await io.saveMemory(
     {

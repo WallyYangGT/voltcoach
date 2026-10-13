@@ -92,6 +92,11 @@ test('toolDefs：17 个工具、双语描述、schema 关键字段', () => {
   assert.deepEqual(byName.save_memory.function.parameters.required, ['content']);
   assert.deepEqual(byName.save_memory.function.parameters.properties.category.enum, ['general', 'injury', 'schedule', 'goal', 'preference', 'strategy']);
   assert.deepEqual(byName.save_memory.function.parameters.properties.scope.enum, ['short', 'long']);
+  // 短期失效口径（两周/5 次，2026-10-13 放宽）zh/en 双语同步——告知模型的分层规则
+  // 必须与 core/memory.ts 判定实现一致（code-review P2-1：en 侧曾漏改）
+  assert.match(byName.save_memory.function.parameters.properties.scope.description, /两周或 5 次训练/);
+  const enByName = Object.fromEntries(en.map((d) => [d.function.name, d]));
+  assert.match(enByName.save_memory.function.parameters.properties.scope.description, /two weeks or 5 activities/);
   assert.deepEqual(byName.reanalyze_activity.function.parameters.required, ['file_name']);
   assert.deepEqual(byName.set_power_flag.function.parameters.required, ['file_name', 'flagged']);
   assert.deepEqual(byName.recalibrate_activity_power.function.parameters.required, ['file_name', 'scale_factor']);

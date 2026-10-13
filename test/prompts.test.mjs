@@ -15,6 +15,7 @@ const {
   buildComparePrompt,
   buildAgenticSection,
   buildMemorySection,
+  buildMemoryReviewPrompt,
   buildDossierSection,
   buildProfileSection,
   buildDateSection,
@@ -247,6 +248,29 @@ test('记忆分层：strategy 进权威段置顶、short 行内标注、普通�
   const en = buildMemorySection(mems, 'en');
   assert.match(en, /^## Training Strategies \(Agreed Conclusions\)/);
   assert.match(en, /#9, Schedule, short-term\)/);
+});
+
+test('记忆回顾轮：报告全文 + 回顾指令 + 既有记忆段（去重基准）', () => {
+  const mems = [{ id: 3, content: '左膝伤后恢复中', category: 'injury', created_at: '2026-03-01 09:00:00' }];
+  const s = buildMemoryReviewPrompt('## 报告正文\n\nNP 为 280W。', mems, 'zh');
+  assert.match(s, /## 记忆回顾/);
+  assert.match(s, /## 报告正文[\s\S]*NP 为 280W/); // 报告全文在前
+  assert.match(s, /判断是否有值得记入记忆的用户事实/); // 回顾指令
+  assert.match(s, /## 用户记忆[\s\S]*\(#3, 伤病\) 左膝伤后恢复中/); // 既有清单殿后（去重基准）
+  assert.match(s, /不调用任何工具、直接回复「无」/); // 无需记录时不许空跑工具
+  assert.match(s, /不要把你自己的分析建议存为记忆/); // 防模型把自身建议写成权威策略段
+  const en = buildMemoryReviewPrompt('report', null, 'en');
+  assert.match(en, /## Memory Review/);
+  assert.match(en, /reply "none"/);
+  assert.match(en, /never store your own analysis or recommendations/);
+});
+
+test('记忆分层口径：rule.4 与工时描述同步两周/5 次放宽（2026-10-13 拍板）', () => {
+  const zh = buildMemorySection([], 'zh');
+  assert.match(zh, /短期记忆超过两周或 5 次训练后自动失效/);
+  assert.doesNotMatch(zh, /超过一周或 3 次训练/);
+  const en = buildMemorySection([], 'en');
+  assert.match(en, /auto-expire after two weeks or 5 activities/);
 });
 
 test('档案段：null 省略；完整档案逐行渲染；被标记披露', () => {

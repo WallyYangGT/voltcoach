@@ -15,8 +15,10 @@ import { ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
 export const CHART_CONTENT_WIDTH = 900;
 
 interface Props {
-  /** 渲染图表；width 为内容宽（容器宽与 CHART_CONTENT_WIDTH 的较大者） */
-  children: (width: number) => React.ReactNode;
+  /** 渲染图表；width 为内容宽（容器宽与 CHART_CONTENT_WIDTH 的较大者），
+   *  containerWidth 为可视区实测宽——时序图缩放态用它铺满屏幕（窗口全可视，
+   *  拖到边界即数据边界；画布 900dp 口径下手机视口只显示 ~40%，末段不可达） */
+  children: (width: number, containerWidth: number) => React.ReactNode;
   /**
    * 首次布局完成后自动停在内容末端（不带动画）。
    * 用于「最近日期在右端」的趋势图：一进页面先看到当下，向左滑看历史。
@@ -25,9 +27,18 @@ interface Props {
   /** 外层容器样式：只用于外边距/底色——**不要加 padding**（onLayout 量的是 border-box，
    *  加了内边距会让内容宽再比可视区宽出这一段） */
   style?: StyleProp<ViewStyle>;
+  /** 横滚开关覆盖（undefined = 默认口径「内容比容器宽才可滚」）。
+   *  时序图缩放态下拖动与横滚是同一根手指，由 TimeSeriesChart.onViewportChange
+   *  通知外层传 false 禁滚，复位后传 undefined 交还 */
+  scrollEnabledOverride?: boolean;
 }
 
-export function ChartScroller({ children, initialScrollToEnd = false, style }: Props) {
+export function ChartScroller({
+  children,
+  initialScrollToEnd = false,
+  style,
+  scrollEnabledOverride,
+}: Props) {
   // 0 = 尚未测量，此时不渲染图表（避免先按 0 宽画一帧再重画）
   const [containerW, setContainerW] = useState(0);
   const scrollRef = useRef<ScrollView>(null);
@@ -41,7 +52,7 @@ export function ChartScroller({ children, initialScrollToEnd = false, style }: P
         <ScrollView
           ref={scrollRef}
           horizontal
-          scrollEnabled={scrollable}
+          scrollEnabled={scrollEnabledOverride ?? scrollable}
           showsHorizontalScrollIndicator={scrollable}
           // 内容尺寸落定后才滚得动（在 onLayout 阶段调 scrollToEnd 时布局还没生效）
           onContentSizeChange={() => {
@@ -49,7 +60,7 @@ export function ChartScroller({ children, initialScrollToEnd = false, style }: P
             revealed.current = true;
             scrollRef.current?.scrollToEnd({ animated: false });
           }}>
-          {children(contentW)}
+          {children(contentW, containerW)}
         </ScrollView>
       )}
     </View>

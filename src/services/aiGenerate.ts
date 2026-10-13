@@ -7,8 +7,11 @@
  * - 报告：buildReportPrompt 组装基础提示词（含 skills，不含工具/记忆段）→
  *   createPendingAiReport 占位 → 后台任务在 agentic 开启时于提示词末尾追加
  *   工具指引与记忆段 → callAiMaybeAgentic 分流（runAgentLoop / 单轮 callAI）→
- *   回写 completed/failed；未配置密钥时 UI 用基础提示词走"复制提示词"兜底
- *   （与旧 Web 版返回 prompt 的形态一致，工具/记忆段只在真实调用时注入）。
+ *   回写 completed/failed；完成后编排层强制跑一次记忆回顾轮
+ *   （runMemoryReviewRound，仅 save_memory 单工具，2026-10-13 拍板）——
+ *   mem.rule.2「收尾补记」的编排层兜底；未配置密钥时 UI 用基础提示词走
+ *   "复制提示词"兜底（与旧 Web 版返回 prompt 的形态一致，工具/记忆段只在
+ *   真实调用时注入）。
  * - 对话：user 消息 + pending 占位落库 → 后台任务每轮按当前状态重拼系统段
  *   （首条 user 消息注入），历史只带 completed 正文 → 回填 completed/failed。
  * - 复用 findFollowUpChat 的"追问并入报告"模型；滚动清理在 db 层 CRUD 内完成。
@@ -57,7 +60,7 @@ import { withinResumeWindow } from '@/core/report-status';
 import { safeName, thinRecords } from '@/core/records';
 import { extractPlanFromMarkdown, validateTrainingPlan } from '@/core/training-plan';
 
-import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildDossierSection, buildMemorySection } from '@/prompts/prompts';
+import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildDossierSection, buildMemorySection, buildMemoryReviewPrompt } from '@/prompts/prompts';
 import { buildSkillsSection } from '@/prompts/skills';
 import { buildChatSystemSection } from '@/prompts/chat';
 import { toolDefs, createExecuteTool, type ToolIo } from '@/tools';
@@ -310,6 +313,15 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     // v2 训练计划载体：plan 报告完成后提取 ```plan-json 结构化计划落库（失败仅告警，
     // 不影响报告完成态——首页卡按「上次生成未产出有效计划」降级提示，可重新生成）
     if (report.mode === 'plan') await extractAndStorePlanFromReport(reportId, markdown, lang);
+    // 确定性记忆回顾轮（2026-10-13 拍板，decisions §20）：mem.rule.2「收尾回顾补记」
+    // 此前 100% 依赖模型在主生成轮自觉执行，工具降级/轮数耗尽/模型偷懒三条静默路径
+    // 都会让记忆绝迹——报告完成后编排层强制补跑一次回顾（见 runMemoryReviewRound），
+    // fire-and-forget 自吞异常，绝不影响已完成的报告。
+    if (config.agentic !== false) {
+      void runMemoryReviewRound(config, report.mode, reportId, markdown, lang).catch((e) =>
+        console.warn(`[AI] 报告 #${reportId} 记忆回顾轮异常:`, e),
+      );
+    }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await updateAiReport(reportId, { status: 'failed', error: msg });
@@ -349,6 +361,55 @@ async function extractAndStorePlanFromReport(
     );
   } catch (e) {
     console.warn(`[AI] 报告 #${reportId} 的结构化计划提取失败（报告已完成，可重新生成）:`, e);
+  }
+}
+
+/**
+ * 确定性记忆回顾轮（报告完成后的独立收尾，2026-10-13 拍板）：
+ * - 只带 save_memory 单工具清单跑一次小 agent 循环——回顾报告 → 按需补记；
+ *   既有记忆清单注入提示词（自带 #id 与规则），报告主轮已记过的不重复、
+ *   同主题更新走 supersedes_id，天然去重；
+ * - 超时单独收紧到 120s（回顾是小任务，不陪报告的超时预算）；
+ * - 不 acquire 保活：回顾发生在报告完成后，通常几秒内结束，不值得为它闪
+ *   一条前台服务通知（被冻结最多丢这一轮记忆，报告无损）；
+ * - 全程自吞异常只打日志——记忆回顾失败不影响报告完成态，用户零感知；
+ * - onDegrade（服务商拒 tools 静默降级）在这里也会现形，是「记忆绝迹」的
+ *   首要诊断信号，warn 里点名。
+ */
+async function runMemoryReviewRound(
+  config: AiConfig & { api_key: string },
+  mode: AiReportMode,
+  reportId: number,
+  markdown: string,
+  lang: Lang,
+): Promise<void> {
+  try {
+    const fetchImpl = await loadDefaultFetch();
+    const prompt = buildMemoryReviewPrompt(markdown, await listMemories(), lang);
+    // 仅 save_memory：回顾轮不需要（也不该再触发）取数/写计划等其他工具
+    const defs = toolDefs(lang).filter((d) => d.function.name === 'save_memory');
+    const answer = await runAgentLoop(
+      fetchImpl,
+      config,
+      [{ role: 'user', content: prompt }],
+      defs,
+      createExecuteTool(buildToolIo(), { source: mode, lang }),
+      {
+        lang,
+        timeoutMs: Math.min(config.timeout_ms, 120_000),
+        onDegrade: (errMsg) =>
+          console.warn(
+            `[AI] 报告 #${reportId} 记忆回顾轮：模型不支持 tools，已降级单轮（${errMsg}）——该环境下记忆无法产生，请检查服务商工具调用支持`,
+          ),
+        onToolCall: (name, _args, result) => {
+          const chars = typeof result === 'string' ? result.length : 0;
+          console.log(`[AI 记忆回顾] ${name} → ${chars} 字符`);
+        },
+      },
+    );
+    console.log(`[AI] 报告 #${reportId} 记忆回顾完成（${answer.length} 字符）`);
+  } catch (e) {
+    console.warn(`[AI] 报告 #${reportId} 记忆回顾失败（不影响已完成报告）:`, e);
   }
 }
 
