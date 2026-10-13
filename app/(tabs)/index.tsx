@@ -1,6 +1,7 @@
 /**
- * 首页仪表盘（M2）：CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 本周训练计划卡 +
- * 月度汇总 + 最近训练；右下角对话快捷 FAB（直达 /ai/session/chat-new）。
+ * 首页仪表盘（M2）：本周训练计划卡（首屏最顶——今天该练什么第一眼可见）+
+ * CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练；
+ * 右下角对话快捷 FAB（直达 /ai/session/chat-new）。
  * 移植自 Web 版 views/dashboard.js：hero 瓦片/趋势/月度/最近训练同在首页（Web 版即此
  * 信息架构），App 侧空库引导语按移动端信息架构改指「训练」tab。数据一次并行取齐：
  * recentFormDaily(90)（趋势图与 hero 大数字同源，序列末端已延伸到今天）/ monthlySummary(6) /
@@ -108,6 +109,10 @@ export default function HomeScreen() {
       </View>
       <Text style={styles.sub}>{t('dash.sub')}</Text>
 
+      {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏）。
+          首屏最顶：今天该练什么第一眼可见 */}
+      <WeeklyPlanCard />
+
       {/* hero 瓦片：CTL 蓝 / ATL 红 / TSB 绿（附 form 简评）/ FTP volt */}
       <View style={styles.heroGrid}>
         {last && (
@@ -159,9 +164,6 @@ export default function HomeScreen() {
           </ChartScroller>
         </View>
       )}
-
-      {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏） */}
-      <WeeklyPlanCard />
 
       {/* 月度汇总（自然月倒序，最多 6 个月） */}
       <View style={styles.panel}>
