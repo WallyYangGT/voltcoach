@@ -100,6 +100,20 @@ describe('WeeklyPlanCard', () => {
     expect(screen.queryByText('生成计划')).toBeNull();
   });
 
+  it('计划未开始（upcoming）：显示开始日期与总课次，不显示「本周」摘要口径', async () => {
+    const fixture = planFixture();
+    fixture.plan = {
+      ...fixture.plan,
+      valid_from: day(3), // 三天后才开始
+      valid_to: day(16),
+      sessions: [{ date: day(3), type: 'threshold', duration_min: 75, intensity: null, tss: 85, note: null }],
+    };
+    (getCurrentPlan as jest.Mock).mockResolvedValue(fixture);
+    const screen = await mountCard();
+    expect(screen.getByText(`${day(3)} 开始 · 共 1 次课`)).toBeTruthy();
+    expect(screen.queryByText(/本周 \d 次课/)).toBeNull();
+  });
+
   it('无计划（从未生成）：引导语 + CTA 走 report 生成链路（draft→跳转→fire）', async () => {
     const screen = await mountCard();
     expect(screen.getByText('还没有训练计划，让 AI 教练按你的近期负荷生成一份')).toBeTruthy();

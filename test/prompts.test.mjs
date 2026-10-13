@@ -302,11 +302,14 @@ test('复盘提示词注入档案段（新末参，缺省不影响旧调用）',
   assert.ok(withDossier.indexOf('个人训练档案') < withDossier.indexOf('## 训练数据'));
 });
 
-test('agentic 工具指引段：11 个工具与 6 条规则（含 FTP 更新/重新分析）', () => {
+test('agentic 工具指引段：16 个工具与 6 条规则（含 FTP 更新/重新分析/训练计划）', () => {
   const s = buildAgenticSection('zh');
-  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'set_power_flag', 'recalibrate_activity_power']) {
+  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'get_training_plan', 'update_training_plan', 'set_power_flag', 'recalibrate_activity_power']) {
     assert.ok(s.includes(`- ${name}：`), name);
   }
+  // update_training_plan 的「整体重发」约束须在指引段硬性出现（follow_up 不注 skills，
+  // 工具清单是该场景唯一的约束来源——code-review P2-1）
+  assert.match(s, /必须整体重发全部课次/);
   assert.match(s, /1\. 只在上方预装数据不足以回答时才调用工具/);
   assert.match(s, /4\. 需要先调用工具时，中间轮只写简短过渡语/);
   // 新增规则：主动更新须在回答中指出旧值→新值；重新分析后说明指标变化
@@ -318,6 +321,7 @@ test('agentic 工具指引段：11 个工具与 6 条规则（含 FTP 更新/重
   assert.match(en, /5\. FTP auto-update/);
   assert.match(en, /"FTP has been updated from X to Y"/);
   assert.match(en, /6\. Re-analysis/);
+  assert.match(en, /ALWAYS resend every session/);
 });
 
 test('对话指令与当前时间段：双语切换', () => {

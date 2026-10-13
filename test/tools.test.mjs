@@ -367,6 +367,31 @@ test('get_training_plan：无计划返回 has_plan=false；有计划回有效态
   assert.equal(out.origin, 'generate');
   assert.equal(out.sessions.length, 1);
   assert.equal(out.sessions[0].tss, 100);
+
+  // 满额课次载荷裁剪后不越 16k 截断线（截断标记会把 JSON 从中间切坏——code-review P2-3）
+  const fat = {
+    origin: 'generate',
+    created_at: '2026-10-13T08:00:00.000Z',
+    plan: {
+      valid_from: day(-1),
+      valid_to: day(40),
+      goal: 'g'.repeat(200),
+      sessions: Array.from({ length: 42 }, (_, i) => ({
+        date: day(i),
+        type: 'endurance',
+        duration_min: 60,
+        intensity: 'i'.repeat(80),
+        tss: 68,
+        note: 'n'.repeat(200),
+      })),
+    },
+  };
+  const raw = await createExecuteTool(fakeIo({ getTrainingPlan: async () => fat }), { lang: 'zh' })('get_training_plan', {});
+  assert.ok(raw.length < AGENTIC.tool_result_max_chars, `载荷 ${raw.length} 应在截断线内`);
+  const parsed = JSON.parse(raw); // 能 parse 即未被截断破坏
+  assert.equal(parsed.sessions.length, 42);
+  assert.ok(parsed.sessions[0].note.length <= 60);
+  assert.ok(parsed.sessions[0].intensity.length <= 40);
 });
 
 test('update_training_plan：非对话类调用拒写（报告场景名与会话模式名都可能是 plan，以 chat 标记区分）', async () => {
