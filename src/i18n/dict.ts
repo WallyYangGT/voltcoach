@@ -326,6 +326,11 @@ export const DICT = {
     'mem.superseded': '已被取代',
     'mem.delete': '删除',
     'mem.deleteMsg': '删除这条记忆？',
+    'mem.section.short': '短期记忆',
+    'mem.section.long': '长期记忆',
+    'mem.empty.short': '暂无短期记忆。临时上下文（出差、临时换器材等）由 AI 标记为短期，超过两周或 5 次训练自动失效。',
+    'mem.empty.long': '暂无长期记忆。AI 会在对话与报告收尾时主动记录它了解到的个人信息。',
+    'mem.hint': '记忆由 AI 自动记录，需要模型支持工具调用（agentic）；若长期没有新记忆，请检查服务商是否支持 tools。',
     // ---- v2：个人训练档案页 ----
     'dossier.title': '训练档案',
     'dossier.sub': '由全部骑行自动汇总的长期基线，会注入 AI 报告与对话作为对照基准；每次导入/删除/改 FTP 后自动更新。',
@@ -1014,6 +1019,11 @@ export const DICT = {
     'mem.superseded': 'superseded',
     'mem.delete': 'Delete',
     'mem.deleteMsg': 'Delete this memory?',
+    'mem.section.short': 'Short-term',
+    'mem.section.long': 'Long-term',
+    'mem.empty.short': 'No short-term memories yet. Temporary context (travel, gear swaps…) is tagged short-term by the AI and auto-expires after two weeks or 5 activities.',
+    'mem.empty.long': 'No long-term memories yet. The AI records what it learns about you while chatting and reporting.',
+    'mem.hint': 'Memories are recorded by the AI and require tool calling (agentic); if no new memories appear over time, check whether your provider supports tools.',
     // ---- v2: athlete dossier page ----
     'dossier.title': 'Athlete Dossier',
     'dossier.sub': 'Long-term baselines auto-aggregated from all rides, injected into AI reports and chats as reference; rebuilt automatically on import/deletion/FTP changes.',

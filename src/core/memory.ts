@@ -9,15 +9,15 @@
  *    管理页对已失效条目标注灰显。
  *
  * 失效判定只在本文件实现（单一事实源）：db 层 listMemories 的注入过滤与
- * 管理页的 expired 标注都调这里，不各自复制规则。"3 次训练"按 activities 行
+ * 管理页的 expired 标注都调这里，不各自复制规则。"5 次训练"按 activities 行
  * 的 created_at（入库时刻，UTC "YYYY-MM-DD HH:MM:SS"）晚于记忆 created_at 的
  * 条数计——不用 id 差值，删除活动会虚耗 id 导致误判。
  */
 
 /** 短期记忆的时长上限（天）：created_at 距今超过该天数即失效（严格大于） */
-export const MEMORY_SHORT_MAX_AGE_DAYS = 7;
+export const MEMORY_SHORT_MAX_AGE_DAYS = 14;
 /** 短期记忆的新训练数上限：记忆写入后新增 ≥ 该数条活动即失效 */
-export const MEMORY_SHORT_MAX_NEW_ACTIVITIES = 3;
+export const MEMORY_SHORT_MAX_NEW_ACTIVITIES = 5;
 
 export type MemoryScope = 'short' | 'long';
 

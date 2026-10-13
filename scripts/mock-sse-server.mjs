@@ -25,6 +25,9 @@
  *   ```plan-json 块（3 周基础期，过 App 侧确定性校验），用于「周期规划 → 计划落库」冒烟。
  *   MOCK_TOOL_SCRIPT=plan_adjust —— 计划会话调整剧本：get_training_plan →
  *   update_training_plan 整体重发（阈值课顺延一天）→ 正文确认，用于「计划调整 → 新版本」冒烟。
+ *   MOCK_TOOL_SCRIPT=memory —— 记忆回顾剧本：save_memory（scope=short 演示分层）→
+ *   正文「已记录」。主生成轮与报告后记忆回顾轮各自最多触发一次记录，用于
+ *   「报告后确定性记忆回顾 + 记忆页短期/长期分区」冒烟。
  *   MOCK_ECHO_PROMPT=1 —— 正文请求改为回显收到的最后一条 user 消息前 600 字符
  *   （前缀 [ECHO]），用于冒烟断言提示词里确实注入了新段落（如训练档案/策略段）
  *   —— mock 只回它"看到"的，App 侧报告正文即请求侧 prompt 的镜像。
@@ -95,6 +98,8 @@ const PLAN_REPLY = () =>
   '```plan-json\n' + JSON.stringify(mockPlanJson(1)) + '\n```';
 const ADJUST_REPLY =
   '已把周一的阈值课顺延到周二（其余课次不变，质量课间隔仍满足 ≥48h），新版本已保存，可在计划页查看。';
+// 记忆剧本（MOCK_TOOL_SCRIPT=memory）的收尾正文（也是冒烟时的报告正文）
+const MEMORY_REPLY = '本次分析已完成；另按记忆规则补记了一条短期记忆（mock memory 剧本）。';
 let contentCalls = 0; // 正文请求计数（tool_call 演练轮不计入）
 
 const server = http.createServer((req, res) => {
@@ -205,6 +210,57 @@ const server = http.createServer((req, res) => {
         JSON.stringify({
           id: `mock-${TOOL_SCRIPT}-final`,
           choices: [{ index: 0, message: { role: 'assistant', content: reply }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
+        }),
+      );
+      return;
+    }
+
+    // 记忆剧本（MOCK_TOOL_SCRIPT=memory）：save_memory（scope=short 演示分层）→
+    // 正文。按历史中 role:"tool" 消息数限一次——主生成轮与回顾轮各自走一遍。
+    if (!stream && TOOL_SCRIPT === 'memory' && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
+      const toolMsgCount = (parsed.messages ?? []).filter((m) => m.role === 'tool').length;
+      if (toolMsgCount < 1) {
+        console.log('  -> mock script memory: issue save_memory (short scope)');
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            id: 'mock-memory-0',
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: 'mock-memory-call-0',
+                      type: 'function',
+                      function: {
+                        name: 'save_memory',
+                        arguments: JSON.stringify({
+                          content: '冒烟测试短期记忆：由 mock memory 剧本写入（两周/5 次失效口径）',
+                          category: 'general',
+                          scope: 'short',
+                        }),
+                      },
+                    },
+                  ],
+                },
+                finish_reason: 'tool_calls',
+              },
+            ],
+          }),
+        );
+        return;
+      }
+      console.log('  -> mock script memory: final reply');
+      contentCalls += 1;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          id: 'mock-memory-final',
+          choices: [{ index: 0, message: { role: 'assistant', content: MEMORY_REPLY }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 10, completion_tokens: 100, total_tokens: 110 },
         }),
       );

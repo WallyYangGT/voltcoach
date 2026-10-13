@@ -108,9 +108,11 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'mem.rule.1': `2. 主动记录，宁多勿漏：只要用户透露训练数据之外的个人事实或倾向，就立即调用 save_memory 记下，不必等用户明确要求。包括：目标与赛事计划、伤病与身体不适、日程/时间约束、训练偏好（室内/户外、时段、课表类型）、器材、对建议的反馈与纠正、自述的主观状态。训练数据本身已有的事实不要重复记。`,
     'mem.rule.2': `3. 每次回答或报告收尾时回顾一遍本次对话：若有符合第 2 条而尚未记录的信息，补记一条 save_memory（工具调用不影响回答内容）。`,
     'mem.rule.3': `4. 每条记忆 ≤500 字、用中文、写成带主语的完整陈述；同主题更新时用 supersedes_id 取代旧记忆（id 见上方 #标注）。`,
-    'mem.rule.4': `5. 记录时区分时效与类别：仅在本次或近一两周有意义的临时上下文（如出差、临时换器材）用 scope='short'——短期记忆超过一周或 3 次训练后自动失效；长期有效的事实不传 scope（默认长期）；与用户商定的训练策略用 category='strategy'（该类记忆会单独进入「训练策略（既定结论）」权威段）。`,
+    'mem.rule.4': `5. 记录时区分时效与类别：仅在本次或近两三周有意义的临时上下文（如出差、临时换器材）用 scope='short'——短期记忆超过两周或 5 次训练后自动失效；长期有效的事实不传 scope（默认长期）；与用户商定的训练策略用 category='strategy'（该类记忆会单独进入「训练策略（既定结论）」权威段）。`,
     'mem.cat.strategy': `策略`,
     'mem.tag.short': `短期`,
+    'mem.review.head': `## 记忆回顾（报告生成后的独立收尾步骤，与报告正文无关）`,
+    'mem.review.instr': `回顾上方报告，判断是否有值得记入记忆的用户事实或策略结论（判定标准与分层规则见下方记忆段）。清单里已有的信息不要重复记录；确需记录时调用 save_memory（遵守 ≤500 字与 scope/category 口径），记录完成后简短回复「已记录」；若没有任何需要记录的，不调用任何工具、直接回复「无」。不要复述或解读报告内容。`,
     'strat.head': `## 训练策略（既定结论）`,
     'strat.rules': `以上是用户与教练此前讨论确认的训练策略，是分析与建议的既定前提：涉及相关主题时必须以其为出发点；若本次数据或你的专业判断与既定策略冲突，必须显式指出「这与既定策略不同」并给出数据依据，由用户决定是否修订；确需修订时用 save_memory（category='strategy'，supersedes_id 指向旧策略 id）取代，不得默默按相反的假设分析或给建议。`,
 
@@ -273,9 +275,11 @@ You are in the "training plan" conversation, answering questions about and adjus
     'mem.rule.1': `2. Record proactively — better too many than too few: whenever the user reveals personal facts or preferences beyond training data, call save_memory immediately rather than waiting to be asked. This includes: goals and race plans, injuries or physical issues, schedule/time constraints, training preferences (indoor/outdoor, time of day, workout types), equipment, feedback on and corrections to your advice, self-reported subjective state. Facts already present in the training data need not be re-recorded.`,
     'mem.rule.2': `3. At the end of each answer or report, review this conversation: if anything per rule 2 is not yet recorded, add one save_memory call (tool calls do not affect answer content).`,
     'mem.rule.3': `4. Each memory ≤500 characters, written in the user's current language as a complete statement with a subject; when updating the same topic, supersede the old memory via supersedes_id (ids are the #annotations above).`,
-    'mem.rule.4': `5. Distinguish freshness and kind when recording: temporary context meaningful only for this or the next week or two (travel, temporary equipment swap) uses scope='short' — short-term memories auto-expire after one week or 3 activities, whichever comes first; long-lived facts take no scope (long by default); training strategies agreed with the user use category='strategy' (rendered separately in the "Training Strategies (Agreed Conclusions)" authoritative block).`,
+    'mem.rule.4': `5. Distinguish freshness and kind when recording: temporary context meaningful only for this or the next couple of weeks (travel, temporary equipment swap) uses scope='short' — short-term memories auto-expire after two weeks or 5 activities, whichever comes first; long-lived facts take no scope (long by default); training strategies agreed with the user use category='strategy' (rendered separately in the "Training Strategies (Agreed Conclusions)" authoritative block).`,
     'mem.cat.strategy': `Strategy`,
     'mem.tag.short': `short-term`,
+    'mem.review.head': `## Memory Review (standalone post-report step, unrelated to the report body)`,
+    'mem.review.instr': `Review the report above and decide whether anything about the user is worth memorizing (criteria and layering rules in the memory section below). Do not re-record facts already in the list; if recording is needed, call save_memory (respecting the ≤500-char and scope/category rules), then reply briefly "recorded"; if there is nothing to record, call no tool and reply "none". Do not restate or interpret the report.`,
     'strat.head': `## Training Strategies (Agreed Conclusions)`,
     'strat.rules': `The above are training strategies previously agreed between user and coach — the standing premises for analysis and advice: treat them as the starting point for related topics; if today's data or your professional judgment conflicts with an agreed strategy, you must explicitly flag "this differs from the agreed strategy" with data-backed reasoning and let the user decide on any revision; to revise, supersede via save_memory (category='strategy', supersedes_id pointing at the old strategy id). Never silently analyze or advise against an agreed strategy.`,
 
@@ -558,6 +562,25 @@ ${list}
 ${TT(lang, 'mem.rules_head')}
 ${[0, 1, 2, 3, 4].map((i) => TT(lang, `mem.rule.${i}`)).join('\n')}`;
   return [strategyBlock, memBlock].filter(Boolean).join('\n\n');
+}
+
+/**
+ * 记忆回顾轮提示词（报告完成后的确定性收尾，编排层在 generateReport 末尾调用——
+ * mem.rule.2「收尾回顾补记」从模型自觉升级为编排强制：主生成轮可能因工具降级/
+ * 轮数耗尽/模型偷懒而从未调用 save_memory，本独立轮用仅含 save_memory 的单工具
+ * 清单兜底一次）。报告全文在前，既有记忆段殿后（自带规则与 #id 标注，天然去重
+ * 与 supersedes 更新）。
+ */
+export function buildMemoryReviewPrompt(
+  reportMarkdown: string,
+  memories: PromptMemory[] | null,
+  lang: PromptLang = 'zh',
+): string {
+  return [
+    `${TT(lang, 'mem.review.head')}\n\n---\n${reportMarkdown}\n---`,
+    TT(lang, 'mem.review.instr'),
+    buildMemorySection(memories, lang),
+  ].join('\n\n');
 }
 
 /**

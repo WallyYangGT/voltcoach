@@ -254,7 +254,8 @@ test('addDaysStr 跨月/跨年正确', () => {
 
 const day = 86400000;
 // SQLite datetime('now') 口径：UTC "YYYY-MM-DD HH:MM:SS"
-const memAt = '2026-10-05 08:00:00';
+// memAt 距 nowMs 恰好 14 天（短期记忆时长上限，2026-10-13 拍板由 7 天放宽）
+const memAt = '2026-09-28 08:00:00';
 const nowMs = Date.UTC(2026, 9, 12, 8, 0, 0);
 
 test('长期与 legacy 记忆永不过期', () => {
@@ -264,27 +265,40 @@ test('长期与 legacy 记忆永不过期', () => {
   assert.equal(isShortMemoryExpired({ scope: undefined, created_at: undefined }, nowMs, acts), false);
 });
 
-test('短期：时长边界（严格大于 7 天才过期；缺 created_at 保守不过期）', () => {
+test('短期：时长边界（严格大于 14 天才过期；缺 created_at 保守不过期）', () => {
   const acts = [];
-  // memAt 距 nowMs 恰好 7 天：不过期（严格大于）；7 天 + 1 秒：过期
+  // memAt 距 nowMs 恰好 14 天：不过期（严格大于）；14 天 + 1 秒：过期
   assert.equal(isShortMemoryExpired({ scope: 'short', created_at: memAt }, nowMs, acts), false);
   assert.equal(isShortMemoryExpired({ scope: 'short', created_at: memAt }, nowMs + 1000, acts), true);
+  // 未满 14 天不过期
+  assert.equal(isShortMemoryExpired({ scope: 'short', created_at: memAt }, nowMs - day, acts), false);
   assert.equal(isShortMemoryExpired({ scope: 'short', created_at: null }, nowMs, acts), false);
 });
 
-test('短期：新增活动数边界（≥3 过期，2 不过）', () => {
-  const two = ['2026-10-06 00:00:00', '2026-10-07 00:00:00'];
-  const three = [...two, '2026-10-08 00:00:00'];
-  assert.equal(isShortMemoryExpired({ scope: 'short', created_at: memAt }, nowMs, two), false);
-  assert.equal(isShortMemoryExpired({ scope: 'short', created_at: memAt }, nowMs, three), true);
+test('短期：新增活动数边界（≥5 过期，4 不过）', () => {
+  const four = [
+    '2026-10-06 00:00:00',
+    '2026-10-07 00:00:00',
+    '2026-10-08 00:00:00',
+    '2026-10-09 00:00:00',
+  ];
+  const five = [...four, '2026-10-10 00:00:00'];
+  assert.equal(isShortMemoryExpired({ scope: 'short', created_at: memAt }, nowMs, four), false);
+  assert.equal(isShortMemoryExpired({ scope: 'short', created_at: memAt }, nowMs, five), true);
   // 记忆写入之前的活动不计入
-  const older = ['2026-10-01 00:00:00', '2026-10-02 00:00:00', '2026-10-03 00:00:00'];
+  const older = ['2026-09-01 00:00:00', '2026-09-02 00:00:00', '2026-09-03 00:00:00'];
   assert.equal(isShortMemoryExpired({ scope: 'short', created_at: memAt }, nowMs, older), false);
 });
 
 test('短期：时长与训练数任一先到即过期', () => {
-  // 未满 7 天但已 3 次训练 → 过期（训练数先到）
+  // 未满 14 天但已 5 次训练 → 过期（训练数先到）
   const fresh = { scope: 'short', created_at: '2026-10-10 00:00:00' };
-  const acts = ['2026-10-10 01:00:00', '2026-10-11 01:00:00', '2026-10-12 01:00:00'];
+  const acts = [
+    '2026-10-10 01:00:00',
+    '2026-10-11 01:00:00',
+    '2026-10-12 01:00:00',
+    '2026-10-12 02:00:00',
+    '2026-10-12 03:00:00',
+  ];
   assert.equal(isShortMemoryExpired(fresh, nowMs + day, acts), true);
 });
