@@ -100,6 +100,7 @@ const ADJUST_REPLY =
   '已把周一的阈值课顺延到周二（其余课次不变，质量课间隔仍满足 ≥48h），新版本已保存，可在计划页查看。';
 // 记忆剧本（MOCK_TOOL_SCRIPT=memory）的收尾正文（也是冒烟时的报告正文）
 const MEMORY_REPLY = '本次分析已完成；另按记忆规则补记了一条短期记忆（mock memory 剧本）。';
+let memoryWrites = 0; // memory 剧本已发放 save_memory 的次数（第 1 次=主轮、第 2 次=回顾轮，内容区分以便断言两条都落库）
 let contentCalls = 0; // 正文请求计数（tool_call 演练轮不计入）
 
 const server = http.createServer((req, res) => {
@@ -221,7 +222,8 @@ const server = http.createServer((req, res) => {
     if (!stream && TOOL_SCRIPT === 'memory' && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
       const toolMsgCount = (parsed.messages ?? []).filter((m) => m.role === 'tool').length;
       if (toolMsgCount < 1) {
-        console.log('  -> mock script memory: issue save_memory (short scope)');
+        memoryWrites += 1;
+        console.log(`  -> mock script memory: issue save_memory #${memoryWrites} (short scope)`);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -239,7 +241,10 @@ const server = http.createServer((req, res) => {
                       function: {
                         name: 'save_memory',
                         arguments: JSON.stringify({
-                          content: '冒烟测试短期记忆：由 mock memory 剧本写入（两周/5 次失效口径）',
+                          content:
+                            memoryWrites === 0
+                              ? '冒烟测试短期记忆（主轮写入）：由 mock memory 剧本写入（两周/5 次失效口径）'
+                              : '冒烟测试短期记忆（回顾轮写入）：报告后确定性回顾轮补记',
                           category: 'general',
                           scope: 'short',
                         }),

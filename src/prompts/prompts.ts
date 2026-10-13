@@ -112,7 +112,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'mem.cat.strategy': `策略`,
     'mem.tag.short': `短期`,
     'mem.review.head': `## 记忆回顾（报告生成后的独立收尾步骤，与报告正文无关）`,
-    'mem.review.instr': `回顾上方报告，判断是否有值得记入记忆的用户事实或策略结论（判定标准与分层规则见下方记忆段）。清单里已有的信息不要重复记录；确需记录时调用 save_memory（遵守 ≤500 字与 scope/category 口径），记录完成后简短回复「已记录」；若没有任何需要记录的，不调用任何工具、直接回复「无」。不要复述或解读报告内容。`,
+    'mem.review.instr': `回顾上方报告，判断是否有值得记入记忆的用户事实（判定标准与分层规则见下方记忆段）。只记用户透露的个人事实与倾向，不要把你自己的分析建议存为记忆；category='strategy' 仅限报告明确记录了「与用户商定的结论」时使用，报告自身的建议不得写成策略。清单里已有的信息不要重复记录；确需记录时调用 save_memory（遵守 ≤500 字与 scope/category 口径），记录完成后简短回复「已记录」；若没有任何需要记录的，不调用任何工具、直接回复「无」。不要复述或解读报告内容。`,
     'strat.head': `## 训练策略（既定结论）`,
     'strat.rules': `以上是用户与教练此前讨论确认的训练策略，是分析与建议的既定前提：涉及相关主题时必须以其为出发点；若本次数据或你的专业判断与既定策略冲突，必须显式指出「这与既定策略不同」并给出数据依据，由用户决定是否修订；确需修订时用 save_memory（category='strategy'，supersedes_id 指向旧策略 id）取代，不得默默按相反的假设分析或给建议。`,
 
@@ -279,7 +279,7 @@ You are in the "training plan" conversation, answering questions about and adjus
     'mem.cat.strategy': `Strategy`,
     'mem.tag.short': `short-term`,
     'mem.review.head': `## Memory Review (standalone post-report step, unrelated to the report body)`,
-    'mem.review.instr': `Review the report above and decide whether anything about the user is worth memorizing (criteria and layering rules in the memory section below). Do not re-record facts already in the list; if recording is needed, call save_memory (respecting the ≤500-char and scope/category rules), then reply briefly "recorded"; if there is nothing to record, call no tool and reply "none". Do not restate or interpret the report.`,
+    'mem.review.instr': `Review the report above and decide whether anything about the user is worth memorizing (criteria and layering rules in the memory section below). Record only facts and preferences the user revealed — never store your own analysis or recommendations as memories; use category='strategy' only when the report explicitly records a conclusion agreed with the user, never for the report's own suggestions. Do not re-record facts already in the list; if recording is needed, call save_memory (respecting the ≤500-char and scope/category rules), then reply briefly "recorded"; if there is nothing to record, call no tool and reply "none". Do not restate or interpret the report.`,
     'strat.head': `## Training Strategies (Agreed Conclusions)`,
     'strat.rules': `The above are training strategies previously agreed between user and coach — the standing premises for analysis and advice: treat them as the starting point for related topics; if today's data or your professional judgment conflicts with an agreed strategy, you must explicitly flag "this differs from the agreed strategy" with data-backed reasoning and let the user decide on any revision; to revise, supersede via save_memory (category='strategy', supersedes_id pointing at the old strategy id). Never silently analyze or advise against an agreed strategy.`,
 

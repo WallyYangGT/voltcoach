@@ -313,7 +313,6 @@ export const DICT = {
     // ---- M3：AI 记忆页 ----
     'mem.title': 'AI 记忆',
     'mem.sub': 'AI 在交互中主动记录的用户个人事实（目标/伤病/日程/偏好等），会在后续报告与对话中生效。',
-    'mem.empty': '暂无记忆。AI 会在对话与报告收尾时主动记录它了解到的个人信息。',
     'mem.cat.general': '通用',
     'mem.cat.injury': '伤病',
     'mem.cat.schedule': '日程',
@@ -1006,7 +1005,6 @@ export const DICT = {
     'ai.elapsed': 'Waiting {t}',
     'mem.title': 'AI Memory',
     'mem.sub': 'Personal facts the AI records proactively during chats and reports (goals / injuries / schedule / preferences) — they take effect in later sessions.',
-    'mem.empty': 'No memories yet. The AI records what it learns about you while answering.',
     'mem.cat.general': 'General',
     'mem.cat.injury': 'Injury',
     'mem.cat.schedule': 'Schedule',

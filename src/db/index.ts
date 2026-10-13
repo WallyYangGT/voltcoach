@@ -1379,7 +1379,7 @@ export interface AiMemoryRow {
   content: string;
   category: string;
   source: string | null;
-  /** 分层：short = 近期上下文（7 天或 3 次训练先到即失效），long = 长期（默认） */
+  /** 分层：short = 近期上下文（14 天或 5 次训练先到即失效，常量见 core/memory.ts），long = 长期（默认） */
   scope: string;
   created_at: string;
   superseded_by: number | null;
@@ -1461,7 +1461,7 @@ export async function saveMemory(
 /**
  * 最近 n 条「可注入」记忆（未被取代，且短期记忆未过失效线），id DESC，拼装时
  * 反转为时间正序。失效过滤在 JS 侧调 core/memory 的单一判定源（不在 SQL 里复制
- * 7 天/3 次规则）；表受 MEMORY_KEEP=100 约束，全量取回后过滤的代价可忽略。
+ * 失效天数/次数规则）；表受 MEMORY_KEEP=100 约束，全量取回后过滤的代价可忽略。
  */
 export async function listMemories(n = 30): Promise<AiMemoryRow[]> {
   const db = await getDb();

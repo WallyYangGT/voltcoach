@@ -15,7 +15,12 @@
  * useChartViewport（L4）。缩放态下各系列 y 轴按可视窗重算 min/max（看细节），
  * X 刻度标注窗口的实际时间偏移；onViewportChange 供外层禁用 ChartScroller
  * 横滚——未缩放时横向滑归 ScrollView 粗导航（拖动手势不启用、不抢手势），
- * 缩放后同一根手指归图表拖动。
+ * 缩放后同一根手指归图表拖动；缩放态渲染宽由外层传可视宽（窗口铺满屏幕，
+ * 拖到边界即数据边界）。
+ *
+ * 切片绘制的两个已知观感差异（有意取舍，非回归）：桥接/平滑按窗口切片后计算——
+ * ① 窗口边缘原本 ≤180s 应桥接的缺口会多出一处断线（切片失去跨边界邻居）；
+ * ② smoothSeries 半径随窗口长度自适应（n/400），深缩放时平滑减弱、细节更毛糙。
  */
 
 import React, { useEffect, useMemo, useRef } from 'react';
@@ -28,7 +33,8 @@ import {
   Stop,
   Svg,
   Text,
-} from 'react-native-svg';import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+} from 'react-native-svg';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { palette } from '@/theme';
 import { sliceRange } from '@/core/chart-viewport';
 import { useChartViewport } from '@/charts/useChartViewport';
@@ -164,7 +170,8 @@ export function TimeSeriesChart({ series, height = 220, width: W, onViewportChan
       return { spec: s, d, areaPath, gid };
     });
     const drawn = paths.filter((p): p is NonNullable<typeof p> => p != null);
-    if (!drawn.length) return null;
+    // drawn 为空（窗口内全缺口）仍返回坐标壳渲染空图——组件整体 return null 会连
+    // GestureDetector 一起消失，缩放态下横滚已禁 + 双击复位不可达形成死路
 
     // 网格线 + X 轴刻度（0..6 七档，口径同 Web 版；缩放后标注窗口的实际时间偏移）
     const gridYs = Array.from({ length: 5 }, (_, g) => PT + (g / 4) * ih);
@@ -185,6 +192,9 @@ export function TimeSeriesChart({ series, height = 220, width: W, onViewportChan
     // react-hooks/refs 不识别 RNGH 的 .onBegin/.onUpdate 是事件注册，定向豁免
     const panG = Gesture.Pan()
       .runOnJS(true)
+      // 只吃横向意图：缩放态下落在图表上的纵向滑动应还给页面滚动（不激活 pan）
+      .activeOffsetX([-12, 12])
+      .failOffsetY([-12, 12])
       // 未缩放时不启用拖动：横向滑让给 ChartScroller 做粗导航，不抢手势
       .enabled(zoomed)
       // eslint-disable-next-line react-hooks/refs

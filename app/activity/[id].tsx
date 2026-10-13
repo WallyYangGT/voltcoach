@@ -442,11 +442,13 @@ export default function ActivityDetailScreen() {
           </View>
           {series.length && thinned ? (
             <ChartScroller scrollEnabledOverride={chartZoomed ? false : undefined}>
-              {(w) => (
+              {(w, cw) => (
                 <TimeSeriesChart
                   series={series}
                   height={200}
-                  width={w}
+                  // 缩放态按可视宽渲染：窗口铺满屏幕（拖到边界即数据边界）——
+                  // 900dp 画布口径下手机视口只见 ~40%，拖到边界也看不到末段
+                  width={chartZoomed ? cw : w}
                   onViewportChange={setChartZoomed}
                 />
               )}

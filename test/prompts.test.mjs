@@ -258,9 +258,11 @@ test('记忆回顾轮：报告全文 + 回顾指令 + 既有记忆段（去重�
   assert.match(s, /判断是否有值得记入记忆的用户事实/); // 回顾指令
   assert.match(s, /## 用户记忆[\s\S]*\(#3, 伤病\) 左膝伤后恢复中/); // 既有清单殿后（去重基准）
   assert.match(s, /不调用任何工具、直接回复「无」/); // 无需记录时不许空跑工具
+  assert.match(s, /不要把你自己的分析建议存为记忆/); // 防模型把自身建议写成权威策略段
   const en = buildMemoryReviewPrompt('report', null, 'en');
   assert.match(en, /## Memory Review/);
   assert.match(en, /reply "none"/);
+  assert.match(en, /never store your own analysis or recommendations/);
 });
 
 test('记忆分层口径：rule.4 与工时描述同步两周/5 次放宽（2026-10-13 拍板）', () => {

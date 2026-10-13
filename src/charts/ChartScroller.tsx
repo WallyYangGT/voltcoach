@@ -15,8 +15,10 @@ import { ScrollView, View, type StyleProp, type ViewStyle } from 'react-native';
 export const CHART_CONTENT_WIDTH = 900;
 
 interface Props {
-  /** 渲染图表；width 为内容宽（容器宽与 CHART_CONTENT_WIDTH 的较大者） */
-  children: (width: number) => React.ReactNode;
+  /** 渲染图表；width 为内容宽（容器宽与 CHART_CONTENT_WIDTH 的较大者），
+   *  containerWidth 为可视区实测宽——时序图缩放态用它铺满屏幕（窗口全可视，
+   *  拖到边界即数据边界；画布 900dp 口径下手机视口只显示 ~40%，末段不可达） */
+  children: (width: number, containerWidth: number) => React.ReactNode;
   /**
    * 首次布局完成后自动停在内容末端（不带动画）。
    * 用于「最近日期在右端」的趋势图：一进页面先看到当下，向左滑看历史。
@@ -58,7 +60,7 @@ export function ChartScroller({
             revealed.current = true;
             scrollRef.current?.scrollToEnd({ animated: false });
           }}>
-          {children(contentW)}
+          {children(contentW, containerW)}
         </ScrollView>
       )}
     </View>
