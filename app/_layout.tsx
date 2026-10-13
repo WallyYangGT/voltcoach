@@ -130,6 +130,8 @@ function RootStack() {
         name="dossier"
         options={{ animation: 'slide_from_right' }}
       />
+      {/* v2：训练计划页（周计划/长期计划/历史版本 + 计划会话窗口） */}
+      <Stack.Screen name="plan" options={{ animation: 'slide_from_right' }} />
       {/* M4：数据管理页（备份导出导入 / 顽鹿同步 / 本地快照） */}
       <Stack.Screen
         name="data"
