@@ -178,9 +178,13 @@ export function TimeSeriesChart({ series, height = 220, width: W, onViewportChan
   }, [series, height, view, n, iw]);
 
   const gesture = useMemo(() => {
+    // 回调全是 JS 侧 setState 分发（视窗 state），必须跑 JS 线程：显式 runOnJS(true)——
+    // reanimated 4 + worklets 环境下 RNGH 会把未标注回调当 worklet 在 UI Runtime
+    // 执行，setState 被当 Remote Function 同步调用直接红屏（冒烟实证）。
     // refs 只在手势事件回调里读写（touch 事件流，渲染期永不触发）；
     // react-hooks/refs 不识别 RNGH 的 .onBegin/.onUpdate 是事件注册，定向豁免
     const panG = Gesture.Pan()
+      .runOnJS(true)
       // 未缩放时不启用拖动：横向滑让给 ChartScroller 做粗导航，不抢手势
       .enabled(zoomed)
       // eslint-disable-next-line react-hooks/refs
@@ -194,6 +198,7 @@ export function TimeSeriesChart({ series, height = 220, width: W, onViewportChan
         lastX.current = e.absoluteX;
       });
     const pinchG = Gesture.Pinch()
+      .runOnJS(true)
       // eslint-disable-next-line react-hooks/refs
       .onBegin(() => {
         lastScale.current = 1; // 每段捏合手势从 1 重新累计
@@ -205,6 +210,7 @@ export function TimeSeriesChart({ series, height = 220, width: W, onViewportChan
       });
     const doubleTapG = Gesture.Tap()
       .numberOfTaps(2)
+      .runOnJS(true)
       .onEnd((_e, success) => {
         if (success) reset();
       });
