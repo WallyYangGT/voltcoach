@@ -89,6 +89,8 @@ export default function ActivityDetailScreen() {
   // 功率可信度标记（v2）：true = 该骑行功率不可信，已从训练档案功率基线排除
   const [powerFlagged, setPowerFlagged] = useState(false);
   const [visible, setVisible] = useState<Set<string>>(new Set(DEFAULT_VISIBLE));
+  // 时序图缩放态（双指捏合/拖动启用中）：缩放时禁用 ChartScroller 横滚防手势打架
+  const [chartZoomed, setChartZoomed] = useState(false);
   // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
   const [note, setNote] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
@@ -439,8 +441,15 @@ export default function ActivityDetailScreen() {
             ))}
           </View>
           {series.length && thinned ? (
-            <ChartScroller>
-              {(w) => <TimeSeriesChart series={series} height={200} width={w} />}
+            <ChartScroller scrollEnabledOverride={chartZoomed ? false : undefined}>
+              {(w) => (
+                <TimeSeriesChart
+                  series={series}
+                  height={200}
+                  width={w}
+                  onViewportChange={setChartZoomed}
+                />
+              )}
             </ChartScroller>
           ) : (
             <Text style={styles.emptySmall}>{t('chart.no_data')}</Text>
