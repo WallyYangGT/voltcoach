@@ -347,6 +347,14 @@ test('aggregatePlanWeeks: 周聚合（课次/质量课/TSS 合计/减量周标�
   assert.equal(rows[1].tss, 108.3);
   assert.equal(rows[1].recovery, true); // ≤ 最大周 252.2×0.7
   assert.equal(aggregatePlanWeeks([]).length, 0);
+
+  // 零负荷周（窗外空周/全休息周）不标减量——0 ≤ 阈值恒真曾把空周误标 Recovery
+  const withEmpty = aggregatePlanWeeks([
+    session('2026-10-12', 'threshold', 60), // 100
+    session('2026-10-20', 'rest', null), // 该周计划 TSS 0
+  ]);
+  assert.equal(withEmpty[1].tss, 0);
+  assert.equal(withEmpty[1].recovery, false);
 });
 
 test('slicePlanWeek: 按周一切片（含两端边界）', () => {

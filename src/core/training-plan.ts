@@ -88,7 +88,8 @@ const parseDay = (s: string): number => Date.parse(s + 'T00:00:00Z');
 export const diffDays = (a: string, b: string): number =>
   Math.round((parseDay(b) - parseDay(a)) / DAY_MS);
 
-const addDays = (dateStr: string, n: number): string =>
+/** 日期偏移（UI 周切换导航也用） */
+export const addDays = (dateStr: string, n: number): string =>
   new Date(parseDay(dateStr) + n * DAY_MS).toISOString().slice(0, 10);
 
 /** ISO 周一锚点（05 技能：周从周一开始） */
@@ -380,7 +381,9 @@ export function aggregatePlanWeeks(sessions: PlanSession[]): PlanWeekAgg[] {
       recovery: false,
     }));
   const max = rows.length ? Math.max(...rows.map((r) => r.tss)) : 0;
-  for (const r of rows) r.recovery = max > 0 && r.tss <= max * PLAN_VALIDATION.recovery_week_ratio;
+  // 零负荷周（窗外空周/全休息周）不标减量——0 ≤ 阈值恒真会把空周误标成 Recovery
+  for (const r of rows)
+    r.recovery = max > 0 && r.tss > 0 && r.tss <= max * PLAN_VALIDATION.recovery_week_ratio;
   return rows;
 }
 

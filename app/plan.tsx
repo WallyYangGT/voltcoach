@@ -418,11 +418,14 @@ export default function PlanScreen() {
             {risk.length ? (
               <View style={styles.notes}>
                 <Text style={styles.notesHead}>{t('plan.risk.head')}</Text>
-                {risk.map((f, i) => (
+                {risk.slice(0, 3).map((f, i) => (
                   <Text key={i} style={styles.noteWarn}>
                     · {f.message}
                   </Text>
                 ))}
+                {risk.length > 3 && (
+                  <Text style={styles.noteWarn}>· {t('plan.risk.more', { n: risk.length - 3 })}</Text>
+                )}
               </View>
             ) : null}
           </View>
