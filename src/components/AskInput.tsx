@@ -28,6 +28,8 @@ interface Props {
   style?: StyleProp<ViewStyle>;
   /** 输入框自适应高度上限（会话页 120、内联面板 100） */
   maxHeight?: number;
+  /** 挂载即聚焦（AP1：从首页输入卡片进入新对话页时直达可输入态） */
+  autoFocus?: boolean;
   /** 聚焦信号透传（训练详情页据此区分备注/追问两路滚动目标，会话页不传） */
   onFocus?: () => void;
   /** 行容器布局回调透传（训练详情页据此在内容长高——回复落地/多行自增——时重滚） */
@@ -35,7 +37,7 @@ interface Props {
   ref?: Ref<AskInputInstance>;
 }
 
-export function AskInput({ placeholder, sending, onSend, style, maxHeight = 120, onFocus, onLayout, ref }: Props) {
+export function AskInput({ placeholder, sending, onSend, style, maxHeight = 120, autoFocus, onFocus, onLayout, ref }: Props) {
   const { t } = useI18n();
   const [draft, setDraft] = useState('');
 
@@ -56,6 +58,7 @@ export function AskInput({ placeholder, sending, onSend, style, maxHeight = 120,
         onChangeText={setDraft}
         placeholder={placeholder}
         style={[styles.input, { maxHeight }]}
+        autoFocus={autoFocus}
         onFocus={onFocus}
       />
       <Button

@@ -20,8 +20,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AiReportBody } from '@/components/AiReportBody';
 import { AskInput } from '@/components/AskInput';
 import { ChatBubbles } from '@/components/ChatBubbles';
+import { ChatEmptyHero } from '@/components/ChatEmptyHero';
+import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { useAiReport } from '@/components/useAiReport';
-import { getAiChat, type AiChatRow } from '@/db';
+import { deleteAiChat, getAiChat, type AiChatRow } from '@/db';
 import {
   isChatGenerating,
   runChatGeneration,
@@ -37,12 +39,16 @@ export default function AiSessionScreen() {
   const { t, lang } = useI18n();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id?: string }>();
+  const params = useLocalSearchParams<{ id?: string; autoFocus?: string | string[] }>();
   const raw = Array.isArray(params.id) ? params.id[0] : (params.id ?? '');
   // 路由参数解析：<type>-<id>（chat-new 为新建对话的特殊形态）
   const [kind, idStr] = raw.split('-');
   const entityId = /^\d+$/.test(idStr ?? '') ? Number(idStr) : null;
   const isNewChat = raw === 'chat-new';
+  // AP1：进入即聚焦输入框——chat-new 天然聚焦；replace 到真实 id 时经参数续焦
+  // （首页输入卡片入口直达可输入态；从会话中心浏览既有对话不聚焦）
+  const rawAutoFocus = Array.isArray(params.autoFocus) ? params.autoFocus[0] : params.autoFocus;
+  const wantsFocus = isNewChat || rawAutoFocus === '1';
 
   const [sending, setSending] = useState(false);
 
@@ -139,6 +145,22 @@ export default function AiSessionScreen() {
     [chat, lang, kind, reloadReport, loadChat],
   );
 
+  /** 重设追问（AP4）：删该报告的追问会话（报告保留），reload 重新查找（null 即恢复
+      干净态），下轮提问惰性新建。docker 版「清除追问」语义平移；生成中禁用 */
+  const followUpBusy =
+    !!chat &&
+    (chat.messages.some((m) => m.status === 'pending') ||
+      chat.messages.some((m) => isChatGenerating(chat.id, m.id)));
+  const resetFollowUp = useCallback(async () => {
+    if (kind !== 'report' || !chat) return;
+    try {
+      await deleteAiChat(chat.id);
+      await ai.reload();
+    } catch (e) {
+      Alert.alert(e instanceof Error ? e.message : String(e));
+    }
+  }, [chat, kind, ai]);
+
   /** 重新生成报告：新建一份（旧报告留在历史列表里），随后路由切到新报告 */
   const regenerate = useCallback(() => {
     void (async () => {
@@ -172,9 +194,13 @@ export default function AiSessionScreen() {
         const err = await ai.sendFollowUp(text);
         if (err) Alert.alert(err);
       } else if (isNewChat) {
-        // 新对话：首条消息落库建对话后 replace 到真实 id（返回列表可见）
+        // 新对话：首条消息落库建对话后 replace 到真实 id（返回列表可见）；
+        // autoFocus 续传——replace 会重挂载页面，不带参数键盘会收起
         const { chatId, messageId } = await submitChatMessage({ mode: 'chat', message: text }, lang);
-        router.replace(`/ai/session/chat-${chatId}`);
+        router.replace({
+          pathname: '/ai/session/[id]',
+          params: { id: `chat-${chatId}`, autoFocus: '1' },
+        });
         void runChatGeneration(chatId, messageId, lang).catch((e) =>
           console.warn('对话生成任务异常:', e),
         );
@@ -210,8 +236,10 @@ export default function AiSessionScreen() {
         )}
       </Appbar.Header>
 
-      {/* 滚动容器：报告正文（三态）与消息气泡流共用（P0 修复——长报告必须可滚动） */}
+      {/* 滚动容器：报告正文（三态）与消息气泡流共用（P0 修复——长报告必须可滚动）。
+          直接对话空会话时给引导 hero（AP2），不再白屏 */}
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        {kind === 'chat' && chatMessages.length === 0 && <ChatEmptyHero />}
         {kind === 'report' && (
           <AiReportBody
             report={report}
@@ -230,7 +258,16 @@ export default function AiSessionScreen() {
               kind === 'report' && report?.status === 'completed' && styles.followUpTop,
             ]}>
             {kind === 'report' && report?.status === 'completed' && (
-              <Text style={styles.followUpHead}>{t('session.followUp.hint')}</Text>
+              <View style={styles.followUpHead}>
+                <Text style={styles.followUpHeadText}>{t('session.followUp.hint')}</Text>
+                {chat && (
+                  <ResetFollowUpButton
+                    scope="followup"
+                    disabled={followUpBusy}
+                    onReset={resetFollowUp}
+                  />
+                )}
+              </View>
             )}
             <ChatBubbles chatId={chat?.id ?? -1} messages={chatMessages} onRetry={retryChat} />
           </View>
@@ -238,12 +275,14 @@ export default function AiSessionScreen() {
       </ScrollView>
 
       {/* 输入行：report 页仅 completed 后开放追问；chat 页常开。
-          键盘可见时 KeyboardAvoidingView 已垫起整个页面，再保留 insets.bottom 会双重垫高 */}
+          键盘可见时 KeyboardAvoidingView 已垫起整个页面，再保留 insets.bottom 会双重垫高。
+          autoFocus 仅 chat 分支生效（AP1：首页卡片/chat-new 入口进入即聚焦） */}
       {(kind === 'chat' || report?.status === 'completed') && (
         <AskInput
           placeholder={kind === 'report' ? t('session.followUp.hint') : t('session.chat.hint')}
           sending={sending}
           onSend={send}
+          autoFocus={kind === 'chat' && wantsFocus}
           style={[styles.inputRow, { paddingBottom: (kbVisible ? 0 : insets.bottom) + 10 }]}
         />
       )}
@@ -260,6 +299,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
   followUp: { gap: 8 },
   followUpTop: { borderTopWidth: 1, borderTopColor: palette.lineSoft, paddingTop: 10, marginTop: 4 },
-  followUpHead: { color: palette.faint, fontSize: 11 },
+  followUpHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  followUpHeadText: { color: palette.faint, fontSize: 11 },
   inputRow: { paddingHorizontal: 12, paddingTop: 6 },
 });

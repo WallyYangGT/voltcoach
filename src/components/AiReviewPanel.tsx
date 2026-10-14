@@ -12,13 +12,14 @@ import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
-import { getAiConfig, getLatestReviewReport } from '@/db';
-import { buildReportPrompt, createReportDraft } from '@/services/aiGenerate';
+import { deleteAiChat, getAiConfig, getLatestReviewReport } from '@/db';
+import { buildReportPrompt, createReportDraft, isChatGenerating } from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiReportBody } from './AiReportBody';
 import { AskInput, type AskInputInstance } from './AskInput';
 import { ChatBubbles } from './ChatBubbles';
+import { ResetFollowUpButton } from './ResetFollowUpButton';
 import { useAiReport } from './useAiReport';
 
 export interface AiReviewPanelHandle {
@@ -120,6 +121,25 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
     [ai.chat, retryChatMessage],
   );
 
+  // 重设追问（AP4）：删追问会话（报告保留），reload 内部重跑 findFollowUpChat
+  // 恢复干净态；下轮提问惰性新建会话。有消息在生成时禁用（防删掉在飞会话）
+  const resetFollowUp = useCallback(async () => {
+    const chat = ai.chat;
+    if (!chat) return;
+    try {
+      await deleteAiChat(chat.id);
+      await ai.reload();
+    } catch (e) {
+      Alert.alert(e instanceof Error ? e.message : String(e));
+    }
+  }, [ai]);
+
+  const followUpChat = ai.chat;
+  const followUpBusy =
+    !!followUpChat &&
+    (followUpChat.messages.some((m) => m.status === 'pending') ||
+      followUpChat.messages.some((m) => isChatGenerating(followUpChat.id, m.id)));
+
   const send = useCallback(
     async (text: string) => {
       const err = await sendFollowUp(text);
@@ -205,7 +225,16 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
           />
           {report.status === 'completed' && (
             <View style={styles.followUp}>
-              <Text style={styles.hint}>{t('session.followUp.hint')}</Text>
+              <View style={styles.followUpHead}>
+                <Text style={styles.hint}>{t('session.followUp.hint')}</Text>
+                {followUpChat && (
+                  <ResetFollowUpButton
+                    scope="followup"
+                    disabled={followUpBusy}
+                    onReset={resetFollowUp}
+                  />
+                )}
+              </View>
               {!!ai.chat && (
                 <ChatBubbles chatId={ai.chat.id} messages={ai.chat.messages} onRetry={retryFollowUp} />
               )}
@@ -240,4 +269,5 @@ const styles = StyleSheet.create({
   hint: { color: palette.muted, fontSize: 12.5, lineHeight: 18 },
   btnRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   followUp: { gap: 8, borderTopWidth: 1, borderTopColor: palette.lineSoft, paddingTop: 10 },
+  followUpHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
 });

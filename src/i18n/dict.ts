@@ -135,11 +135,11 @@ export const DICT = {
 
     // ---- 底部导航（App 新信息架构） ----
     'tab.home': '首页',
-    'tab.activities': '训练',
+    'tab.activities': '记录',
     'tab.ai': 'AI',
     'tab.me': '我的',
 
-    // ---- M2：首页仪表盘（dash.* 文案与 Web 版同 key 逐字一致；empty 按 App 信息架构改指「训练」tab） ----
+    // ---- M2：首页仪表盘（dash.* 文案与 Web 版同 key 逐字一致；empty 按 App 信息架构改指「记录」tab，AP5 随 tab 改名联动） ----
     'dash.title': '负荷仪表盘',
     'dash.sub': 'CTL 体能 · ATL 疲劳 · TSB 状态（最近 90 天）',
     'dash.glossary_title': '指标说明与算法口径',
@@ -150,7 +150,7 @@ export const DICT = {
     'dash.tsb': 'TSB · 状态',
     'dash.ftp': 'FTP · 阈值',
     'dash.ftp_btn': '科学估算 FTP',
-    'dash.empty': '训练库为空 — 到「训练」页导入第一个 FIT 文件',
+    'dash.empty': '训练库为空 — 到「记录」页导入第一个 FIT 文件',
     'dash.trend': '负荷趋势（灰柱 = 每日 TSS）',
     'dash.legend.ctl': 'CTL 体能',
     'dash.legend.atl': 'ATL 疲劳',
@@ -233,7 +233,7 @@ export const DICT = {
     'gloss.a4.t': 'AI 报告',
     'gloss.a4.d': '本机把训练数据、负荷走势与指标口径拼装成 Markdown 提示词，调用 OpenAI 兼容接口（默认 Kimi）生成报告；未配置 API 密钥时展示完整提示词，可一键复制到任意 AI 使用。',
 
-    'activities.title': '训练',
+    'activities.title': '记录',
     'ai.title': 'AI',
     // ---- M3：AI 会话中心（统一历史列表 + Bottom Sheet 场景选择流） ----
     'ai.center.new': '新对话',
@@ -284,6 +284,13 @@ export const DICT = {
     'ai.scenario.generate': '生成',
     'ai.center.deleteChat': '删除对话',
     'ai.center.deleteChatMsg': '删除该对话及其全部消息？',
+    // ---- AI 体验整合批（AP1/AP2）：首页对话入口卡片与对话页空态引导共用占位文案 ----
+    'ai.invite.placeholder': '和教练讨论一下…',
+    // ---- AI 体验整合批（AP4）：重设追问（docker 版「清除追问」语义平移） ----
+    'ai.followup.reset': '重设追问',
+    'ai.reset.title': '重设追问',
+    'ai.reset.followupBody': '将删除该报告下的全部追问消息，不可恢复。',
+    'ai.reset.planBody': '将删除计划会话的全部消息，不可恢复。',
     // ---- AI 复盘报告面板（训练详情页内嵌；key 沿用 Web 版 views/activities.js 的 ai.panel.*） ----
     'ai.panel': 'AI 复盘报告',
     'ai.panel.pending': 'AI 复盘报告（生成中…）',
@@ -420,6 +427,7 @@ export const DICT = {
     'plan.history.back': '返回当前版本',
     'plan.chat.head': '计划会话',
     'plan.chat.hint': '围绕计划提问，或让 AI 调整（换课 / 减量 / 顺延）',
+    'plan.report.head': '规划解读',
     'plan.empty': '还没有训练计划',
     'me.title': '我的',
     'me.ftp': 'FTP',
@@ -693,7 +701,7 @@ export const DICT = {
     'm.tsb': 'Day TSB',
 
     'tab.home': 'Home',
-    'tab.activities': 'Training',
+    'tab.activities': 'Records',
     'tab.ai': 'AI',
     'tab.me': 'Me',
 
@@ -707,7 +715,7 @@ export const DICT = {
     'dash.tsb': 'TSB · Form',
     'dash.ftp': 'FTP · Threshold',
     'dash.ftp_btn': 'Estimate FTP',
-    'dash.empty': 'The training library is empty — import your first FIT file on the Training tab',
+    'dash.empty': 'The training library is empty — import your first FIT file on the Records tab',
     'dash.trend': 'Load trend (grey bars = daily TSS)',
     'dash.legend.ctl': 'CTL Fitness',
     'dash.legend.atl': 'ATL Fatigue',
@@ -786,7 +794,7 @@ export const DICT = {
     'gloss.a4.t': 'AI reports',
     'gloss.a4.d': 'On-device, training data, load trends and metric definitions are assembled into a Markdown prompt and sent to an OpenAI-compatible API (Kimi by default); without an API key the full prompt is shown for one-click copy to any AI.',
 
-    'activities.title': 'Training',
+    'activities.title': 'Records',
     'ai.title': 'AI',
     'me.title': 'Me',
     'me.ftp': 'FTP',
@@ -980,6 +988,13 @@ export const DICT = {
     'ai.scenario.generate': 'Generate',
     'ai.center.deleteChat': 'Delete chat',
     'ai.center.deleteChatMsg': 'Delete this chat and all its messages?',
+    // ---- AI 体验整合批（AP1/AP2）：首页对话入口卡片与对话页空态引导共用占位文案 ----
+    'ai.invite.placeholder': 'Ask your coach…',
+    // ---- AI 体验整合批（AP4）：重设追问（docker 版「清除追问」语义平移） ----
+    'ai.followup.reset': 'Reset follow-up',
+    'ai.reset.title': 'Reset follow-up',
+    'ai.reset.followupBody': 'This deletes all follow-up messages for this report. This cannot be undone.',
+    'ai.reset.planBody': 'This deletes all plan chat messages. This cannot be undone.',
     'ai.panel': 'AI Review Report',
     'ai.panel.pending': 'AI Review Report (generating…)',
     'ai.panel.failed': 'AI Review Report (failed)',
@@ -1112,6 +1127,7 @@ export const DICT = {
     'plan.history.back': 'Back to current version',
     'plan.chat.head': 'Plan chat',
     'plan.chat.hint': 'Ask about the plan, or ask the AI to adjust it (swap / reduce / shift)',
+    'plan.report.head': 'Plan insights',
     'plan.empty': 'No training plan yet',
   },
 } as const;

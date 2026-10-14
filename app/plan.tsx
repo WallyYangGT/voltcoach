@@ -16,13 +16,16 @@ import { Appbar, Button, SegmentedButtons } from 'react-native-paper';
 import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  deleteAiChat,
   findPlanChat,
   getAiChat,
   getAiConfig,
+  getAiReport,
   getCurrentPlan,
   getPlanHistory,
   recentFormDaily,
   type AiChatMessageRow,
+  type AiReportRow,
   type StoredPlan,
 } from '@/db';
 import { isChatGenerating, runChatGeneration, submitChatMessage, createReportDraft, generateReport } from '@/services/aiGenerate';
@@ -41,6 +44,8 @@ import {
   type TrainingPlan,
 } from '@/core/training-plan';
 import { PlanTable, type PlanTableColumn } from '@/components/PlanTable';
+import { PlanReportSection } from '@/components/PlanReportSection';
+import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { AskInput } from '@/components/AskInput';
 import { ChatBubbles } from '@/components/ChatBubbles';
 import { useI18n } from '@/i18n';
@@ -79,6 +84,8 @@ export default function PlanScreen() {
   const [chatId, setChatId] = useState<number | null>(null);
   const [messages, setMessages] = useState<AiChatMessageRow[]>([]);
   const [sending, setSending] = useState(false);
+  // 规划解读（AP3）：当前查看版本的来源报告只读快照，null = 无来源/未生成/被滚动清出
+  const [planReport, setPlanReport] = useState<AiReportRow | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -147,10 +154,32 @@ export default function PlanScreen() {
     return () => clearInterval(timer);
   }, [messages, chatId, lang, load]);
 
-  // 新消息/键盘弹起滚到底（口径同会话详情页）
+  // 规划解读（AP3）：跟随当前查看版本（当前版/历史版各自的 source_report_id）拉取
+  // 只读快照；无来源（adjust 版）、未生成或被 trimAiReports 清出时为 null 整段隐藏。
+  // setState 全部在异步回调里（react-hooks/set-state-in-effect 禁同步触发级联渲染）
   useEffect(() => {
-    scrollRef.current?.scrollToEnd({ animated: true });
-  }, [messages.length, kbVisible]);
+    const sid = (viewing != null ? (history[viewing] ?? null) : stored)?.source_report_id ?? null;
+    let alive = true;
+    void (async () => {
+      const r = sid == null ? null : await getAiReport(sid).catch((e) => {
+        console.warn('规划解读加载失败:', e);
+        return null;
+      });
+      if (alive) setPlanReport(r);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [stored, history, viewing]);
+
+  // 键盘弹起滚到底（口径同会话详情页，延时等 KeyboardAvoidingView 落位）。
+  // AP3 起进页不再自动滚——此前 messages.length 驱动的 scrollToEnd 会把进页视口
+  // 甩到底部会话区，横跨数周的计划表反而看不到；现在只有键盘浮起与主动发送才滚
+  useEffect(() => {
+    if (!kbVisible) return;
+    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 260);
+    return () => clearTimeout(timer);
+  }, [kbVisible]);
 
   const send = useCallback(
     async (text: string) => {
@@ -164,6 +193,8 @@ export default function PlanScreen() {
         setChatId(cid);
         const c = await getAiChat(cid);
         if (c) setMessages(c.messages);
+        // AP3：仅用户主动发送后滚动到会话区（进页不再自动滚）
+        requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
         void runChatGeneration(cid, messageId, lang).catch((e) =>
           console.warn('计划会话生成失败:', e),
         );
@@ -185,6 +216,23 @@ export default function PlanScreen() {
     },
     [chatId, lang],
   );
+
+  // 重设追问（AP4）：计划会话是全局单线程，多周追问历史每轮全量进 prompt——
+  // 重设即开新话题（token 止血）。删会话后置空本地态，下次发送走 chatId=null
+  // 的惰性新建路径。生成中禁用（防删掉在飞会话）
+  const chatBusy =
+    messages.some((m) => m.status === 'pending') ||
+    (chatId != null && messages.some((m) => isChatGenerating(chatId, m.id)));
+  const resetPlanChat = useCallback(async () => {
+    if (chatId == null) return;
+    try {
+      await deleteAiChat(chatId);
+      setChatId(null);
+      setMessages([]);
+    } catch (e) {
+      Alert.alert(e instanceof Error ? e.message : String(e));
+    }
+  }, [chatId]);
 
   const onGenerate = useCallback(async () => {
     if (generating) return;
@@ -478,9 +526,24 @@ export default function PlanScreen() {
           </View>
         )}
 
+        {/* 规划解读（AP3）：当前查看版本的来源报告只读挂底，不自动滚动；
+            报告页仍是唯一真源（三态/分享/重新生成/追问都在那边） */}
+        <PlanReportSection
+          report={planReport}
+          onViewReport={() => {
+            const sid = (viewing != null ? (history[viewing] ?? null) : stored)?.source_report_id;
+            if (sid != null) router.push(`/ai/session/report-${sid}`);
+          }}
+        />
+
         {/* 计划会话 */}
         <View style={styles.chatSection}>
-          <Text style={styles.sectionTitle}>{t('plan.chat.head')}</Text>
+          <View style={styles.chatHead}>
+            <Text style={styles.sectionTitle}>{t('plan.chat.head')}</Text>
+            {chatId != null && (
+              <ResetFollowUpButton scope="plan" disabled={chatBusy} onReset={resetPlanChat} />
+            )}
+          </View>
           {chatId != null && <ChatBubbles chatId={chatId} messages={messages} onRetry={retry} />}
         </View>
       </ScrollView>
@@ -544,6 +607,7 @@ const styles = StyleSheet.create({
   historyNote: { color: palette.text, fontSize: 12 },
   historyRange: { color: palette.muted, fontSize: 11, fontVariant: ['tabular-nums'] },
   chatSection: { gap: 8, paddingHorizontal: 0 },
+  chatHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   emptyText: { color: palette.muted, textAlign: 'center', lineHeight: 24, paddingVertical: 8 },
   inputRow: {
     paddingHorizontal: 16,
