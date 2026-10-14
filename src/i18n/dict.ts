@@ -422,6 +422,7 @@ export const DICT = {
     'plan.history.back': '返回当前版本',
     'plan.chat.head': '计划会话',
     'plan.chat.hint': '围绕计划提问，或让 AI 调整（换课 / 减量 / 顺延）',
+    'plan.report.head': '规划解读',
     'plan.empty': '还没有训练计划',
     'me.title': '我的',
     'me.ftp': 'FTP',
@@ -1116,6 +1117,7 @@ export const DICT = {
     'plan.history.back': 'Back to current version',
     'plan.chat.head': 'Plan chat',
     'plan.chat.hint': 'Ask about the plan, or ask the AI to adjust it (swap / reduce / shift)',
+    'plan.report.head': 'Plan insights',
     'plan.empty': 'No training plan yet',
   },
 } as const;
