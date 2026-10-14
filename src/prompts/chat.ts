@@ -6,7 +6,8 @@
  * 数据（报告正文/训练 summary/记忆/背景/技能段/生效骑手参数）由编排层注入——本模块
  * 无 IO，node:test 可直接断言结构。
  *
- * - follow_up：快答指令 + 当前时间 + 关联报告正文 + 关联训练压缩数据 + 训练档案段 + 工具指引 + 用户记忆段；
+ * - follow_up：快答指令 + 当前时间 + 关联报告正文（超限瘦身为首末章）+ 关联训练压缩数据
+ *   （第 2 轮起降为 headline 摘要，E1）+ 训练档案段 + 工具指引 + 用户记忆段；
  * - chat：教练角色 + 指标口径 + 当前时间 + 专业知识库 + 用户背景 + 训练档案段 + 对话指令 + 工具指引 + 用户记忆段；
  * - plan：与 chat 同构，对话指令换成计划会话口径（先查计划/调整走 update_training_plan 过校验，v2 训练计划载体）。
  * 记忆段只在 agentic 模式注入——其中的 save_memory 指引依赖工具调用能力；
@@ -24,7 +25,9 @@ import {
   buildMemorySection,
   buildMetricGlossary,
   buildProfileSection,
+  compactReportForPrompt,
   compactSummaryForPrompt,
+  headlineSummaryForPrompt,
   ROLE,
   ROLE_EN,
   type PromptMemory,
@@ -48,10 +51,16 @@ export interface ChatSystemInput {
   now: Date;
   /** 个人训练档案段（buildDossierSection 输出，可空；两种模式都注入） */
   dossierSection?: string | null;
-  /** follow_up：关联报告正文（报告可能已被滚动清理，缺则仅靠训练数据） */
+  /** follow_up：关联报告正文（报告可能已被滚动清理，缺则仅靠训练数据；超 6000 字符自动瘦身） */
   reportMarkdown?: string | null;
-  /** follow_up：关联训练 summary（压缩后附上，供引用报告未覆盖的细节） */
+  /** follow_up：关联训练 summary（第 1 轮压缩后附上，第 2 轮起降为 headline 摘要） */
   summary?: object | null;
+  /**
+   * follow_up：本轮之前已完成的回答轮数（0 = 首轮）。首轮带完整压缩 summary 供
+   * 模型引用细节，第 2 轮起降为 headline 摘要——历史每轮全量重发，完整 JSON 的
+   * token 成本随对话轮数线性放大（架构评审 E1）。
+   */
+  historyTurns?: number;
 }
 
 export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'): string {
@@ -61,13 +70,19 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
     // 当前时间：追问常涉及「今天感觉如何/接下来怎么练」，先锚定日期基准
     const nowSection = buildDateSection(now, lang);
     if (nowSection) s += `\n\n${nowSection}`;
-    // 报告正文：追问以报告内容为锚
-    if (input.reportMarkdown) s += `\n\n${t(lang, 'srv.report_body')}\n${input.reportMarkdown}`;
-    // 追问只带报告会让 AI 无法回答报告未覆盖的细节，按 file_name 附压缩后的训练数据
+    // 报告正文：追问以报告内容为锚（超限瘦身为首末章，中间章仅保留标题）
+    if (input.reportMarkdown)
+      s += `\n\n${t(lang, 'srv.report_body')}\n${compactReportForPrompt(input.reportMarkdown, lang)}`;
+    // 追问只带报告会让 AI 无法回答报告未覆盖的细节，按 file_name 附训练数据——
+    // 首轮压缩全量，第 2 轮起降为 headline 摘要（历史每轮重发，完整 JSON 随轮数线性烧 token）
     if (input.summary) {
+      const payload =
+        (input.historyTurns ?? 0) > 0
+          ? headlineSummaryForPrompt(input.summary, lang)
+          : compactSummaryForPrompt(input.summary, lang);
       s +=
         `\n\n${t(lang, 'srv.training_data')}\n` + '```json\n' +
-        JSON.stringify(compactSummaryForPrompt(input.summary, lang)) +
+        JSON.stringify(payload) +
         '\n```';
     }
     if (input.dossierSection) s += `\n\n${input.dossierSection}`;

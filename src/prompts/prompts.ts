@@ -135,6 +135,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
 
     'answer.head': `## 请回答`,
     'seg.omitted': `...（中间省略 {n} 段）`,
+    'report.omitted': `（报告较长：以下中间章节仅保留标题，正文已省略——引用细节时请以首末完整章节与训练数据为准）`,
 
     'cat.training': `训练`,
     'cat.race': `比赛`,
@@ -302,6 +303,7 @@ You are in the "training plan" conversation, answering questions about and adjus
 
     'answer.head': `## Please Answer`,
     'seg.omitted': `...({n} segments omitted in the middle)`,
+    'report.omitted': `(Report truncated: middle sections below are headings only — cite details from the full first/last sections and the workout data.)`,
 
     'cat.training': `Training`,
     'cat.race': `Race`,
@@ -853,6 +855,92 @@ export function compactSummaryForPrompt<T extends object>(summary: T, lang: Prom
       .slice(0, CLIMBS_MAX);
   }
   return localizeTimestamps(out) as T;
+}
+
+// ---------------- follow_up 上下文瘦身（架构评审 E1 的 80% 收益子集，2026-10） ----------------
+
+/** 报告正文内联上限：追问系统段的报告超过该长度才裁剪（常规报告 2–5k 字符不受影响） */
+const REPORT_INLINE_MAX_CHARS = 6000;
+
+/**
+ * 报告正文瘦身：≤6000 字符原样返回；超出按 markdown 标题行（^#+）切章——
+ * 首章（总评）与末章（建议）全文保留，中间各章只保留标题行 + 一条省略说明，
+ * 让模型知道省略了什么、把引用锚定在可见内容上。无标题的超长文本退化为
+ * 首尾字符截断（各留一半预算）。原文本不变，返回新字符串。
+ */
+export function compactReportForPrompt(markdown: string, lang: PromptLang = 'zh'): string {
+  if (!markdown || markdown.length <= REPORT_INLINE_MAX_CHARS) return markdown;
+  const lines = markdown.split('\n');
+  const isHeading = (l: string) => /^#{1,6}\s/.test(l);
+  const firstHeadingIdx = lines.findIndex(isHeading);
+  // 无任何标题：退化为首尾字符截断（首 2/3、尾 1/3 预算）
+  if (firstHeadingIdx < 0) {
+    const headCut = Math.floor((REPORT_INLINE_MAX_CHARS * 2) / 3);
+    const tailCut = Math.min(markdown.length - headCut - 1, REPORT_INLINE_MAX_CHARS - headCut);
+    return (
+      markdown.slice(0, headCut) +
+      '\n\n' +
+      TT(lang, 'report.omitted') +
+      '\n\n' +
+      markdown.slice(markdown.length - tailCut)
+    );
+  }
+  // 标题行下标列表（含首行前的引言块视为首章的一部分）
+  const headingIdxs: number[] = [];
+  lines.forEach((l, i) => {
+    if (i >= firstHeadingIdx && isHeading(l)) headingIdxs.push(i);
+  });
+  const lastHeadingIdx = headingIdxs[headingIdxs.length - 1];
+  const out: string[] = [];
+  out.push(...lines.slice(0, headingIdxs[1] ?? lines.length)); // 首章（引言 + 第一个标题到第二个标题前）
+  const middleHeadings = headingIdxs.slice(1, -1);
+  if (middleHeadings.length) {
+    out.push('', TT(lang, 'report.omitted'));
+    for (const hi of middleHeadings) out.push('', lines[hi]);
+  }
+  out.push('', ...lines.slice(lastHeadingIdx)); // 末章全文
+  return out.join('\n');
+}
+
+/**
+ * summary headline 摘要：只保留标量核心字段与小型映射（区间占比等），
+ * 丢掉随训练时长增长的列表载荷（peak_curve/climbs/segments/anomalies/
+ * interval_set/developer_fields）。用于 follow_up 第 2 轮起的系统段——
+ * 第 1 轮已带完整压缩数据，后续轮模型的主要任务是围绕对话推进，
+ * headline 足够定位「这是哪趟训练、量级如何」。
+ */
+export function headlineSummaryForPrompt<T extends object>(summary: T, lang: PromptLang = 'zh'): T {
+  void lang; // 与 compactSummaryForPrompt 保持同形签名（当前无需文案）
+  if (!summary || typeof summary !== 'object') return summary;
+  const s = summary as LooseSummary;
+  const pickKeys = (obj: unknown, keys: string[]): LooseSummary | null => {
+    if (!obj || typeof obj !== 'object') return null;
+    const src = obj as LooseSummary;
+    const out: LooseSummary = {};
+    for (const k of keys) if (src[k] !== undefined) out[k] = src[k];
+    return Object.keys(out).length ? out : null;
+  };
+  const head: LooseSummary = {};
+  const activity = pickKeys(s.activity, [
+    'date', 'sport', 'duration_sec', 'distance_km', 'elevation_gain_m', 'category', 'note',
+  ]);
+  if (activity) head.activity = activity;
+  // 骑手参数与体能状态：扁平标量，体积恒定
+  if (s.athlete_context && typeof s.athlete_context === 'object') head.athlete_context = s.athlete_context;
+  const power = pickKeys(s.power, [
+    'avg', 'normalized_power', 'max', 'variability_index', 'intensity_factor', 'tss',
+    'w_per_kg_avg', 'zone_distribution_pct',
+  ]);
+  if (power) head.power = power;
+  if (s.heart_rate && typeof s.heart_rate === 'object') head.heart_rate = s.heart_rate;
+  if (s.cadence && typeof s.cadence === 'object') head.cadence = s.cadence;
+  if (s.pace) head.pace = s.pace;
+  if (s.temperature) head.temperature = s.temperature;
+  if (s.swim) head.swim = s.swim;
+  if (s.cadence_power) head.cadence_power = s.cadence_power;
+  if (s.pedal_time) head.pedal_time = s.pedal_time;
+  if (s.data_quality) head.data_quality = s.data_quality;
+  return head as T;
 }
 
 // ---------------- 场景模板 ----------------

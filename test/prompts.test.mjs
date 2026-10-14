@@ -21,6 +21,8 @@ const {
   buildDateSection,
   buildChatInstruction,
   compactSummaryForPrompt,
+  compactReportForPrompt,
+  headlineSummaryForPrompt,
   localizeTimestamps,
   thinToWeekly,
 } = await import('../src/prompts/prompts.ts');
@@ -383,6 +385,92 @@ test('对话系统段（follow_up）：快答指令 + 报告正文 + 训练数�
   assert.doesNotMatch(s, /专业知识库/); // follow_up 不注 skills
   assert.doesNotMatch(s, /## 角色/); // 无角色段（快答场景）
   assert.doesNotMatch(s, /用户背景与训练目标/); // 无 profile 段
+});
+
+test('compactReportForPrompt：短报告原样、长报告保首末章中间只留标题', () => {
+  const short = '# 复盘报告\n\n本次训练 NP 180W…';
+  assert.equal(compactReportForPrompt(short, 'zh'), short); // ≤6000 字符不裁
+
+  const long = [
+    '# 复盘报告',
+    '\n总体看这是一次完成度很高的训练' + '。补充叙述'.repeat(80),
+    '\n\n## 分段细节\n\n' + '前半段功率平稳，后半段出现衰减，'.repeat(300),
+    '\n\n## 建议\n\n' + '下周安排一次低强度长骑恢复，'.repeat(300),
+  ].join('');
+  assert.ok(long.length > 6000);
+  const c = compactReportForPrompt(long, 'zh');
+  assert.match(c, /^# 复盘报告/); // 首章（含引言）全文
+  assert.match(c, /补充叙述/);
+  assert.match(c, /中间章节仅保留标题/); // 省略说明
+  assert.match(c, /## 分段细节/); // 中间章标题保留…
+  assert.doesNotMatch(c, /功率平稳/); // …正文省略
+  assert.match(c, /## 建议\n\n下周安排/); // 末章全文
+  const en = compactReportForPrompt(long, 'en');
+  assert.match(en, /middle sections below are headings only/);
+
+  const noHeading = '无标题长文'.repeat(2000); // 10000 字符、无 markdown 标题
+  const f = compactReportForPrompt(noHeading, 'zh');
+  assert.ok(f.length < noHeading.length);
+  assert.match(f, /中间章节仅保留标题/);
+  assert.match(f, /^无标题长文/); // 首部保留
+});
+
+test('headlineSummaryForPrompt：留标量核心与区间占比，丢列表载荷', () => {
+  const s = sampleSummary({
+    power: { normalized_power: 180, avg: 160, intensity_factor: 0.85, tss: 60, peak_curve: [{ min: 1, watts: 300 }], zone_distribution_pct: { z1: 40, z2: 35 } },
+    segments: [{ name: 'seg1' }, { name: 'seg2' }],
+    anomalies: [{ type: 'timer_pause', at: 'x' }],
+    climbs: [{ name: '爬坡' }],
+    interval_set: { sets: [] },
+    data_quality: { record_count: 3600, power_coverage_pct: 99 },
+  });
+  const h = headlineSummaryForPrompt(s, 'zh');
+  assert.equal(h.power.normalized_power, 180);
+  assert.deepEqual(h.power.zone_distribution_pct, { z1: 40, z2: 35 }); // 小型映射保留
+  assert.equal(h.data_quality.record_count, 3600);
+  assert.equal(h.athlete_context.ctl, 50);
+  assert.equal('segments' in h, false); // 列表载荷不进 headline
+  assert.equal('anomalies' in h, false);
+  assert.equal('climbs' in h, false);
+  assert.equal('interval_set' in h, false);
+  assert.equal('peak_curve' in h.power, false);
+  assert.deepEqual(h, headlineSummaryForPrompt(s, 'en')); // 双语同形（无文案）
+});
+
+test('对话系统段（follow_up）第 2 轮起：summary 降 headline、长报告瘦身为首末章', () => {
+  const base = {
+    mode: 'follow_up',
+    agentic: true,
+    athlete: ATHLETE,
+    profile: null,
+    skills: null,
+    memories: [],
+    now: new Date('2026-03-26T10:00:00'),
+    summary: sampleSummary({
+      power: { normalized_power: 180, avg: 160, tss: 60, peak_curve: [{ min: 1, watts: 300 }] },
+      segments: [{ name: 'seg1' }],
+    }),
+  };
+  const round2 = buildChatSystemSection({ ...base, historyTurns: 1 }, 'zh');
+  assert.match(round2, /"normalized_power":180/); // headline 仍可定位训练量级
+  assert.doesNotMatch(round2, /"segments"/);
+  assert.doesNotMatch(round2, /"peak_curve"/);
+  const round1 = buildChatSystemSection({ ...base, historyTurns: 0 }, 'zh');
+  assert.match(round1, /"peak_curve"/); // 首轮 summary 走 compactSummaryForPrompt 全量（不裁 peak_curve，短 segments 原样）
+  assert.match(round1, /"segments"/);
+  const legacy = buildChatSystemSection(base, 'zh'); // 未传 historyTurns 视为首轮（向后兼容）
+  assert.match(legacy, /"segments"/);
+
+  const longReport = [
+    '# 复盘报告',
+    '\n总体评价' + '。展开'.repeat(80),
+    '\n\n## 心率与漂移\n\n' + '心率漂移偏大，'.repeat(900),
+    '\n\n## 建议\n\n休息',
+  ].join('');
+  const trimmed = buildChatSystemSection({ ...base, historyTurns: 1, reportMarkdown: longReport }, 'zh');
+  assert.match(trimmed, /中间章节仅保留标题/);
+  assert.doesNotMatch(trimmed, /心率漂移偏大/); // 中间章正文不进系统段
+  assert.match(trimmed, /## 建议\n\n休息/);
 });
 
 test('对话系统段（chat）：角色 + 口径 + 当前时间 + skills + profile + 指令 + 工具 + 记忆', () => {
