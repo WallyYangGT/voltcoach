@@ -47,6 +47,29 @@ test('shouldPollReport: 完成且无任务无追问 → 停止轮询（不空转
   assert.equal(shouldPollReport({ ...base, status: null }), false);
 });
 
+test('shouldPollReport: cancelled 不轮询（取消后无任何补跑路径，不得复活）', () => {
+  assert.equal(shouldPollReport({ ...base, status: 'cancelled' }), false);
+  assert.equal(shouldPollReport({ ...base, status: 'cancelled', chatPending: false }), false);
+});
+
+// ---------------- shouldFlushPartial：增量落库节流（2026-10） ----------------
+
+const { shouldFlushPartial, STREAM_FLUSH_MIN_CHARS, STREAM_FLUSH_MIN_MS } = await import(
+  '../src/core/report-status.ts'
+);
+
+test('shouldFlushPartial: 字数与间隔同时过线才写库', () => {
+  assert.equal(shouldFlushPartial(STREAM_FLUSH_MIN_CHARS, STREAM_FLUSH_MIN_MS), true);
+  assert.equal(shouldFlushPartial(STREAM_FLUSH_MIN_CHARS - 1, STREAM_FLUSH_MIN_MS + 9999), false); // 字数不足
+  assert.equal(shouldFlushPartial(STREAM_FLUSH_MIN_CHARS + 9999, STREAM_FLUSH_MIN_MS - 1), false); // 间隔不足
+});
+
+test('shouldFlushPartial: 恰好低于阈值其一即 false（边界含等号在过线侧）', () => {
+  assert.equal(shouldFlushPartial(0, 0), false);
+  assert.equal(shouldFlushPartial(199, 5000), false);
+  assert.equal(shouldFlushPartial(5000, 1999), false);
+});
+
 // ---------------- parseDbUtcTimestamp：SQLite datetime('now') 的 UTC 无时区串 ----------------
 
 const NOW = Date.parse('2026-09-24T08:00:00Z');

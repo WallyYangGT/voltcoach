@@ -38,6 +38,18 @@ export class AiTransportError extends Error {
   }
 }
 
+/**
+ * 用户主动取消（非错误）：编排层 abort 时以本类实例为 signal.reason，供
+ * agent 层超时分类与编排层回写（cancelled 而非 failed）区分——不能走
+ * `/aborted|timeout/` 文案匹配（会把取消误报成总超时，T1 的同型坑）。
+ */
+export class AiCancelledError extends Error {
+  constructor(message = 'generation cancelled by user') {
+    super(message);
+    this.name = 'AiCancelledError';
+  }
+}
+
 /** 传输级自动重试次数（首次 + 1 次重试）；总超时预算由调用方 signal 统一约束，不重置 */
 const MAX_ATTEMPTS = 2;
 /** 重试前的等待：多数断连是瞬时的，稍等即可；同时避免立刻二次冲击网关 */
@@ -201,8 +213,9 @@ export async function requestChatCompletion(
       retried += 1;
       onRetry?.(attempt + 1, msg);
       await new Promise((r) => setTimeout(r, retryDelayMs));
-      // 等待期间超时/取消：不再补发（否则白发一次请求，错误还更晦涩）
-      if (signal?.aborted) throw e;
+      // 等待期间超时/取消：不再补发。取消时必须抛 signal.reason（AiCancelledError）而非
+      // 原传输错误——否则编排层会把取消误判成失败（failed 而非 cancelled）
+      if (signal?.aborted) throw signal.reason ?? e;
     }
   }
   // 理论不可达（循环体内要么 return 要么 throw），保留兜底
@@ -281,6 +294,9 @@ async function requestOnce(
   let rawText = ''; // 原始正文（无 data: 帧时按普通 JSON 响应兜底）
   let sawFrame = false;
   let sawDelta = false; // 是否已收到增量帧（与整段 message 帧互斥，防正文重复）
+  // tool_calls 增量帧聚合（agent 循环流式化，2026-10）：按 index 分桶，id/name/arguments
+  // 均为增量字段按分片拼接（OpenAI 兼容口径；name 通常首帧给全，拼接幂等）
+  const toolAcc = new Map<number, { id: string; name: string; args: string }>();
   const emit = (delta: string) => {
     fullText += delta;
     onStreamChunk?.(delta);
@@ -293,7 +309,13 @@ async function requestOnce(
     if (!data || data === '[DONE]') return; // 空 data 帧是部分网关的心跳，非错误
     let obj: {
       error?: { message?: string };
-      choices?: { delta?: { content?: string }; message?: ChatMessage }[];
+      choices?: {
+        delta?: {
+          content?: string;
+          tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[];
+        };
+        message?: ChatMessage;
+      }[];
     };
     try {
       obj = JSON.parse(data);
@@ -310,6 +332,18 @@ async function requestOnce(
     if (deltaContent) {
       sawDelta = true;
       emit(deltaContent);
+      return;
+    }
+    const deltaTools = choice?.delta?.tool_calls;
+    if (deltaTools?.length) {
+      sawDelta = true; // 工具增量帧同样是"流式形态"证据，收尾的整段 message 帧不得再覆盖
+      for (const tc of deltaTools) {
+        const slot = toolAcc.get(tc.index) ?? { id: '', name: '', args: '' };
+        if (tc.id) slot.id += tc.id;
+        if (tc.function?.name) slot.name += tc.function.name;
+        if (tc.function?.arguments) slot.args += tc.function.arguments;
+        toolAcc.set(tc.index, slot);
+      }
       return;
     }
     const wholeContent = choice?.message?.content;
@@ -354,9 +388,20 @@ async function requestOnce(
     // 服务端无视 stream 直接回了整段 JSON：按非流式格式解析（否则会被误判成空响应）
     const msg = parseMessageBody(rawText + decodeUtf8(buffer), res.status, lang);
     const content = msg.content ?? '';
-    if (!content) throw new AiTransportError(t(lang, 'ai.empty'), true); // 不回空正文给调用方
-    emit(content);
+    if (!content && !msg.tool_calls?.length)
+      throw new AiTransportError(t(lang, 'ai.empty'), true); // 不回空正文给调用方
+    if (content) emit(content);
+    // 带工具调用的整段兜底必须回原 message 对象——agent 循环依赖 tool_calls 结构，
+    // 降级成纯字符串会丢掉工具调用（2026-10 流式化后：循环请求也走流式，会落到本分支）
+    if (msg.tool_calls?.length) return msg;
     return onStreamChunk ? content : msg;
+  }
+  if (toolAcc.size > 0) {
+    // 流式带工具：按 message 对象返回（与调用方传 stream:false 的预期一致），正文可空
+    const tool_calls: ToolCall[] = [...toolAcc.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, v]) => ({ id: v.id, type: 'function' as const, function: { name: v.name, arguments: v.args } }));
+    return { role: 'assistant', content: fullText || null, tool_calls };
   }
   if (!fullText) throw new AiTransportError(t(lang, 'ai.empty'), true);
   // 调用方未要求增量（本次是降级重试）：按 message 对象返回，与它传 stream:false 的预期一致

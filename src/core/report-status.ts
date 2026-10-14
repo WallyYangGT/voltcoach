@@ -58,3 +58,18 @@ export function withinResumeWindow(
   const age = now - started;
   return age >= 0 && age <= maxAgeMs;
 }
+
+// ---------------- 增量落库节流（2026-10 SSE 增量落库） ----------------
+
+/** 距上次落库至少新增这么多字才值得写一次 db（避免逐 token 打库） */
+export const STREAM_FLUSH_MIN_CHARS = 200;
+/** 距上次落库至少间隔这么久才写（生成中的 db 写频率上限 ≈ 每 2s 一次） */
+export const STREAM_FLUSH_MIN_MS = 2000;
+
+/**
+ * 流式增量落库的节流判定：自上次落库以来新增字数与间隔同时过线才写。
+ * 纯函数便于单测；完成/取消时的最终回写不走此判定（无条件全量落库）。
+ */
+export function shouldFlushPartial(charsSinceFlush: number, msSinceFlush: number): boolean {
+  return charsSinceFlush >= STREAM_FLUSH_MIN_CHARS && msSinceFlush >= STREAM_FLUSH_MIN_MS;
+}

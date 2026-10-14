@@ -1097,6 +1097,21 @@ export async function updateAiReport(
 }
 
 /**
+ * 用户取消报告生成（2026-10 取消按钮）：只把仍处 pending 的占位行置为 cancelled。
+ * WHERE 守卫防覆盖——「触发生成」与「取消」存在竞态（fire 在 cancel 落库后才真正
+ * 开跑），有守卫时后到的生成任务不会把用户刚取消的行又拉回 completed。
+ * 返回是否有行被取消（编排层据此区分「已停止在跑任务」与「行本就不是 pending」）。
+ */
+export async function cancelPendingAiReport(id: number): Promise<boolean> {
+  const db = await getDb();
+  const r = await db.runAsync(
+    `UPDATE ai_reports SET status = 'cancelled', error = NULL WHERE id = ? AND status = 'pending'`,
+    id,
+  );
+  return r.changes > 0;
+}
+
+/**
  * 报告列表：mode 传具体场景时只列该 mode（旧版口径），传 'all' 时全部混排
  * （会话中心统一历史列表用，按 id 倒序跨 mode 排序）。
  */
@@ -1296,6 +1311,16 @@ export async function updateAiChatMessage(
     patch.error ?? null,
     id,
   );
+}
+
+/** 用户取消对话消息生成（同 cancelPendingAiReport 的 pending 守卫口径），返回是否取消成功 */
+export async function cancelPendingChatMessage(id: number): Promise<boolean> {
+  const db = await getDb();
+  const r = await db.runAsync(
+    `UPDATE ai_chat_messages SET status = 'cancelled', error = NULL WHERE id = ? AND status = 'pending'`,
+    id,
+  );
+  return r.changes > 0;
 }
 
 /** 有新消息时刷新对话的 updated_at（列表按它倒序，最近活跃的对话排前） */

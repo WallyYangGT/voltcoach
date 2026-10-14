@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { requestChatCompletion, AiTransportError } = await import('../src/ai/http.ts');
+const { requestChatCompletion, AiTransportError, AiCancelledError } = await import('../src/ai/http.ts');
 const { callAI, runAgentLoop } = await import('../src/ai/agent.ts');
 const { AGENTIC } = await import('../src/core/settings.ts');
 
@@ -540,4 +540,201 @@ test('requestChatCompletion: SSE 解码 2/4 字节 UTF-8 与畸形序列（替�
   const text = await requestChatCompletion(f, 'http://m/v1', 'k', {}, { onStreamChunk: () => {} });
   // 畸形字节产出替换符且污染所在行前缀 → 该 SSE 帧被跳过但流不中断（与旧版断字语义一致）
   assert.equal(text, 'café😀');
+});
+
+// ---------------- 2026-10 增量落库 + 取消：流式 tool_calls / 取消信号（http 层） ----------------
+
+const enc2 = new TextEncoder();
+
+/** 把增量帧对象数组包成 SSE Response 的快捷构造 */
+function sseResponse(frames) {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        for (const fr of frames) controller.enqueue(enc2.encode('data: ' + JSON.stringify(fr) + '\n\n'));
+        controller.enqueue(enc2.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    }),
+    { status: 200 },
+  );
+}
+
+test('requestChatCompletion: 流式 tool_calls 增量帧按 index 聚合为 message 对象', async () => {
+  // OpenAI 兼容口径：tool_calls 增量字段（id/name/arguments）按分片拼接、按 index 分桶
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_a', function: { name: 'get_form_series', arguments: '{"da' } }] } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'ys": 14}' } }, { index: 1, id: 'call_b', function: { name: 'x', arguments: '{}' } }] } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const res = await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, { onStreamChunk: () => {} });
+  assert.equal(res.role, 'assistant');
+  assert.equal(res.tool_calls.length, 2); // 两个 index 分桶
+  assert.deepEqual(res.tool_calls[0], {
+    id: 'call_a',
+    type: 'function',
+    function: { name: 'get_form_series', arguments: '{"days": 14}' }, // arguments 跨帧拼接
+  });
+  assert.equal(res.tool_calls[1].id, 'call_b');
+});
+
+test('requestChatCompletion: 流式 tool_calls + 正文混合轮两者都保留', async () => {
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: '先看下数据' } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'x', arguments: '{}' } }] } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const res = await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, { onStreamChunk: () => {} });
+  assert.equal(res.content, '先看下数据');
+  assert.equal(res.tool_calls.length, 1);
+});
+
+test('requestChatCompletion: 整段 JSON 兜底带 tool_calls 回原 message 对象（不丢工具调用）', async () => {
+  // 服务端无视 stream 回整段 JSON：此前带工具时会被降级成纯字符串，agent 循环拿不到 tool_calls
+  const f = async () =>
+    new Response(
+      JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'x', arguments: '{}' } }] } }] }),
+      { status: 200 },
+    );
+  const res = await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, { onStreamChunk: () => {} });
+  assert.equal(res.tool_calls.length, 1);
+  assert.equal(res.tool_calls[0].function.name, 'x');
+});
+
+test('requestChatCompletion: 流中途取消（AiCancelledError 为 reason）原样透出', async () => {
+  const external = new AbortController();
+  const f = async (_url, init) =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(enc2.encode('data: ' + JSON.stringify({ choices: [{ delta: { content: '开头' } }] }) + '\n\n'));
+          // 之后不再发数据也不关流；abort 时让挂起的 read() 拒绝
+          init.signal.addEventListener('abort', () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            controller.error(err);
+          });
+        },
+      }),
+      { status: 200 },
+    );
+  const p = requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, {
+    signal: external.signal,
+    onStreamChunk: () => {},
+  });
+  await sleep(30);
+  external.abort(new AiCancelledError());
+  await assert.rejects(p, (e) => e instanceof AiCancelledError);
+});
+
+test('requestChatCompletion: 重试等待期被取消抛取消原因（不补发、不误报传输错误）', async () => {
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    return new Response('', { status: 200 }); // 空正文 → 传输级可重试
+  };
+  const external = new AbortController();
+  const p = requestChatCompletion(f, 'http://m/v1', 'k', {}, { signal: external.signal, retryDelayMs: 300 });
+  await sleep(30); // 首次已失败，正处重试等待中
+  external.abort(new AiCancelledError());
+  await assert.rejects(p, (e) => e instanceof AiCancelledError);
+  assert.equal(calls, 1); // 等待期被取消不再补发
+});
+
+test('callAI: 外部取消优先于超时分类（不被误报成总超时）', async () => {
+  const external = new AbortController();
+  const p = callAI(hangFetch(), CFG, '提示词', { timeoutMs: 30000, signal: external.signal });
+  await sleep(20);
+  external.abort(new AiCancelledError());
+  await assert.rejects(p, (e) => e instanceof AiCancelledError); // 若回归会抛「总时间超过」文案
+});
+
+// ---------------- 2026-10 增量落库 + 取消：agent 循环（incremental / 降级梯子 / 取消） ----------------
+
+test('runAgentLoop: incremental 走流式轮，onProgress 上抛增长的最优正文', async () => {
+  let calls = 0;
+  const seenBodies = [];
+  const f = async (_url, init) => {
+    calls += 1;
+    seenBodies.push(JSON.parse(init.body));
+    if (calls === 1)
+      return sseResponse([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'get_form_series', arguments: '{"days":14}' } }] } }] }]);
+    return sseResponse([
+      { choices: [{ delta: { content: '短开头' } }] },
+      { choices: [{ delta: { content: '，接着写更长的最终报告正文。' } }] },
+    ]);
+  };
+  const progress = [];
+  const startedTools = [];
+  const text = await runAgentLoop(f, CFG, [{ role: 'user', content: '问' }], FAKE_TOOLS, async () => '{}', {
+    timeoutMs: 5000,
+    incremental: true,
+    onProgress: (p) => progress.push(p),
+    onToolStart: (n) => startedTools.push(n),
+  });
+  assert.equal(text, '短开头，接着写更长的最终报告正文。');
+  assert.equal(seenBodies[0].stream, true); // 增量模式流式轮
+  assert.deepEqual(startedTools, ['get_form_series']);
+  // onProgress 只在超过既有最优时上抛（累计正文，非分片）；工具轮无正文不上抛
+  assert.deepEqual(progress, ['短开头', '短开头，接着写更长的最终报告正文。']);
+  // 次轮历史里有回填的 tool 消息
+  assert.equal(seenBodies[1].messages.at(-1).role, 'tool');
+  assert.equal(seenBodies[1].messages.at(-1).tool_call_id, 'call_1');
+});
+
+test('runAgentLoop: 流式轮传输失败自动降非流式重试（保工具，梯子第一级）', async () => {
+  const f = jsonFetch((_body, idx) => {
+    if (idx <= 1) return { status: 200, body: '' }; // 流式轮：http 层首次+重试都空正文（传输级）
+    if (idx === 2) return toolCallMsg('get_form_series', { days: 7 }); // 循环降级：非流式保工具
+    return msg('最终回答'); // 工具回填后的正文轮
+  });
+  const text = await runAgentLoop(f, CFG, [{ role: 'user', content: '问' }], FAKE_TOOLS, async () => '{}', {
+    timeoutMs: 5000,
+    incremental: true,
+  });
+  assert.equal(text, '最终回答');
+  assert.equal(f.seen.length, 4);
+  assert.equal(f.seen[0].body.stream, true);
+  assert.equal(f.seen[1].body.stream, true); // http 层重试不切流式（带 tools）
+  assert.equal(f.seen[2].body.stream, false); // 循环降级后非流式
+  assert.deepEqual(f.seen[2].body.tools, FAKE_TOOLS); // 降级保工具（区别于弃工具的 400 降级）
+});
+
+test('runAgentLoop: 流式 400 → 非流式 400 → 弃工具降级（梯子走满，兼容三档端点）', async () => {
+  const f = jsonFetch((_body, idx) => {
+    if (idx === 0) return { status: 400, body: 'stream+tools unsupported' }; // 流式轮 400（http 不重试 4xx）
+    if (idx === 1) return { status: 400, body: 'tools unsupported' }; // 循环降非流式（带工具）仍 400
+    return msg('降级回答'); // 弃工具单轮
+  });
+  let degraded = null;
+  const text = await runAgentLoop(f, CFG, [{ role: 'user', content: '问' }], FAKE_TOOLS, async () => '{}', {
+    timeoutMs: 5000,
+    incremental: true,
+    onDegrade: (m) => (degraded = m),
+  });
+  assert.equal(text, '降级回答');
+  assert.match(degraded, /400/);
+  assert.equal(f.seen.length, 3);
+  assert.equal(f.seen[0].body.stream, true);
+  assert.equal(f.seen[1].body.stream, false); // 第二级：非流式保工具
+  assert.equal('tools' in f.seen[2].body, false); // 第三级：弃工具
+});
+
+test('runAgentLoop: 外部取消中途 abort 抛 AiCancelledError（不误报总超时）', async () => {
+  const external = new AbortController();
+  const p = runAgentLoop(hangFetch(), CFG, [{ role: 'user', content: '问' }], [], async () => '{}', {
+    timeoutMs: 30000,
+    signal: external.signal,
+  });
+  await sleep(20);
+  external.abort(new AiCancelledError());
+  await assert.rejects(p, (e) => e instanceof AiCancelledError);
+});
+
+test('runAgentLoop: 非增量调用保持全非流式（记忆回顾轮等内部任务行为不变）', async () => {
+  const f = jsonFetch((_b, idx) => (idx === 0 ? toolCallMsg('get_form_series', {}) : msg('回答')));
+  const text = await runAgentLoop(f, CFG, [{ role: 'user', content: '问' }], FAKE_TOOLS, async () => '{}', { timeoutMs: 5000 });
+  assert.equal(text, '回答');
+  assert.equal(f.seen[0].body.stream, false);
+  assert.equal(f.seen[1].body.stream, false);
 });
