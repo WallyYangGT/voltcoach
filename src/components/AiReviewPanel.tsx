@@ -13,7 +13,13 @@ import { Button } from 'react-native-paper';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as Clipboard from 'expo-clipboard';
 import { deleteAiChat, getAiConfig, getLatestReviewReport } from '@/db';
-import { buildReportPrompt, createReportDraft, isChatGenerating } from '@/services/aiGenerate';
+import {
+  buildReportPrompt,
+  cancelChatGeneration,
+  cancelReportGeneration,
+  createReportDraft,
+  isChatGenerating,
+} from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiReportBody } from './AiReportBody';
@@ -129,6 +135,23 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
     [ai.chat, retryChatMessage],
   );
 
+  // 取消生成（2026-10）：报告与追问消息各接一路；无任务时服务层兜底直接落库取消
+  const cancelReport = useCallback(() => {
+    if (reportId == null) return;
+    void cancelReportGeneration(reportId).catch((e) => console.warn('取消报告生成失败:', e));
+  }, [reportId]);
+
+  const cancelFollowUpMessage = useCallback(
+    (messageId: number) => {
+      const chat = ai.chat;
+      if (!chat) return;
+      void cancelChatGeneration(chat.id, messageId).catch((e) =>
+        console.warn('取消追问生成失败:', e),
+      );
+    },
+    [ai.chat],
+  );
+
   // 重设追问（AP4）：删追问会话（报告保留），reload 内部重跑 findFollowUpChat
   // 恢复干净态；下轮提问惰性新建会话。有消息在生成时禁用（防删掉在飞会话）
   const resetFollowUp = useCallback(async () => {
@@ -178,7 +201,9 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
         ? t('ai.panel.pending')
         : report.status === 'failed'
           ? t('ai.panel.failed')
-          : t('ai.panel.cached', { id: report.id });
+          : report.status === 'cancelled'
+            ? t('ai.panel.cancelled')
+            : t('ai.panel.cached', { id: report.id });
 
   return (
     <View style={styles.card}>
@@ -231,6 +256,7 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
             elapsedSec={ai.elapsedSec}
             generating={ai.generating}
             onRetry={ai.retry}
+            onCancel={report.status === 'pending' ? cancelReport : undefined}
           />
           {report.status === 'completed' && (
             <View style={styles.followUp}>
@@ -245,7 +271,12 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
                 )}
               </View>
               {!!ai.chat && (
-                <ChatBubbles chatId={ai.chat.id} messages={ai.chat.messages} onRetry={retryFollowUp} />
+                <ChatBubbles
+                  chatId={ai.chat.id}
+                  messages={ai.chat.messages}
+                  onRetry={retryFollowUp}
+                  onCancelMessage={cancelFollowUpMessage}
+                />
               )}
               <AskInput
                 ref={followUpInputRef}

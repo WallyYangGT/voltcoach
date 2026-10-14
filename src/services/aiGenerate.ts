@@ -7,7 +7,7 @@
  * - 报告：buildReportPrompt 组装基础提示词（含 skills，不含工具/记忆段）→
  *   createPendingAiReport 占位 → 后台任务在 agentic 开启时于提示词末尾追加
  *   工具指引与记忆段 → callAiMaybeAgentic 分流（runAgentLoop / 单轮 callAI）→
- *   回写 completed/failed；完成后编排层强制跑一次记忆回顾轮
+ *   回写 completed/failed/cancelled；完成后编排层强制跑一次记忆回顾轮
  *   （runMemoryReviewRound，仅 save_memory 单工具，2026-10-13 拍板）——
  *   mem.rule.2「收尾补记」的编排层兜底；未配置密钥时 UI 用基础提示词走
  *   "复制提示词"兜底（与旧 Web 版返回 prompt 的形态一致，工具/记忆段只在
@@ -15,12 +15,17 @@
  * - 对话：user 消息 + pending 占位落库 → 后台任务每轮按当前状态重拼系统段
  *   （首条 user 消息注入），历史只带 completed 正文 → 回填 completed/failed。
  * - 复用 findFollowUpChat 的"追问并入报告"模型；滚动清理在 db 层 CRUD 内完成。
+ * 2026-10 增量落库 + 取消（架构评审 P2）：生成传输一律流式，流式最优正文经
+ * shouldFlushPartial 节流回写 pending 行（UI 实时预览）；cancelXxxGeneration
+ * abort 在跑任务 → 回写 cancelled + 保留部分正文（不命中补跑/续跑扫描，不复活）。
  */
 
 import {
   computeForm,
   createAiChat,
   createPendingAiReport,
+  cancelPendingAiReport,
+  cancelPendingChatMessage,
   cyclingSummariesSince,
   getAiChat,
   getAiConfig,
@@ -48,7 +53,7 @@ import {
   type AiReportContext,
   type AiReportMode,
 } from '@/db';
-import { loadDefaultFetch } from '@/ai/http';
+import { AiCancelledError, loadDefaultFetch } from '@/ai/http';
 import {
   acquireGenerationKeepAlive,
   type KeepAliveHandle,
@@ -56,7 +61,7 @@ import {
 import { callAI, runAgentLoop } from '@/ai/agent';
 import { t, type Lang } from '@/core/i18n';
 import { localDay } from '@/core/local-day';
-import { withinResumeWindow } from '@/core/report-status';
+import { shouldFlushPartial, withinResumeWindow } from '@/core/report-status';
 import { safeName, thinRecords } from '@/core/records';
 import { extractPlanFromMarkdown, validateTrainingPlan } from '@/core/training-plan';
 
@@ -110,6 +115,9 @@ async function requireAiConfig(lang: Lang): Promise<AiConfig & { api_key: string
  * 关闭走单轮 callAI。执行结果仅打日志，用户只见最终正文（口径同旧版）。
  * onRetry：传输层自动重试回调（透传到 UI 进度：长请求等了几分钟后被网关掐断时，
  * 用户需要知道"正在自动重试"而不是看着一个不动的转圈）。
+ * signal/onProgress/onActivity：取消信号、增量正文上抛、工具调用动态（2026-10
+ * 增量落库 + 取消）。生成链路传输一律流式（agentic 循环走 incremental，单轮走
+ * forceStream），流式失败各有降级梯子兜底。
  */
 async function callAiMaybeAgentic(
   config: AiConfig & { api_key: string },
@@ -120,6 +128,10 @@ async function callAiMaybeAgentic(
     /** 对话类调用标记（chat/follow_up/plan 会话）：update_training_plan 等写类工具的放行依据 */
     chat?: boolean;
     onRetry?: (nextAttempt: number, errMsg: string) => void;
+    signal?: AbortSignal;
+    onProgress?: (partial: string) => void;
+    /** 工具调用动态（开始/完成/降级），编排层写进 GenProgress.activity 供 UI 轮询展示 */
+    onActivity?: (note: string) => void;
   },
 ): Promise<string> {
   const fetchImpl = await loadDefaultFetch();
@@ -127,15 +139,35 @@ async function callAiMaybeAgentic(
     return runAgentLoop(fetchImpl, config, messages, toolDefs(opts.lang), createExecuteTool(buildToolIo(), { source: opts.source, lang: opts.lang, chat: opts.chat }), {
       lang: opts.lang,
       onRetry: opts.onRetry,
+      signal: opts.signal,
+      incremental: true,
+      onProgress: opts.onProgress,
+      onToolStart: (name) => opts.onActivity?.(t(opts.lang, 'ai.toolRunning', { name })),
       onToolCall: (name, _args, result) => {
         // 只打工具名与结果长度：args 可能携带 save_memory 的用户个人事实，不落 logcat
         const chars = typeof result === 'string' ? result.length : 0;
         console.log(`[AI tool] ${name} → ${chars} 字符`);
+        opts.onActivity?.(t(opts.lang, 'ai.toolDone', { name, chars }));
       },
-      onDegrade: (errMsg) => console.warn(`[AI] 模型不支持 tools，已降级为单轮调用（${errMsg}）`),
+      onDegrade: (errMsg) => {
+        console.warn(`[AI] 模型不支持 tools，已降级为单轮调用（${errMsg}）`);
+        opts.onActivity?.(t(opts.lang, 'ai.degraded'));
+      },
     });
   }
-  return callAI(fetchImpl, config, messages, { lang: opts.lang, onRetry: opts.onRetry });
+  let acc = '';
+  return callAI(fetchImpl, config, messages, {
+    lang: opts.lang,
+    onRetry: opts.onRetry,
+    signal: opts.signal,
+    forceStream: true,
+    onChunk: opts.onProgress
+      ? (delta) => {
+          acc += delta;
+          opts.onProgress?.(acc);
+        }
+      : undefined,
+  });
 }
 
 // ---------------- 报告：prompt 组装与生成任务 ----------------
@@ -233,14 +265,26 @@ export async function createReportDraft(
 // "生成中"还是"应用被杀留下的残留"（残留时重跑以恢复——提示词/系统段均已落库）
 const runningReports = new Set<number>();
 const runningChats = new Set<string>();
+// 在跑任务的取消控制器（2026-10 取消按钮）：cancelXxxGeneration 据此 abort，
+// 与注册表同生命周期（finally 移除），任务结束后 key 必然查不到
+const reportAborts = new Map<number, AbortController>();
+const chatAborts = new Map<string, AbortController>();
 
-/** 生成进度（进程内）：传输级自动重试的现场信息，UI 轮询时同步读取展示 */
+/** 生成进度（进程内）：传输级自动重试的现场信息 + 工具调用动态，UI 轮询时同步读取展示 */
 export interface GenProgress {
   attempt: number; // 下一次尝试的序号（2 = 首次响应异常、正在重试）
   note: string; // 上一次失败的原因（原文，便于诊断网关/网络问题）
+  /** 当前动作提示（「正在调用 X…」/「✓ X · N 字符」/降级提示），瞬态不落库 */
+  activity?: string;
 }
 const reportProgress = new Map<number, GenProgress>();
 const chatProgress = new Map<string, GenProgress>();
+
+/** 写活动提示：保留既有重试进度字段，只换 activity（轮询读的是同一 Map） */
+function setActivity<K>(map: Map<K, GenProgress>, key: K, activity: string) {
+  const prev = map.get(key);
+  map.set(key, { attempt: prev?.attempt ?? 0, note: prev?.note ?? '', activity });
+}
 
 /** 报告生成是否正在进行（会话详情页的恢复判断用） */
 export function isReportGenerating(reportId: number): boolean {
@@ -269,21 +313,43 @@ export function getChatProgress(chatId: number, messageId: number): GenProgress 
  * 函数即可（系统段与提示词均已落库，无会话态丢失）。
  * 传输级失败（空/破损正文、断连、429/5xx）由传输层自动重试一次，重试进度经
  * getReportProgress 透出（长请求被网关掐断是 2026-09-22 真机事故的现场形态）。
- * 返回 started：同一报告已有任务在跑时为 false（**立即**返回，任务未受影响）；
- * 为 true 时要等整个生成任务结束（completed/failed 均已回写）才 resolve——
- * 不是"是否成功发起"的同步信号。M5 起调用方可感知 no-op，UI 按钮的禁用态以
- * isReportGenerating 为准。
+ * 2026-10 增量落库 + 取消：流式最优正文经 shouldFlushPartial 节流回写 pending 行
+ * （生成中 UI 实时预览的数据源；进程死亡残留的部分正文会在补跑时被完整报告覆盖）；
+ * cancelReportGeneration abort 在跑任务后回写 cancelled（部分正文保留），传输层
+ * 的重试链随 signal aborted 自动失效。返回 started：同一报告已有任务在跑时为
+ * false（**立即**返回，任务未受影响）；为 true 时要等整个生成任务结束（completed/
+ * failed/cancelled 均已回写）才 resolve——不是"是否成功发起"的同步信号。M5 起
+ * 调用方可感知 no-op，UI 按钮的禁用态以 isReportGenerating 为准。
  */
 export async function generateReport(reportId: number, lang: Lang = 'zh'): Promise<{ started: boolean }> {
   if (runningReports.has(reportId)) return { started: false }; // 同一报告不重复 fire
   runningReports.add(reportId);
+  const ctrl = new AbortController();
+  reportAborts.set(reportId, ctrl);
   // 保活句柄：acquire 之前的 fast-fail 路径（未配对 acquire）下保持 null，
   // finally 的可选 release 是 no-op——不会偷走并发任务的保活引用（code-review P1-2）
   let keepAlive: KeepAliveHandle | null = null;
+  // 增量落库节流状态：flushedLen/lastFlushAt 是上次写库的水位，latestPartial 留存
+  // 最新正文供取消时无条件补写（cancel 可能落在两次节流写之间）
+  let flushedLen = 0;
+  let lastFlushAt = 0;
+  let latestPartial = '';
+  const flushPartial = async (partial: string) => {
+    latestPartial = partial;
+    const now = Date.now();
+    if (!shouldFlushPartial(partial.length - flushedLen, now - lastFlushAt)) return;
+    flushedLen = partial.length;
+    lastFlushAt = now;
+    await updateAiReport(reportId, { markdown: partial });
+  };
   try {
     const config = await requireAiConfig(lang);
     const report = await getAiReport(reportId);
     if (!report) throw new Error(t(lang, 'srv.report_not_found'));
+    // 注意：这里不挡 cancelled——cancelXxxGeneration 与 fire 的竞态窗口只有几毫秒
+    // （取消按钮只在行已 pending 时可见 = 任务已注册 controller，abort 路径必然命中），
+    // 而手动 Retry（cancelled 行原行重跑）是合法路径；自动补跑/续跑扫描只认 pending，
+    // 天然不会碰 cancelled 行，无需额外守卫。
     let finalPrompt = report.prompt;
     if (config.agentic !== false) {
       finalPrompt += '\n\n' + buildAgenticSection(lang);
@@ -303,10 +369,16 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
       {
         source: report.mode, // 场景标记：save_memory 写入 ai_memories.source
         lang,
+        signal: ctrl.signal,
         onRetry: (attempt, errMsg) => {
-          reportProgress.set(reportId, { attempt, note: errMsg });
+          const prev = reportProgress.get(reportId);
+          reportProgress.set(reportId, { attempt, note: errMsg, activity: prev?.activity });
           console.warn(`[AI] 报告 #${reportId} 响应异常，自动重试（第 ${attempt} 次）：${errMsg}`);
         },
+        onProgress: (partial) => {
+          void flushPartial(partial).catch((e) => console.warn('[AI] 增量落库失败（不影响生成）:', e));
+        },
+        onActivity: (note) => setActivity(reportProgress, reportId, note),
       },
     );
     await updateAiReport(reportId, { markdown, status: 'completed', error: null });
@@ -323,15 +395,42 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
       );
     }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await updateAiReport(reportId, { status: 'failed', error: msg });
-    console.error(`[AI] 后台分析失败: ${msg}`);
+    if (e instanceof AiCancelledError || ctrl.signal.reason instanceof AiCancelledError) {
+      // 用户取消：保留已生成的部分正文（可能是节流水位之后又多出来的几秒产出），
+      // status=cancelled——不命中任何补跑/续跑扫描（都只认 pending），不会复活
+      await updateAiReport(reportId, {
+        ...(latestPartial ? { markdown: latestPartial } : {}),
+        status: 'cancelled',
+        error: null,
+      });
+      console.log(`[AI] 报告 #${reportId} 已被用户取消（保留 ${latestPartial.length} 字部分正文）`);
+    } else {
+      const msg = e instanceof Error ? e.message : String(e);
+      await updateAiReport(reportId, { status: 'failed', error: msg });
+      console.error(`[AI] 后台分析失败: ${msg}`);
+    }
   } finally {
     await keepAlive?.release();
     runningReports.delete(reportId);
+    reportAborts.delete(reportId);
     reportProgress.delete(reportId);
   }
   return { started: true };
+}
+
+/**
+ * 取消报告生成（2026-10 取消按钮）：进程内有任务 → abort（任务自身回写 cancelled
+ * 与部分正文）；无任务（触发/取消竞态、或残留占位尚未被补跑）→ 直接落库取消
+ * （db 层 WHERE status='pending' 守卫，不会覆盖已完成/失败的行）。
+ * 返回是否成功作用于一个 pending 任务/占位。
+ */
+export async function cancelReportGeneration(reportId: number): Promise<boolean> {
+  const ctrl = reportAborts.get(reportId);
+  if (ctrl) {
+    ctrl.abort(new AiCancelledError());
+    return true;
+  }
+  return cancelPendingAiReport(reportId);
 }
 
 // ---------------- 对话：提交与后台生成 ----------------
@@ -494,6 +593,8 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
  * 对话后台生成任务：系统段每轮重拼（首条 user 消息注入），历史只带 completed
  * 正文（排除 pending 占位与失败消息），结果回写占位消息 completed/failed。
  * 应用中途被杀留下的 pending 占位，重进会话页时以同一 messageId 重跑本函数即可。
+ * 2026-10 增量落库 + 取消：口径同 generateReport（节流回写部分正文到 pending
+ * 消息行；cancelChatGeneration abort 后回写 cancelled + 部分正文）。
  * 返回 started：同一消息已有任务在跑时为 false（**立即**返回，任务未受影响）；
  * 为 true 时要等整个生成任务结束才 resolve（语义同 generateReport）。UI 按钮的
  * 禁用态以 isChatGenerating 为准。
@@ -502,12 +603,27 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
   const key = `${chatId}:${messageId}`;
   if (runningChats.has(key)) return { started: false }; // 同一消息不重复 fire
   runningChats.add(key);
+  const ctrl = new AbortController();
+  chatAborts.set(key, ctrl);
   // 保活句柄：口径同 generateReport（fast-fail 不闪通知、finally 只释放自己的句柄）
   let keepAlive: KeepAliveHandle | null = null;
+  // 增量落库节流状态（口径同 generateReport 的 flushPartial）
+  let flushedLen = 0;
+  let lastFlushAt = 0;
+  let latestPartial = '';
+  const flushPartial = async (partial: string) => {
+    latestPartial = partial;
+    const now = Date.now();
+    if (!shouldFlushPartial(partial.length - flushedLen, now - lastFlushAt)) return;
+    flushedLen = partial.length;
+    lastFlushAt = now;
+    await updateAiChatMessage(messageId, { content: partial });
+  };
   try {
     const config = await requireAiConfig(lang);
     const chat = await getAiChat(chatId);
     if (!chat) throw new Error(t(lang, 'srv.chat_not_found'));
+    // 不挡 cancelled（口径同 generateReport：手动重试是合法路径，自动补跑只认 pending）
     const history = chat.messages
       .filter((m) => m.status === 'completed' && m.content)
       .map((m) => ({ role: m.role, content: m.content }));
@@ -527,25 +643,60 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
         source: chat.mode, // 场景标记：save_memory 写入 ai_memories.source
         lang,
         chat: true, // 对话类调用：update_training_plan 等写类工具据此放行
+        signal: ctrl.signal,
         onRetry: (attempt, errMsg) => {
-          chatProgress.set(key, { attempt, note: errMsg });
+          const prev = chatProgress.get(key);
+          chatProgress.set(key, { attempt, note: errMsg, activity: prev?.activity });
           console.warn(`[AI chat] ${key} 响应异常，自动重试（第 ${attempt} 次）：${errMsg}`);
         },
+        onProgress: (partial) => {
+          void flushPartial(partial).catch((e) => console.warn('[AI chat] 增量落库失败（不影响生成）:', e));
+        },
+        onActivity: (note) => setActivity(chatProgress, key, note),
       },
     );
     await updateAiChatMessage(messageId, { content: markdown, status: 'completed', error: null });
     await touchAiChat(chatId);
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    await updateAiChatMessage(messageId, { status: 'failed', error: msg });
-    await touchAiChat(chatId); // 失败同样刷新 updated_at（列表排序与旧版一致）
-    console.error(`[AI chat] 后台生成失败: ${msg}`);
+    if (e instanceof AiCancelledError || ctrl.signal.reason instanceof AiCancelledError) {
+      // 用户取消：保留部分正文（口径同 generateReport），cancelled 不命中任何补跑扫描
+      await updateAiChatMessage(messageId, {
+        ...(latestPartial ? { content: latestPartial } : {}),
+        status: 'cancelled',
+        error: null,
+      });
+      await touchAiChat(chatId);
+      console.log(`[AI chat] ${key} 已被用户取消（保留 ${latestPartial.length} 字部分正文）`);
+    } else {
+      const msg = e instanceof Error ? e.message : String(e);
+      await updateAiChatMessage(messageId, { status: 'failed', error: msg });
+      await touchAiChat(chatId); // 失败同样刷新 updated_at（列表排序与旧版一致）
+      console.error(`[AI chat] 后台生成失败: ${msg}`);
+    }
   } finally {
     await keepAlive?.release();
     runningChats.delete(key);
+    chatAborts.delete(key);
     chatProgress.delete(key);
   }
   return { started: true };
+}
+
+/**
+ * 取消对话消息生成（2026-10 取消按钮）：口径同 cancelReportGeneration——进程内
+ * 有任务 → abort（任务自身回写）；无任务 → db 直接取消（pending 守卫）+ 刷新
+ * 会话 updated_at（与失败路径同口径，列表排序不漂移）。
+ */
+export async function cancelChatGeneration(chatId: number, messageId: number): Promise<boolean> {
+  const key = `${chatId}:${messageId}`;
+  const ctrl = chatAborts.get(key);
+  if (ctrl) {
+    ctrl.abort(new AiCancelledError());
+    return true;
+  }
+  const ok = await cancelPendingChatMessage(messageId);
+  if (ok) await touchAiChat(chatId);
+  return ok;
 }
 
 // ---------------- 残留恢复：回前台自动续跑（M5） ----------------

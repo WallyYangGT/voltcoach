@@ -25,6 +25,8 @@ import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { useAiReport } from '@/components/useAiReport';
 import { deleteAiChat, getAiChat, type AiChatRow } from '@/db';
 import {
+  cancelChatGeneration,
+  cancelReportGeneration,
   isChatGenerating,
   runChatGeneration,
   submitChatMessage,
@@ -145,6 +147,23 @@ export default function AiSessionScreen() {
     [chat, lang, kind, reloadReport, loadChat],
   );
 
+  /** 取消生成（2026-10）：报告与消息各接一路；无任务时服务层兜底直接落库取消。
+      取消后状态由任务回写（毫秒级），轮询自然把界面带到 cancelled 态，无需手动刷新 */
+  const cancelReport = useCallback(() => {
+    if (kind !== 'report' || entityId == null) return;
+    void cancelReportGeneration(entityId).catch((e) => console.warn('取消报告生成失败:', e));
+  }, [kind, entityId]);
+
+  const cancelChatMessage = useCallback(
+    (messageId: number) => {
+      if (!chat) return;
+      void cancelChatGeneration(chat.id, messageId).catch((e) =>
+        console.warn('取消消息生成失败:', e),
+      );
+    },
+    [chat],
+  );
+
   /** 重设追问（AP4）：删该报告的追问会话（报告保留），reload 重新查找（null 即恢复
       干净态），下轮提问惰性新建。docker 版「清除追问」语义平移；生成中禁用 */
   const followUpBusy =
@@ -247,6 +266,7 @@ export default function AiSessionScreen() {
             elapsedSec={ai.elapsedSec}
             generating={ai.generating}
             onRetry={ai.retry}
+            onCancel={cancelReport}
           />
         )}
 
@@ -269,7 +289,12 @@ export default function AiSessionScreen() {
                 )}
               </View>
             )}
-            <ChatBubbles chatId={chat?.id ?? -1} messages={chatMessages} onRetry={retryChat} />
+            <ChatBubbles
+              chatId={chat?.id ?? -1}
+              messages={chatMessages}
+              onRetry={retryChat}
+              onCancelMessage={cancelChatMessage}
+            />
           </View>
         )}
       </ScrollView>

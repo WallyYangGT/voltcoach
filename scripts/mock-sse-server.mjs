@@ -18,6 +18,7 @@
  *   MOCK_CUT_AFTER=N  —— 流式请求推 N 帧后 `res.destroy()` 掐断连接（演练"已吐字的流
  *   不重试"与读取中断归传输级）。
  *   MOCK_DELAY_MS=N   —— 正文请求前等待 N 毫秒，模拟长报告（观察"生成中"状态与已等待时长）。
+ *   MOCK_CHUNK_DELAY_MS=N —— 流式块间隔毫秒数（默认 30），放慢观察增量落库实时预览与取消窗口。
  *   MOCK_TOOL_SCRIPT=ftp —— M5 FTP 剧本：estimate_ftp → update_ftp → reanalyze_activity
  *   （目标文件用 MOCK_REANALYZE_FILE=<file_name> 指定）三轮工具后回正文，
  *   用于「AI 更新 FTP + 重新分析」端到端冒烟。
@@ -49,6 +50,7 @@ const FAIL_EMPTY = Number(process.env.MOCK_FAIL_EMPTY || 0); // 前 N 次正文�
 const TRUNCATE = Number(process.env.MOCK_TRUNCATE || 0); // 前 N 次正文请求注入截半正文
 const CUT_AFTER = Number(process.env.MOCK_CUT_AFTER || 0); // 流式推 N 帧后掐断连接
 const DELAY_MS = Number(process.env.MOCK_DELAY_MS || 0); // 正文请求前的模拟等待
+const CHUNK_DELAY_MS = Number(process.env.MOCK_CHUNK_DELAY_MS || 30); // 流式块间隔（2026-10 增量落库冒烟：放慢观察实时预览/取消窗口）
 // MOCK_TOOL_SCRIPT=ftp —— M5 FTP 剧本：按历史中 tool 消息数推进
 // estimate_ftp → update_ftp → reanalyze_activity（MOCK_REANALYZE_FILE 指定文件名），
 // 三轮后回正文。用于「AI 更新 FTP + 重新分析」端到端冒烟。
@@ -386,7 +388,7 @@ const server = http.createServer((req, res) => {
         });
         res.write(`data: ${payload}\n\n`);
         i++;
-      }, 30);
+      }, CHUNK_DELAY_MS);
       // 注意挂 res 而不是 req：现代 Node 中 req 的 'close' 在请求体读完后立刻触发，
       // 挂 req 会瞬间清掉 interval 导致一个字节都发不出去
       res.on('close', () => {

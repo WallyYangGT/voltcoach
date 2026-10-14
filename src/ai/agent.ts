@@ -8,19 +8,24 @@
  *
  * runAgentLoop（function calling）：循环 ≤ AGENTIC.max_rounds 轮，模型返回 tool_calls
  * 时逐个经 executeTool 执行并把结果以 role:"tool" 消息回填，直到模型返回普通正文。
- * 设计要点（与旧版一致）：
- * - 全部轮次走非流式（tool_calls 与 SSE 增量解析组合复杂、用户看不到中间轮）；
+ * 设计要点：
+ * - 轮次默认非流式（tool_calls 与 SSE 增量解析组合复杂、用户看不到中间轮）；
+ *   incremental 选项（2026-10 SSE 增量落库）打开后轮次走流式、最优正文经 onProgress
+ *   上抛，流式轮失败自动降非流式重试（降级梯子，兼容不支持 stream+tools 的端点）；
  * - 整个循环共享一个总超时预算（timeout_ms，不逐轮重置）+ 30 秒心跳；
  * - 模型/代理不支持 tools（带 tools 的首轮请求 HTTP 400）→ 自动降级为无 tools
  *   单轮调用并经 onDegrade 回调告知调用方（agentic 总开关由编排层决定：
  *   关闭时编排层直接走 callAI，不进本循环）；
  * - executeTool 抛出的异常被兜底为 {error} JSON 回填，循环不中断；
+ * - signal：外部取消信号（编排层「取消生成」），以 AiCancelledError 为 abort reason，
+ *   取消必须先于超时分类抛出（否则会被误报成总超时）；
  * - 依赖注入：本函数不 import db / tools，fetch、配置、工具定义与执行器均由调用方传入。
  */
 
 import { AGENTIC } from '../core/settings.ts';
 import { t, type Lang } from '../core/i18n.ts';
 import {
+  AiCancelledError,
   AiTransportError,
   requestChatCompletion,
   type AgentMessage,
@@ -45,22 +50,27 @@ export interface AiRuntimeConfig {
  * 支持两种调用方式：传入单条字符串 prompt（单条 user 消息），或 messages 数组
  * （直接作为 chat/completions 的 messages 参数，用于追问多轮对话）。
  * onRetry：传输级失败（空/破损正文、断连、429/5xx）触发自动重试时回调（UI 进度）。
+ * signal：外部取消信号（编排层"取消生成"按钮），abort 即中断请求与重试链；
+ * forceStream：强制走流式传输（2026-10 增量落库：生成链路的传输一律流式，
+ * 与 cfg.stream 的用户设置解耦——流式失败有整段 JSON 兜底与非流式重试梯子）。
  */
 export async function callAI(
   fetchImpl: FetchLike,
   cfg: AiRuntimeConfig,
   promptOrMessages: string | AgentMessage[],
-  { onChunk, onHeartbeat, onRetry, timeoutMs, lang = 'zh' }: {
+  { onChunk, onHeartbeat, onRetry, timeoutMs, lang = 'zh', signal, forceStream }: {
     onChunk?: (delta: string) => void;
     onHeartbeat?: () => void;
     onRetry?: (nextAttempt: number, errMsg: string) => void;
     timeoutMs?: number;
     lang?: Lang;
+    signal?: AbortSignal;
+    forceStream?: boolean;
   } = {},
 ): Promise<string> {
   if (!cfg.api_key) throw new Error(t(lang, 'ai.no_key'));
   const effectiveTimeoutMs = timeoutMs ?? cfg.timeout_ms;
-  const useStream = cfg.stream;
+  const useStream = cfg.stream || forceStream === true;
 
   const messages: AgentMessage[] = Array.isArray(promptOrMessages)
     ? promptOrMessages
@@ -73,6 +83,19 @@ export async function callAI(
   if (cfg.temperature != null) request.temperature = Number(cfg.temperature);
 
   const ctrl = new AbortController();
+  // 外部取消信号 → 内部 ctrl。⚠️ 取消身份不依赖 signal.reason——RN 的
+  // AbortController polyfill 对 abort(reason) 的 reason 支持不可靠（冒烟实证：
+  // reason 退化为默认 AbortError，消息含 "Aborted"，会被超时分类误报成总超时），
+  // 故用闭包标志位做取消身份，agent 层把它转成 AiCancelledError 再上抛
+  let externallyCancelled = false;
+  const forwardAbort = () => {
+    externallyCancelled = true;
+    ctrl.abort();
+  };
+  if (signal) {
+    if (signal.aborted) forwardAbort();
+    else signal.addEventListener('abort', forwardAbort);
+  }
   const totalTimer = setTimeout(() => ctrl.abort(new Error('total timeout')), effectiveTimeoutMs);
   // 无论流式/非流式，都每 30 秒回调一次心跳，给调用方一个"还在等"的反馈
   const heartbeat = setInterval(() => onHeartbeat?.(), 30000);
@@ -101,6 +124,9 @@ export async function callAI(
     if (!(result as ChatMessage).content) throw new Error(t(lang, 'ai.empty'));
     return (result as ChatMessage).content as string;
   } catch (e) {
+    // 用户取消必须先于超时分类抛出——否则会被下面的 /aborted|timeout/ 正则
+    // 误报成"总超时"（取消不是故障，编排层要据此回写 cancelled 而非 failed）
+    if (externallyCancelled || e instanceof AiCancelledError) throw new AiCancelledError();
     const reason = (ctrl.signal.reason as Error | undefined)?.message || (e instanceof Error ? e.message : '');
     if (reason === 'stall timeout') {
       throw new Error(t(lang, 'ai.stall', { sec: stallMs / 1000 }));
@@ -113,6 +139,7 @@ export async function callAI(
     clearTimeout(totalTimer);
     if (stallTimer) clearTimeout(stallTimer);
     clearInterval(heartbeat);
+    signal?.removeEventListener('abort', forwardAbort);
   }
 }
 
@@ -125,6 +152,19 @@ export interface AgentLoopOpts {
   onRetry?: (nextAttempt: number, errMsg: string) => void;
   timeoutMs?: number;
   lang?: Lang;
+  /** 外部取消信号（编排层「取消生成」）：abort 即中断当前请求/工具轮与重试链 */
+  signal?: AbortSignal;
+  /**
+   * 增量模式（2026-10 SSE 增量落库）：轮次走流式，最优正文一有增长即经 onProgress
+   * 上抛（编排层节流落库 + UI 实时预览）。工具轮的短过渡语也会短暂成为最优正文，
+   * 随最终报告轮被更长正文自然取代；进程死亡残留的中间文本会在补跑时被完整报告
+   * 覆盖，可接受。记忆回顾轮等静默内部任务不开启（流式无收益，行为与旧版一致）。
+   */
+  incremental?: boolean;
+  /** 增量模式下最优正文增长时回调（参数为当前累计正文，非增量分片） */
+  onProgress?: (partial: string) => void;
+  /** 工具开始执行时回调（UI「正在调用 X…」动态）；onToolCall 仍是完成时回调 */
+  onToolStart?: (name: string) => void;
 }
 
 /**
@@ -138,7 +178,7 @@ export async function runAgentLoop(
   messages: AgentMessage[],
   tools: object[],
   executeTool: (name: string, args: Record<string, unknown>) => Promise<string> | string,
-  { onHeartbeat, onToolCall, onDegrade, onRetry, timeoutMs, lang = 'zh' }: AgentLoopOpts = {},
+  { onHeartbeat, onToolCall, onDegrade, onRetry, timeoutMs, lang = 'zh', signal, incremental, onProgress, onToolStart }: AgentLoopOpts = {},
 ): Promise<string> {
   if (!cfg.api_key) throw new Error(t(lang, 'ai.no_key'));
   const effectiveTimeoutMs = timeoutMs ?? cfg.timeout_ms;
@@ -146,12 +186,34 @@ export async function runAgentLoop(
   const useTools = Array.isArray(tools) && tools.length > 0;
 
   const ctrl = new AbortController();
+  // 外部取消信号 → 内部 ctrl。⚠️ 取消身份不依赖 signal.reason（RN polyfill 对
+  // abort(reason) 的 reason 支持不可靠，冒烟实证会退化为默认 AbortError 被误报
+  // 成总超时），用闭包标志位做取消身份，agent 层转成 AiCancelledError 上抛
+  let externallyCancelled = false;
+  const forwardAbort = () => {
+    externallyCancelled = true;
+    ctrl.abort();
+  };
+  if (signal) {
+    if (signal.aborted) forwardAbort();
+    else signal.addEventListener('abort', forwardAbort);
+  }
   const totalTimer = setTimeout(() => ctrl.abort(new Error('total timeout')), effectiveTimeoutMs);
   // 每 30 秒回调一次心跳，给调用方一个"还在等"的反馈
   const heartbeat = setInterval(() => onHeartbeat?.(), 30000);
 
+  // 增量模式走流式轮；一旦流式轮失败立即降级非流式（catch 的降级梯子），后续轮保持非流式
+  let streaming = incremental === true;
+  // 各轮 assistant 正文中最长的一份。模型偶尔会把完整报告写在带 tool_calls 的
+  // 中间轮、最后一轮只剩"分析已完成，如需……"式收尾片段——只取末轮正文会让
+  // 报告整体丢失，故以最长正文为准（中间轮通常是简短过渡语，不影响正常场景）。
+  // 流式轮的累计正文一旦超过既有最优即上抛 onProgress（增量落库/实时预览的数据源）。
+  let bestContent: string | null = null;
+  // 本轮流式累计正文（非流式轮恒为空串）；callOnce 闭包引用，每轮开头重置
+  let roundContent = '';
+
   const buildRequest = (msgs: AgentMessage[], toolDefs?: object[]) => {
-    const req: Record<string, unknown> = { model: cfg.model, messages: msgs, stream: false };
+    const req: Record<string, unknown> = { model: cfg.model, messages: msgs, stream: streaming };
     if (cfg.temperature != null) req.temperature = Number(cfg.temperature);
     if (toolDefs?.length) {
       req.tools = toolDefs;
@@ -164,28 +226,53 @@ export async function runAgentLoop(
       signal: ctrl.signal,
       onRetry,
       lang,
+      onStreamChunk: streaming
+        ? (delta) => {
+            roundContent += delta;
+            if (bestContent == null || roundContent.length > bestContent.length) {
+              bestContent = roundContent;
+              onProgress?.(bestContent);
+            }
+          }
+        : undefined,
     });
 
   try {
     const history: AgentMessage[] = [...messages];
     let toolsActive = useTools;
-    // 各轮 assistant 正文中最长的一份。模型偶尔会把完整报告写在带 tool_calls 的
-    // 中间轮、最后一轮只剩"分析已完成，如需……"式收尾片段——只取末轮正文会让
-    // 报告整体丢失，故以最长正文为准（中间轮通常是简短过渡语，不影响正常场景）。
-    let bestContent: string | null = null;
     for (let round = 0; round < maxRounds; round++) {
+      // 轮边界检查取消：abort 落在工具执行/轮间时，不必等下一次 fetch 拒绝才停
+      if (externallyCancelled) throw new AiCancelledError();
+      roundContent = '';
       let msg: ChatMessage;
       try {
         msg = (await callOnce(history, toolsActive ? tools : undefined)) as ChatMessage;
       } catch (e) {
-        // 带 tools 的首轮请求被 400 拒绝 → 模型/代理不支持 tools，降级单轮
-        // （类型化判定，2026-10 起不再依赖错误消息文案）
-        if (
+        if (externallyCancelled || e instanceof AiCancelledError) throw new AiCancelledError();
+        if (toolsActive && streaming) {
+          // 降级梯子第一级：流式轮失败（传输级或 4xx）→ 本轮降非流式重试（保工具），
+          // 兼容不支持 stream+tools 组合的端点；streaming 已置 false，后续轮保持非流式
+          streaming = false;
+          try {
+            msg = (await callOnce(history, toolsActive ? tools : undefined)) as ChatMessage;
+          } catch (e2) {
+            if (toolsActive && round === 0 && e2 instanceof AiTransportError && e2.httpStatus === 400) {
+              // 第二级：非流式仍被 400 拒 → 模型/代理不支持 tools，弃工具降级单轮
+              onDegrade?.(e2 instanceof Error ? e2.message : String(e2));
+              toolsActive = false;
+              msg = (await callOnce(history, undefined)) as ChatMessage;
+            } else {
+              throw e2;
+            }
+          }
+        } else if (
           toolsActive &&
           round === 0 &&
           e instanceof AiTransportError &&
           e.httpStatus === 400
         ) {
+          // 非 incremental（或已降非流式）路径的既有降级：带 tools 首轮被 400 拒绝
+          // → 模型/代理不支持 tools，降级单轮（类型化判定，不依赖错误消息文案）
           onDegrade?.(e instanceof Error ? e.message : String(e));
           toolsActive = false;
           msg = (await callOnce(history, undefined)) as ChatMessage;
@@ -208,6 +295,7 @@ export async function runAgentLoop(
       });
       for (const tc of toolCalls) {
         const name = tc?.function?.name ?? '';
+        onToolStart?.(name);
         let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(tc?.function?.arguments || '{}');
@@ -242,6 +330,8 @@ export async function runAgentLoop(
     }
     throw new Error(t(lang, 'ai.empty'));
   } catch (e) {
+    // 用户取消必须先于超时分类抛出（同 callAI——取消不是故障，编排层据此回写 cancelled）
+    if (externallyCancelled || e instanceof AiCancelledError) throw new AiCancelledError();
     const reason = (ctrl.signal.reason as Error | undefined)?.message || (e instanceof Error ? e.message : '');
     if (
       reason === 'total timeout' ||
@@ -254,5 +344,6 @@ export async function runAgentLoop(
   } finally {
     clearTimeout(totalTimer);
     clearInterval(heartbeat);
+    signal?.removeEventListener('abort', forwardAbort);
   }
 }
