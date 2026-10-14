@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AiReportBody } from '@/components/AiReportBody';
 import { AskInput } from '@/components/AskInput';
 import { ChatBubbles } from '@/components/ChatBubbles';
+import { ChatEmptyHero } from '@/components/ChatEmptyHero';
 import { useAiReport } from '@/components/useAiReport';
 import { getAiChat, type AiChatRow } from '@/db';
 import {
@@ -218,8 +219,10 @@ export default function AiSessionScreen() {
         )}
       </Appbar.Header>
 
-      {/* 滚动容器：报告正文（三态）与消息气泡流共用（P0 修复——长报告必须可滚动） */}
+      {/* 滚动容器：报告正文（三态）与消息气泡流共用（P0 修复——长报告必须可滚动）。
+          直接对话空会话时给引导 hero（AP2），不再白屏 */}
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+        {kind === 'chat' && chatMessages.length === 0 && <ChatEmptyHero />}
         {kind === 'report' && (
           <AiReportBody
             report={report}
