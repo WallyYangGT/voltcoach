@@ -21,6 +21,7 @@
 import { AGENTIC } from '../core/settings.ts';
 import { t, type Lang } from '../core/i18n.ts';
 import {
+  AiTransportError,
   requestChatCompletion,
   type AgentMessage,
   type ChatMessage,
@@ -178,7 +179,13 @@ export async function runAgentLoop(
         msg = (await callOnce(history, toolsActive ? tools : undefined)) as ChatMessage;
       } catch (e) {
         // 带 tools 的首轮请求被 400 拒绝 → 模型/代理不支持 tools，降级单轮
-        if (toolsActive && round === 0 && /返回 400/.test(e instanceof Error ? e.message : '')) {
+        // （类型化判定，2026-10 起不再依赖错误消息文案）
+        if (
+          toolsActive &&
+          round === 0 &&
+          e instanceof AiTransportError &&
+          e.httpStatus === 400
+        ) {
           onDegrade?.(e instanceof Error ? e.message : String(e));
           toolsActive = false;
           msg = (await callOnce(history, undefined)) as ChatMessage;

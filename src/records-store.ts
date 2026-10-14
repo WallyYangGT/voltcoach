@@ -32,7 +32,8 @@ function recordsFile(fileName: string): File | null {
 /** 逐秒记录 → CSV → gzip → 落盘（覆盖写，重复导入同文件名即更新） */
 export async function saveRecords(fileName: string, records: SecRecord[]): Promise<void> {
   const file = recordsFile(fileName);
-  if (!file) throw new Error(`非法文件名: ${fileName}`);
+  // 开发者向 invariant（文件名来自导入管线，正常不触发）：非用户文案，不走 i18n
+  if (!file) throw new Error(`Invalid records file name: ${fileName}`);
   const dir = recordsDir();
   if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
   const gz = gzip(recordsToCsv(records));
@@ -76,7 +77,7 @@ export async function readStoredRecordGz(base: string): Promise<Uint8Array | nul
 /** 直写 gzip 字节（备份导入恢复用；不解压，base 过 safeName 防穿越） */
 export async function writeStoredRecordGz(base: string, gz: Uint8Array): Promise<void> {
   const safe = safeName(base);
-  if (!safe) throw new Error(`非法文件名: ${base}`);
+  if (!safe) throw new Error(`Invalid records file name: ${base}`);
   const dir = recordsDir();
   if (!dir.exists) dir.create({ intermediates: true, idempotent: true });
   new File(dir, `${safe}.records.csv.gz`).write(gz as unknown as Uint8Array);

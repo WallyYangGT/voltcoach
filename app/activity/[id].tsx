@@ -189,9 +189,18 @@ export default function ActivityDetailScreen() {
     };
   }, [fileName]);
 
+  // 「已保存 ✓」flash 的定时器：组件卸载时清理（否则卸载后 setState）
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
   const flashSaved = () => {
     setSavedFlash(true);
-    setTimeout(() => setSavedFlash(false), 2000);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setSavedFlash(false), 2000);
   };
 
   /** 删除本训练（含逐秒数据）；AI 报告保留，删完返回列表 */
@@ -675,3 +684,6 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
 });
+
+// 路由级错误边界（架构评审 T2）：本屏渲染异常在此兜底，不再冒泡到根边界丢失导航位置
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';

@@ -29,14 +29,15 @@
 
 不配置时产物使用 **debug 签名**（可直接侧载体验，但不能覆盖安装正式签名包），且 Release 正文会自动注明；配置后为正式签名。**四个 Secrets 必须要么全配、要么全不配——半配直接失败**（防把 debug 包当正式版发出去）。
 
-生成一次 keystore 并配置（keystore 本体与口令**绝不入库**，已被 `.gitignore` 排除）：
+生成一次 keystore 并配置（keystore 本体与口令**绝不入库**，已被 `.gitignore` 排除；**建议把 keystore 存放在仓库目录之外**——gitignore 只是防误提交，全文索引/整目录打包/AI 代理盲读等旁路仍可能把工作区内的文件带出去，与「原史备份在仓库外」同等待遇）：
 
 ```bash
-keytool -genkeypair -v -keystore voltcoach.keystore -alias voltcoach \
+# <密钥目录> 指仓库之外的安全位置（如 ../secrets/），下同
+keytool -genkeypair -v -keystore <密钥目录>/voltcoach.keystore -alias voltcoach \
   -keyalg RSA -keysize 2048 -validity 10000
 # base64 内容（GitHub Secrets 填这个）
-base64 -w0 voltcoach.keystore          # macOS/Linux/Git Bash
-certutil -encode voltcoach.keystore keystore-b64.txt   # Windows（输出含 PEM 头尾行，流水线已兼容）
+base64 -w0 <密钥目录>/voltcoach.keystore          # macOS/Linux/Git Bash
+certutil -encode <密钥目录>/voltcoach.keystore keystore-b64.txt   # Windows（输出含 PEM 头尾行，流水线已兼容）
 ```
 
 | Secret | 值 |

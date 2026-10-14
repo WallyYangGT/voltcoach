@@ -459,8 +459,8 @@ export async function submitChatMessage(
   return { chatId, messageId };
 }
 
-/** 对话系统段：按当前状态重拼（记忆/备注/profile 修改即时生效） */
-async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAiChat>>>, agentic: boolean, lang: Lang): Promise<string> {
+/** 对话系统段：按当前状态重拼（记忆/备注/profile 修改即时生效）；answeredTurns 为此前已完成的回答轮数（follow_up 第 2 轮起 summary 降 headline 的依据） */
+async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAiChat>>>, agentic: boolean, lang: Lang, answeredTurns = 0): Promise<string> {
   const [athlete, profile, memories, dossier] = await Promise.all([
     getEffectiveAthlete(),
     getProfile(),
@@ -484,6 +484,7 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
       dossierSection: buildDossierSection(dossier, lang),
       reportMarkdown: rep?.markdown ?? null,
       summary,
+      historyTurns: answeredTurns,
     },
     lang,
   );
@@ -510,7 +511,10 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     const history = chat.messages
       .filter((m) => m.status === 'completed' && m.content)
       .map((m) => ({ role: m.role, content: m.content }));
-    const system = await buildChatSystem(chat, config.agentic !== false, lang);
+    // 首条 user 消息是用户刚提的问题（completed 已入 history），故以「已完成的回答数」计轮：
+    // 0 = 首轮（summary 全量），≥1 = 第 2 轮起（summary 降 headline）
+    const answeredTurns = history.filter((m) => m.role === 'assistant').length;
+    const system = await buildChatSystem(chat, config.agentic !== false, lang, answeredTurns);
     keepAlive = await acquireGenerationKeepAlive({
       title: t(lang, 'ai.keepalive_title'),
       body: t(lang, 'ai.keepalive_body'),

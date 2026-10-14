@@ -48,6 +48,12 @@ jobs:
       - name: Lint（0 error 且 0 warning）
         run: npm run lint
 
+      # 类型检查（2026-10-14 起）：Metro 不做类型检查、ESLint 的 TS 支持关闭了
+      # no-undef（本由 tsc 负责）——渲染期 ReferenceError 级缺陷（如 TS2304）只能
+      # 由 tsc 抓，主分支保持 0 错误为门槛
+      - name: 类型检查（tsc --noEmit）
+        run: npx tsc --noEmit
+
       - name: 单元测试
         run: npm test
 

@@ -12,7 +12,7 @@
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import dayjs from 'dayjs';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Clipboard from 'expo-clipboard';
@@ -43,6 +43,14 @@ export default function AiCenterScreen() {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
   const [copied, setCopied] = useState(false);
+  // 「已复制」flash 的定时器：组件卸载时清理（否则卸载后 setState）
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
 
   // 场景选择弹层状态
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -138,7 +146,8 @@ export default function AiCenterScreen() {
       const prompt = await buildReportPrompt(scenario, scenarioContext(scenario), lang);
       await Clipboard.setStringAsync(prompt);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch (e) {
       Alert.alert(t('ai.center.copyFailed', { msg: e instanceof Error ? e.message : String(e) }));
     }
@@ -375,6 +384,7 @@ function ActivityPicker({
   selected: string | null;
   onSelect: (name: string | null) => void;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const sel = acts.find((a) => a.file_name === selected);
   return (
@@ -398,7 +408,7 @@ function ActivityPicker({
                   setOpen(false);
                 }}>
                 <Text style={styles.pickerItemText} numberOfLines={1}>
-                  {a.date} · {a.category} · {a.file_name}
+                  {a.date} · {t(`cat.${a.category}` as never)} · {a.file_name}
                 </Text>
               </Pressable>
             ))}
@@ -511,3 +521,6 @@ const styles = StyleSheet.create({
   pickerItemText: { color: palette.text, fontSize: 12 },
   input: { backgroundColor: palette.panel },
 });
+
+// 路由级错误边界（架构评审 T2）：本屏渲染异常在此兜底，不再冒泡到根边界丢失导航位置
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';

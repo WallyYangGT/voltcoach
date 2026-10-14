@@ -9,7 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { requestChatCompletion } = await import('../src/ai/http.ts');
+const { requestChatCompletion, AiTransportError } = await import('../src/ai/http.ts');
 const { callAI, runAgentLoop } = await import('../src/ai/agent.ts');
 const { AGENTIC } = await import('../src/core/settings.ts');
 
@@ -130,9 +130,14 @@ test('callAI: SSE 多字节字符跨块断开仍正确解码（字节级切行�
   assert.equal(text, '中文混合Power⚡');
 });
 
-test('callAI: HTTP 错误状态透出状态码（含 agent 降级所需的格式）', async () => {
+test('callAI: HTTP 错误透出状态码（消息格式 + httpStatus 类型化字段）', async () => {
   const f = jsonFetch(() => ({ status: 429, body: 'rate limited' }));
-  await assert.rejects(callAI(f, CFG, '提示词', { timeoutMs: 5000 }), /AI API 返回 429: rate limited/);
+  await assert.rejects(callAI(f, CFG, '提示词', { timeoutMs: 5000 }), (e) => {
+    assert.ok(e instanceof AiTransportError);
+    assert.match(e.message, /AI API 返回 429: rate limited/);
+    assert.equal(e.httpStatus, 429); // agent 循环的 tools 降级按该字段判定，不再解析消息文案
+    return true;
+  });
 });
 
 test('callAI: 超过 timeoutMs 总时限报超时错误（双语消息）', async () => {
@@ -241,7 +246,7 @@ test('runAgentLoop: 轮数耗尽后去掉 tools 强制直接作答', async () =>
   assert.match(last.body.messages.at(-1).content, /直接作答/);
 });
 
-test('runAgentLoop: 模型不支持 tools（首轮 400）自动降级单轮', async () => {
+test('runAgentLoop: 模型不支持 tools（首轮 httpStatus=400）自动降级单轮', async () => {
   const f = jsonFetch((body) => {
     if (Array.isArray(body.tools)) return { status: 400, body: JSON.stringify({ error: { message: 'tools not supported' } }) };
     return msg('降级回答');
@@ -327,16 +332,19 @@ test('requestChatCompletion: 重试仍失败时消息标明已自动重试，且
   assert.equal(calls, 2); // 首次 + 1 次，封顶
 });
 
-test('requestChatCompletion: 400 属请求侧问题不重试（保住 agent 降级判定格式）', async () => {
+test('requestChatCompletion: 400 属请求侧问题不重试（错误带 httpStatus 供 agent 降级判定）', async () => {
   let calls = 0;
   const f = async () => {
     calls += 1;
     return new Response('bad request', { status: 400 });
   };
-  await assert.rejects(
-    rcc(f, 'http://m/v1', 'k', {}, { retryDelayMs: 1 }),
-    /AI API 返回 400: bad request/,
-  );
+  await assert.rejects(rcc(f, 'http://m/v1', 'k', {}, { retryDelayMs: 1 }), (e) => {
+    assert.ok(e instanceof AiTransportError);
+    assert.match(e.message, /AI API 返回 400: bad request/);
+    assert.equal(e.httpStatus, 400);
+    assert.equal(e.retryable, false);
+    return true;
+  });
   assert.equal(calls, 1);
 });
 

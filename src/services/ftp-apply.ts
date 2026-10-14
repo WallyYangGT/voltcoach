@@ -3,8 +3,9 @@
  *
  * 流程：窗口取数 → estimateFtpFromHistory 科学估算 → evaluateFtpApply 采纳门槛
  * （置信度/两法一致性/全力锚点/新鲜度/diff 等硬校验，见 core/ftp）→ 过则
- * setAthlete 写回并盖 ai_coach 溯源戳。数值始终取估算器输出——工具对模型零参，
- * 没有自定数值的入口，杜绝幻觉写值；教练的判断权在"何时调用"。
+ * setAthlete 写回并盖 ai_coach 溯源戳 + 落 ai_ftp_update 快照（首页披露条与
+ * undoAiFtpUpdate 撤销入口的数据源，架构评审 S3）。数值始终取估算器输出——工具
+ * 对模型零参，没有自定数值的入口，杜绝幻觉写值；教练的判断权在"何时调用"。
  */
 
 import { t, type Lang } from '@/core/i18n';
@@ -15,7 +16,15 @@ import {
   type FtpHistoryEstimate,
 } from '@/core/ftp';
 import { FTP_ESTIMATION } from '@/core/settings';
-import { cyclingSummariesSince, getAthleteState, getFtpMeta, rebuildDossierQuietly, setAthlete } from '@/db';
+import {
+  cyclingSummariesSince,
+  getAiFtpUpdate,
+  getAthleteState,
+  getFtpMeta,
+  rebuildDossierQuietly,
+  setAiFtpUpdate,
+  setAthlete,
+} from '@/db';
 
 /** applyAiFtpUpdate 返回：拒绝时 reason 为已本地化的文案（estimate 供 AI 解释） */
 export interface AiFtpUpdateResult {
@@ -64,6 +73,12 @@ export async function applyAiFtpUpdate(lang: Lang = 'zh'): Promise<AiFtpUpdateRe
   const e = result.estimate;
   const updated = await setAthlete({ ftp_watts: e.ftp_w }, lang, { source: 'ai_coach' });
   const meta = await getFtpMeta();
+  // 快照（S3 追认入口）：首页披露条展示「谁改的、从多少到多少」，撤销据此回滚
+  await setAiFtpUpdate({
+    old_ftp_w: e.current_ftp_w,
+    new_ftp_w: updated.ftp_watts,
+    updated_at: meta.updated_at ?? new Date().toISOString(),
+  });
   void rebuildDossierQuietly(); // 爬坡强度 %FTP 分母变了，档案随之更新（fire-and-forget）
   return {
     applied: true,
@@ -72,4 +87,28 @@ export async function applyAiFtpUpdate(lang: Lang = 'zh'): Promise<AiFtpUpdateRe
     estimate: e,
     updated_at: meta.updated_at,
   };
+}
+
+/** undoAiFtpUpdate 返回：undone=false 时 reason 说明原因（none=无可撤销的快照；stale=当前 FTP 已被后续修改） */
+export interface AiFtpUndoResult {
+  undone: boolean;
+  reason?: 'none' | 'stale';
+  restored_ftp_w?: number;
+}
+
+/**
+ * 撤销 AI 的最近一次 FTP 更新（架构评审 S3「审计追认」的可逆半边）：
+ * 恢复快照 old 值（溯源戳盖 manual——这是用户的决定）、清快照、重建档案。
+ * 当前 FTP 已不等于快照 new 值时拒绝（用户后来手动改过/又发生了一次 AI 更新）——
+ * 每笔变更只回滚它自己，不跨笔回滚。
+ */
+export async function undoAiFtpUpdate(lang: Lang = 'zh'): Promise<AiFtpUndoResult> {
+  const snap = await getAiFtpUpdate();
+  if (!snap) return { undone: false, reason: 'none' };
+  const { athlete } = await getAthleteState();
+  if (athlete.ftp_watts !== snap.new_ftp_w) return { undone: false, reason: 'stale' };
+  await setAthlete({ ftp_watts: snap.old_ftp_w }, lang, { source: 'manual' });
+  await setAiFtpUpdate(null);
+  void rebuildDossierQuietly(); // FTP 变更触发点口径：撤销同样重建档案
+  return { undone: true, restored_ftp_w: snap.old_ftp_w };
 }

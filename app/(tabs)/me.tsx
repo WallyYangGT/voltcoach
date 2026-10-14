@@ -8,9 +8,9 @@
  * 透传）。未配置骑手参数时顶部 banner 引导（不强制锁定）。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, Divider, Icon, List, Menu, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
+import { Button, Divider, HelperText, Icon, List, Menu, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   AI_PROVIDER_PRESETS,
@@ -45,6 +45,14 @@ export default function MeScreen() {
   const [identity, setIdentity] = useState('');
   const [goal, setGoal] = useState('');
   const [savedFlash, setSavedFlash] = useState<'athlete' | 'profile' | 'ai' | null>(null);
+  // 「已保存 ✓」flash 的定时器：组件卸载时清理（否则卸载后 setState）
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
   const [savingAthlete, setSavingAthlete] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   // AI 服务配置（M3）：草稿为字符串（TextInput），生效值在库/Keystore
@@ -104,7 +112,8 @@ export default function MeScreen() {
 
   const flashSaved = (which: 'athlete' | 'profile' | 'ai') => {
     setSavedFlash(which);
-    setTimeout(() => setSavedFlash(null), 2000);
+    if (flashTimer.current) clearTimeout(flashTimer.current);
+    flashTimer.current = setTimeout(() => setSavedFlash(null), 2000);
   };
 
   const saveAthlete = async () => {
@@ -375,6 +384,13 @@ export default function MeScreen() {
           autoCorrect={false}
           style={styles.input}
         />
+        {/* 明文传输警示（架构评审 S1 补偿）：cleartext 全局放行是 BYOK 的现实约束，
+            补偿措施是 http 端点常驻提示——密钥与对话内容不经 TLS 加密 */}
+        {/^http:\/\//i.test(aiBaseUrl.trim()) && (
+          <HelperText type="error" visible>
+            {t('set.ai.http_warning')}
+          </HelperText>
+        )}
         {/* 模型名：命中预设时右侧箭头给出该厂商的建议模型；列表始终可手填 */}
         <Menu
           visible={modelMenu}
@@ -563,3 +579,6 @@ const styles = StyleSheet.create({
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 4 },
   switchLabel: { color: palette.text, fontSize: 13, flex: 1 },
 });
+
+// 路由级错误边界（架构评审 T2）：本屏渲染异常在此兜底，不再冒泡到根边界丢失导航位置
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';

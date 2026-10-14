@@ -12,7 +12,13 @@ import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } fr
 import { FAB } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { formatDuration } from '@/core/metrics';
-import { deleteActivity, listActivities, rebuildDossierQuietly, type ActivityListItem } from '@/db';
+import {
+  ACTIVITY_LIST_LIMIT,
+  deleteActivity,
+  listActivities,
+  rebuildDossierQuietly,
+  type ActivityListItem,
+} from '@/db';
 import { useI18n } from '@/i18n';
 import { deleteStoredRecord } from '@/records-store';
 import { invalidateReportTitles } from '@/services/aiTitle';
@@ -29,7 +35,7 @@ export default function ActivitiesScreen() {
 
   const load = useCallback(async () => {
     try {
-      setItems(await listActivities());
+      setItems(await listActivities(ACTIVITY_LIST_LIMIT));
     } catch (e) {
       console.warn('listActivities 失败:', e);
       setItems([]);
@@ -101,6 +107,15 @@ export default function ActivitiesScreen() {
           items == null ? null : ( // null = 首次加载中，不闪空态
             <Text style={styles.empty}>{t('activities.empty')}</Text>
           )
+        }
+        ListFooterComponent={
+          // 触顶提示（E4）：此前第 201 条起静默不可见，用户无从知晓。
+          // 恰好整 200 条时也会提示（误报无害：完整数据仍在库与备份）
+          (items?.length ?? 0) >= ACTIVITY_LIST_LIMIT ? (
+            <Text style={styles.truncated}>
+              {t('activities.list_truncated', { n: ACTIVITY_LIST_LIMIT })}
+            </Text>
+          ) : null
         }
         renderItem={({ item }) => (
           <ReanimatedSwipeable
@@ -205,5 +220,9 @@ const styles = StyleSheet.create({
   },
   deleteText: { color: palette.bg, fontSize: 13, fontWeight: '700' },
   empty: { color: palette.muted, textAlign: 'center', lineHeight: 24 },
+  truncated: { color: palette.faint, fontSize: 12, textAlign: 'center', paddingVertical: 12 },
   fab: { position: 'absolute', right: 16, bottom: 16, backgroundColor: palette.volt },
 });
+
+// 路由级错误边界（架构评审 T2）：本屏渲染异常在此兜底，不再冒泡到根边界丢失导航位置
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';

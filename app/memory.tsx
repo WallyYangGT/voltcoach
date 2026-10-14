@@ -163,3 +163,6 @@ const styles = StyleSheet.create({
   del: { color: palette.red, fontSize: 12 },
   content: { color: palette.text, fontSize: 13, lineHeight: 20 },
 });
+
+// 路由级错误边界（架构评审 T2）：本屏渲染异常在此兜底，不再冒泡到根边界丢失导航位置
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';

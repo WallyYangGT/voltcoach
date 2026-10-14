@@ -2,7 +2,7 @@
   "name": "voltcoach",
   "main": "expo-router/entry",
   "type": "module",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "license": "MIT",
   "description": "数据驱动的骑行私教——纯本地的 .fit 训练分析 App：NP/TSS/CTL-ATL-TSB、峰功率曲线、AI 训练解读（BYOK），无服务器、数据全在手机",
   "keywords": [
@@ -19,7 +19,6 @@
     "url": "git+https://github.com/WallyYangGT/voltcoach.git"
   },
   "dependencies": {
-    "@expo/ui": "~57.0.22",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "9.1.0",
     "dayjs": "^1.11.23",
@@ -32,7 +31,6 @@
     "expo-document-picker": "~57.0.3",
     "expo-file-system": "~57.0.7",
     "expo-font": "~57.0.4",
-    "expo-glass-effect": "~57.0.4",
     "expo-image": "~57.0.5",
     "expo-linking": "~57.0.12",
     "expo-localization": "~57.0.2",
