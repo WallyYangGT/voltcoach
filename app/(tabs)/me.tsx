@@ -10,7 +10,7 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { Button, Divider, Icon, List, Menu, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
+import { Button, Divider, HelperText, Icon, List, Menu, SegmentedButtons, Switch, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   AI_PROVIDER_PRESETS,
@@ -375,6 +375,13 @@ export default function MeScreen() {
           autoCorrect={false}
           style={styles.input}
         />
+        {/* 明文传输警示（架构评审 S1 补偿）：cleartext 全局放行是 BYOK 的现实约束，
+            补偿措施是 http 端点常驻提示——密钥与对话内容不经 TLS 加密 */}
+        {/^http:\/\//i.test(aiBaseUrl.trim()) && (
+          <HelperText type="error" visible>
+            {t('set.ai.http_warning')}
+          </HelperText>
+        )}
         {/* 模型名：命中预设时右侧箭头给出该厂商的建议模型；列表始终可手填 */}
         <Menu
           visible={modelMenu}

@@ -18,6 +18,9 @@ import { deleteStoredRecord } from '@/records-store';
 import { invalidateReportTitles } from '@/services/aiTitle';
 import { palette } from '@/theme';
 
+/** 列表查询上限（listActivities 默认值同源）：触顶时列表尾部提示截断（架构评审 E4 最小修正） */
+const LIST_LIMIT = 200;
+
 export default function ActivitiesScreen() {
   const { t } = useI18n();
   const router = useRouter();
@@ -29,7 +32,7 @@ export default function ActivitiesScreen() {
 
   const load = useCallback(async () => {
     try {
-      setItems(await listActivities());
+      setItems(await listActivities(LIST_LIMIT));
     } catch (e) {
       console.warn('listActivities 失败:', e);
       setItems([]);
@@ -101,6 +104,12 @@ export default function ActivitiesScreen() {
           items == null ? null : ( // null = 首次加载中，不闪空态
             <Text style={styles.empty}>{t('activities.empty')}</Text>
           )
+        }
+        ListFooterComponent={
+          // 触顶提示（E4）：此前第 201 条起静默不可见，用户无从知晓
+          (items?.length ?? 0) >= LIST_LIMIT ? (
+            <Text style={styles.truncated}>{t('activities.list_truncated', { n: LIST_LIMIT })}</Text>
+          ) : null
         }
         renderItem={({ item }) => (
           <ReanimatedSwipeable
@@ -205,6 +214,7 @@ const styles = StyleSheet.create({
   },
   deleteText: { color: palette.bg, fontSize: 13, fontWeight: '700' },
   empty: { color: palette.muted, textAlign: 'center', lineHeight: 24 },
+  truncated: { color: palette.faint, fontSize: 12, textAlign: 'center', paddingVertical: 12 },
   fab: { position: 'absolute', right: 16, bottom: 16, backgroundColor: palette.volt },
 });
 
