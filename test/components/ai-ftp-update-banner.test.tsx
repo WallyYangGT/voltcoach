@@ -27,7 +27,7 @@ type AlertButton = { text: string; style?: string; onPress?: () => void };
 const alertButtons = (callIdx: number) =>
   (Alert.alert as jest.Mock).mock.calls[callIdx][2] as AlertButton[];
 
-const snap = { old_ftp_w: 245, new_ftp_w: 258, updated_at: '2026-10-14T08:30:00.000Z' };
+const snap = { old_ftp_w: 245, new_ftp_w: 258, updated_at: '2026-10-14T12:00:00.000Z' }; // 正午 UTC：极端西时区也不跨日
 
 beforeEach(() => {
   (undoAiFtpUpdate as jest.Mock).mockReset().mockResolvedValue({ undone: true, restored_ftp_w: 245 });

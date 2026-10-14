@@ -42,7 +42,7 @@ export function AiFtpUpdateBanner({
         onPress: () => {
           setBusy(true);
           undoAiFtpUpdate(lang)
-            .then((r) => {
+            .then(() => {
               // 两种结果都回调首页 load() 重取快照与 FTP：成功则条目消失；
               // stale（期间 FTP 被改过）重取后显示条件自然隐藏
               onChanged?.();

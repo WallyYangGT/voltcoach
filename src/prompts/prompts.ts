@@ -905,6 +905,8 @@ export function compactReportForPrompt(markdown: string, lang: PromptLang = 'zh'
  * interval_set/developer_fields）。用于 follow_up 第 2 轮起的系统段——
  * 第 1 轮已带完整压缩数据，后续轮模型的主要任务是围绕对话推进，
  * headline 足够定位「这是哪趟训练、量级如何」。
+ * 有意不带：power.ftp_estimate（对象体积大且 get_activity_summary 工具可回捞，
+ * 勿顺手补回）。
  */
 export function headlineSummaryForPrompt<T extends object>(summary: T, lang: PromptLang = 'zh'): T {
   void lang; // 与 compactSummaryForPrompt 保持同形签名（当前无需文案）

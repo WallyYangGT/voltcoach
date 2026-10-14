@@ -419,10 +419,12 @@ test('compactReportForPrompt：短报告原样、长报告保首末章中间只�
   const one = compactReportForPrompt(oneHeading, 'zh');
   assert.ok(one.length < oneHeading.length, '单标题长报告应截断而非复制');
   assert.equal(one.split('# 复盘报告').length - 1, 1, '标题只出现一次');
-  // 两个标题：首末各全保（等于全文）、无中间章说明
-  const twoHeading = '# 报告\n\n' + '前半'.repeat(800) + '\n\n## 尾声\n\n' + '后半'.repeat(800);
+  // 两个标题（>6000 确保进切章分支）：首末各全保、无中间章说明
+  // （首末拼接比原文恰多一个空行分隔符，断言按此钉住）
+  const twoHeading = '# 报告\n\n' + '前半'.repeat(2100) + '\n\n## 尾声\n\n' + '后半'.repeat(2100);
   const two = compactReportForPrompt(twoHeading, 'zh');
-  assert.equal(two.length, twoHeading.length); // 首末章即全文
+  assert.equal(two.length, twoHeading.length + 1);
+  assert.ok(two.includes('前半'.repeat(2100)) && two.includes('后半'.repeat(2100)));
   assert.doesNotMatch(two, /中间章节仅保留标题/);
 });
 
