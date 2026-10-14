@@ -15,10 +15,16 @@ import { render, type RenderResult } from '@testing-library/react-native';
 import { PaperProvider } from 'react-native-paper';
 import { I18nProvider } from '@/i18n';
 
-export async function renderWithProviders(ui: React.ReactElement): Promise<RenderResult> {
-  return render(
+/** 包 Provider 的元素包装（renderWithProviders 内部用；测试 rerender 时也须包——
+ *  RNTL 的 rerender 不沿用初始 render 的包裹层，裸元素会丢 Provider 上下文） */
+export function wrapWithProviders(ui: React.ReactElement): React.ReactElement {
+  return (
     <I18nProvider>
       <PaperProvider>{ui}</PaperProvider>
-    </I18nProvider>,
+    </I18nProvider>
   );
+}
+
+export async function renderWithProviders(ui: React.ReactElement): Promise<RenderResult> {
+  return render(wrapWithProviders(ui));
 }

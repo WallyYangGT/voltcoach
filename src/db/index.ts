@@ -488,7 +488,10 @@ export interface ActivityListItem {
   intensity_factor: number | null;
 }
 
-export async function listActivities(n = 200): Promise<ActivityListItem[]> {
+/** 列表查询上限单源（listActivities 默认值与记录页触顶提示共用，防两处漂移） */
+export const ACTIVITY_LIST_LIMIT = 200;
+
+export async function listActivities(n: number = ACTIVITY_LIST_LIMIT): Promise<ActivityListItem[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{
     file_name: string;

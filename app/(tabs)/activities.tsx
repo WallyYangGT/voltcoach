@@ -12,14 +12,17 @@ import { Alert, FlatList, Pressable, RefreshControl, StyleSheet, Text, View } fr
 import { FAB } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { formatDuration } from '@/core/metrics';
-import { deleteActivity, listActivities, rebuildDossierQuietly, type ActivityListItem } from '@/db';
+import {
+  ACTIVITY_LIST_LIMIT,
+  deleteActivity,
+  listActivities,
+  rebuildDossierQuietly,
+  type ActivityListItem,
+} from '@/db';
 import { useI18n } from '@/i18n';
 import { deleteStoredRecord } from '@/records-store';
 import { invalidateReportTitles } from '@/services/aiTitle';
 import { palette } from '@/theme';
-
-/** 列表查询上限（listActivities 默认值同源）：触顶时列表尾部提示截断（架构评审 E4 最小修正） */
-const LIST_LIMIT = 200;
 
 export default function ActivitiesScreen() {
   const { t } = useI18n();
@@ -32,7 +35,7 @@ export default function ActivitiesScreen() {
 
   const load = useCallback(async () => {
     try {
-      setItems(await listActivities(LIST_LIMIT));
+      setItems(await listActivities(ACTIVITY_LIST_LIMIT));
     } catch (e) {
       console.warn('listActivities 失败:', e);
       setItems([]);
@@ -106,9 +109,12 @@ export default function ActivitiesScreen() {
           )
         }
         ListFooterComponent={
-          // 触顶提示（E4）：此前第 201 条起静默不可见，用户无从知晓
-          (items?.length ?? 0) >= LIST_LIMIT ? (
-            <Text style={styles.truncated}>{t('activities.list_truncated', { n: LIST_LIMIT })}</Text>
+          // 触顶提示（E4）：此前第 201 条起静默不可见，用户无从知晓。
+          // 恰好整 200 条时也会提示（误报无害：完整数据仍在库与备份）
+          (items?.length ?? 0) >= ACTIVITY_LIST_LIMIT ? (
+            <Text style={styles.truncated}>
+              {t('activities.list_truncated', { n: ACTIVITY_LIST_LIMIT })}
+            </Text>
           ) : null
         }
         renderItem={({ item }) => (

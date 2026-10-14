@@ -28,10 +28,12 @@ import { ATHLETE, type AthleteParams } from '@/core/settings';
 import {
   ActivityListItem,
   getAiConfig,
+  getAiFtpUpdate,
   getEffectiveAthlete,
   listActivities,
   monthlySummary,
   recentFormDaily,
+  type AiFtpUpdateSnapshot,
 } from '@/db';
 import { ChatInviteCard } from '@/components/ChatInviteCard';
 import { AiFtpUpdateBanner } from '@/components/AiFtpUpdateBanner';
@@ -47,6 +49,8 @@ interface HomeData {
   daily: TrendPoint[];
   monthly: MonthlyItem[];
   recent: ActivityListItem[];
+  /** AI 教练 FTP 更新快照（披露条用；null=无可披露） */
+  aiFtpUpdate: AiFtpUpdateSnapshot | null;
 }
 
 export default function HomeScreen() {
@@ -62,18 +66,19 @@ export default function HomeScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [athlete, daily, monthly, recent, cfg] = await Promise.all([
+      const [athlete, daily, monthly, recent, cfg, aiFtpUpdate] = await Promise.all([
         getEffectiveAthlete(),
         recentFormDaily(90),
         monthlySummary(6),
         listActivities(6),
         getAiConfig(),
+        getAiFtpUpdate(),
       ]);
-      setData({ athlete, daily, monthly, recent });
+      setData({ athlete, daily, monthly, recent, aiFtpUpdate });
       setConfigured(cfg.configured);
     } catch (e) {
       console.warn('仪表盘加载失败:', e);
-      setData({ athlete: ATHLETE, daily: [], monthly: [], recent: [] });
+      setData({ athlete: ATHLETE, daily: [], monthly: [], recent: [], aiFtpUpdate: null });
     }
   }, []);
 
@@ -153,8 +158,13 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* AI 教练 FTP 更新披露条（S3：快照存在且未被后续修改时显示，撤销后经 onChanged 刷新 hero） */}
-      <AiFtpUpdateBanner onChanged={load} />
+      {/* AI 教练 FTP 更新披露条（S3：数据随 load() 每次回焦点重取——tab 常驻挂载，
+          AI 更新后返回首页立即可见；撤销后经 onChanged 刷新收敛） */}
+      <AiFtpUpdateBanner
+        snapshot={data?.aiFtpUpdate ?? null}
+        currentFtp={data?.athlete.ftp_watts ?? null}
+        onChanged={load}
+      />
 
       {/* FTP 科学估算面板（展开时渲染，采纳写回后经 onApplied 刷新 hero） */}
       {ftpOpen && <FtpEstimatePanel onApplied={load} />}

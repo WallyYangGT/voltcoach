@@ -865,31 +865,28 @@ const REPORT_INLINE_MAX_CHARS = 6000;
 /**
  * 报告正文瘦身：≤6000 字符原样返回；超出按 markdown 标题行（^#+）切章——
  * 首章（总评）与末章（建议）全文保留，中间各章只保留标题行 + 一条省略说明，
- * 让模型知道省略了什么、把引用锚定在可见内容上。无标题的超长文本退化为
- * 首尾字符截断（各留一半预算）。原文本不变，返回新字符串。
+ * 让模型知道省略了什么、把引用锚定在可见内容上。标题不足 2 个（无「中间章」
+ * 可分）或无标题时退化为首尾字符截断（首 2/3、尾 1/3 预算）——否则单标题
+ * 长报告会被首末两段重复收录成整篇两份（code-review P1 修复）。原文本不变。
  */
 export function compactReportForPrompt(markdown: string, lang: PromptLang = 'zh'): string {
   if (!markdown || markdown.length <= REPORT_INLINE_MAX_CHARS) return markdown;
+  // 无标题/单标题退化：按字符截首尾（无章节结构可依，不出省略说明）
+  const charFallback = () => {
+    const headCut = Math.floor((REPORT_INLINE_MAX_CHARS * 2) / 3);
+    const tailCut = Math.min(markdown.length - headCut - 1, REPORT_INLINE_MAX_CHARS - headCut);
+    return markdown.slice(0, headCut) + '\n\n……\n\n' + markdown.slice(markdown.length - tailCut);
+  };
   const lines = markdown.split('\n');
   const isHeading = (l: string) => /^#{1,6}\s/.test(l);
   const firstHeadingIdx = lines.findIndex(isHeading);
-  // 无任何标题：退化为首尾字符截断（首 2/3、尾 1/3 预算）
-  if (firstHeadingIdx < 0) {
-    const headCut = Math.floor((REPORT_INLINE_MAX_CHARS * 2) / 3);
-    const tailCut = Math.min(markdown.length - headCut - 1, REPORT_INLINE_MAX_CHARS - headCut);
-    return (
-      markdown.slice(0, headCut) +
-      '\n\n' +
-      TT(lang, 'report.omitted') +
-      '\n\n' +
-      markdown.slice(markdown.length - tailCut)
-    );
-  }
+  if (firstHeadingIdx < 0) return charFallback();
   // 标题行下标列表（含首行前的引言块视为首章的一部分）
   const headingIdxs: number[] = [];
   lines.forEach((l, i) => {
     if (i >= firstHeadingIdx && isHeading(l)) headingIdxs.push(i);
   });
+  if (headingIdxs.length < 2) return charFallback();
   const lastHeadingIdx = headingIdxs[headingIdxs.length - 1];
   const out: string[] = [];
   out.push(...lines.slice(0, headingIdxs[1] ?? lines.length)); // 首章（引言 + 第一个标题到第二个标题前）
@@ -922,14 +919,15 @@ export function headlineSummaryForPrompt<T extends object>(summary: T, lang: Pro
   };
   const head: LooseSummary = {};
   const activity = pickKeys(s.activity, [
-    'date', 'sport', 'duration_sec', 'distance_km', 'elevation_gain_m', 'category', 'note',
+    'date', 'sport', 'duration_sec', 'distance_km', 'elevation_gain_m', 'elevation_gain_source',
+    'avg_speed_kmh', 'total_calories', 'category', 'note',
   ]);
   if (activity) head.activity = activity;
   // 骑手参数与体能状态：扁平标量，体积恒定
   if (s.athlete_context && typeof s.athlete_context === 'object') head.athlete_context = s.athlete_context;
   const power = pickKeys(s.power, [
     'avg', 'normalized_power', 'max', 'variability_index', 'intensity_factor', 'tss',
-    'w_per_kg_avg', 'zone_distribution_pct',
+    'w_per_kg_avg', 'zone_distribution_pct', 'calibration_scale',
   ]);
   if (power) head.power = power;
   if (s.heart_rate && typeof s.heart_rate === 'object') head.heart_rate = s.heart_rate;

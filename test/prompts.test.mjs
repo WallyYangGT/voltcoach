@@ -411,13 +411,25 @@ test('compactReportForPrompt：短报告原样、长报告保首末章中间只�
   const noHeading = '无标题长文'.repeat(2000); // 10000 字符、无 markdown 标题
   const f = compactReportForPrompt(noHeading, 'zh');
   assert.ok(f.length < noHeading.length);
-  assert.match(f, /中间章节仅保留标题/);
   assert.match(f, /^无标题长文/); // 首部保留
+  assert.ok(f.includes('……')); // 无章节可依：字符截断 + 省略号衔接（不出章节措辞的说明）
+
+  // code-review P1 回归：单标题长报告不得被复制成两份（首末章指向同一标题）
+  const oneHeading = '# 复盘报告\n\n' + '正文叙述'.repeat(1500); // 12000 字符、仅 1 个标题
+  const one = compactReportForPrompt(oneHeading, 'zh');
+  assert.ok(one.length < oneHeading.length, '单标题长报告应截断而非复制');
+  assert.equal(one.split('# 复盘报告').length - 1, 1, '标题只出现一次');
+  // 两个标题：首末各全保（等于全文）、无中间章说明
+  const twoHeading = '# 报告\n\n' + '前半'.repeat(800) + '\n\n## 尾声\n\n' + '后半'.repeat(800);
+  const two = compactReportForPrompt(twoHeading, 'zh');
+  assert.equal(two.length, twoHeading.length); // 首末章即全文
+  assert.doesNotMatch(two, /中间章节仅保留标题/);
 });
 
 test('headlineSummaryForPrompt：留标量核心与区间占比，丢列表载荷', () => {
   const s = sampleSummary({
-    power: { normalized_power: 180, avg: 160, intensity_factor: 0.85, tss: 60, peak_curve: [{ min: 1, watts: 300 }], zone_distribution_pct: { z1: 40, z2: 35 } },
+    power: { normalized_power: 180, avg: 160, intensity_factor: 0.85, tss: 60, peak_curve: [{ min: 1, watts: 300 }], zone_distribution_pct: { z1: 40, z2: 35 }, calibration_scale: 1.02 },
+    activity: { date: '2026-03-25', sport: 'cycling', duration_sec: 3600, category: 'training', avg_speed_kmh: 28.5, elevation_gain_source: 'device' },
     segments: [{ name: 'seg1' }, { name: 'seg2' }],
     anomalies: [{ type: 'timer_pause', at: 'x' }],
     climbs: [{ name: '爬坡' }],
@@ -426,6 +438,9 @@ test('headlineSummaryForPrompt：留标量核心与区间占比，丢列表载�
   });
   const h = headlineSummaryForPrompt(s, 'zh');
   assert.equal(h.power.normalized_power, 180);
+  assert.equal(h.power.calibration_scale, 1.02); // 功率口径留痕：headline 仍带（常量体积标量）
+  assert.equal(h.activity.avg_speed_kmh, 28.5);
+  assert.equal(h.activity.elevation_gain_source, 'device');
   assert.deepEqual(h.power.zone_distribution_pct, { z1: 40, z2: 35 }); // 小型映射保留
   assert.equal(h.data_quality.record_count, 3600);
   assert.equal(h.athlete_context.ctl, 50);

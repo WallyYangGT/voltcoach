@@ -384,6 +384,7 @@ function ActivityPicker({
   selected: string | null;
   onSelect: (name: string | null) => void;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const sel = acts.find((a) => a.file_name === selected);
   return (
