@@ -27,11 +27,14 @@ export type FetchLike = typeof globalThis.fetch;
  */
 export class AiTransportError extends Error {
   readonly retryable: boolean;
+  /** 非 2xx 响应的状态码；非 HTTP 错误（网络断连/空正文/解析失败）为 undefined */
+  readonly httpStatus?: number;
 
-  constructor(message: string, retryable = true) {
+  constructor(message: string, retryable = true, httpStatus?: number) {
     super(message);
     this.name = 'AiTransportError';
     this.retryable = retryable;
+    this.httpStatus = httpStatus;
   }
 }
 
@@ -137,8 +140,9 @@ function badBodyError(status: number, text: string, lang: Lang): AiTransportErro
  * 发起一次 chat/completions 请求。
  * 非流式（onStreamChunk 缺省）resolve 完整 message 对象（{content, tool_calls?}）；
  * 流式逐 chunk 回调 onStreamChunk 后 resolve 拼接的完整文本。
- * 非 2xx 抛 `AI API 返回 {status}: {body 前 300 字}`（agent 循环的 tools 降级
- * 依据该格式识别 400，格式不可改）。
+ * 非 2xx 抛 `AI API 返回 {status}: {body 前 300 字}`，错误对象带 httpStatus 字段
+ * （agent 循环的 tools 降级按 `e instanceof AiTransportError && e.httpStatus === 400`
+ * 类型化判定，不再依赖消息文案——文案可随措辞调整）。
  *
  * 传输级失败（连接建立失败、空/破损正文、正文读取中断、429/5xx）自动重试一次：
  * 长报告请求可能已经等了数分钟，不重试就等于让用户手动再来一遍。
@@ -186,7 +190,11 @@ export async function requestChatCompletion(
       if (!canRetry) {
         // 重试过仍失败：消息里标明，避免用户以为是首次尝试（也便于回看定位网关/网络问题）
         if (retried > 0 && e instanceof Error)
-          throw new AiTransportError(e.message + t(lang, 'ai.retried_note', { n: retried }), false);
+          throw new AiTransportError(
+            e.message + t(lang, 'ai.retried_note', { n: retried }),
+            false,
+            e instanceof AiTransportError ? e.httpStatus : undefined,
+          );
         throw e;
       }
       const msg = e instanceof Error ? e.message : String(e);
@@ -247,7 +255,7 @@ async function requestOnce(
     }
     // 429/5xx 属瞬时（限流、网关抖动），可重试；4xx 是请求本身的问题，重试无意义
     const retryable = res.status === 408 || res.status === 425 || res.status === 429 || res.status >= 500;
-    throw new AiTransportError(`AI API 返回 ${res.status}: ${errBody.slice(0, 300)}`, retryable);
+    throw new AiTransportError(`AI API 返回 ${res.status}: ${errBody.slice(0, 300)}`, retryable, res.status);
   }
 
   if (!streamMode) {
