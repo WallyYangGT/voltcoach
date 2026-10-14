@@ -330,17 +330,22 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
   // finally 的可选 release 是 no-op——不会偷走并发任务的保活引用（code-review P1-2）
   let keepAlive: KeepAliveHandle | null = null;
   // 增量落库节流状态：flushedLen/lastFlushAt 是上次写库的水位，latestPartial 留存
-  // 最新正文供取消时无条件补写（cancel 可能落在两次节流写之间）
+  // 最新正文供取消时无条件补写（cancel 可能落在两次节流写之间）。pendingFlush 把
+  // 节流写串行化（onProgress 的触发频率高于写盘耗时），终态写前先等它落地——防止
+  // 在途的部分正文写晚于完成写落地，把完整 markdown 覆盖回较短的半成品（P2-2）
   let flushedLen = 0;
   let lastFlushAt = 0;
   let latestPartial = '';
-  const flushPartial = async (partial: string) => {
+  let pendingFlush: Promise<void> = Promise.resolve();
+  const flushPartial = (partial: string): Promise<void> => {
     latestPartial = partial;
     const now = Date.now();
-    if (!shouldFlushPartial(partial.length - flushedLen, now - lastFlushAt)) return;
+    if (!shouldFlushPartial(partial.length - flushedLen, now - lastFlushAt)) return Promise.resolve();
     flushedLen = partial.length;
     lastFlushAt = now;
-    await updateAiReport(reportId, { markdown: partial });
+    const text = partial;
+    pendingFlush = pendingFlush.then(() => updateAiReport(reportId, { markdown: text }));
+    return pendingFlush;
   };
   try {
     const config = await requireAiConfig(lang);
@@ -381,6 +386,7 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
         onActivity: (note) => setActivity(reportProgress, reportId, note),
       },
     );
+    await pendingFlush.catch(() => {}); // 在途节流写先落地（code-review P2-2）
     await updateAiReport(reportId, { markdown, status: 'completed', error: null });
     // v2 训练计划载体：plan 报告完成后提取 ```plan-json 结构化计划落库（失败仅告警，
     // 不影响报告完成态——首页卡按「上次生成未产出有效计划」降级提示，可重新生成）
@@ -398,6 +404,7 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     if (e instanceof AiCancelledError || ctrl.signal.reason instanceof AiCancelledError) {
       // 用户取消：保留已生成的部分正文（可能是节流水位之后又多出来的几秒产出），
       // status=cancelled——不命中任何补跑/续跑扫描（都只认 pending），不会复活
+      await pendingFlush.catch(() => {}); // 在途节流写先落地（code-review P2-2）
       await updateAiReport(reportId, {
         ...(latestPartial ? { markdown: latestPartial } : {}),
         status: 'cancelled',
@@ -607,17 +614,20 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
   chatAborts.set(key, ctrl);
   // 保活句柄：口径同 generateReport（fast-fail 不闪通知、finally 只释放自己的句柄）
   let keepAlive: KeepAliveHandle | null = null;
-  // 增量落库节流状态（口径同 generateReport 的 flushPartial）
+  // 增量落库节流状态（口径同 generateReport 的 flushPartial，含串行化防终态覆盖）
   let flushedLen = 0;
   let lastFlushAt = 0;
   let latestPartial = '';
-  const flushPartial = async (partial: string) => {
+  let pendingFlush: Promise<void> = Promise.resolve();
+  const flushPartial = (partial: string): Promise<void> => {
     latestPartial = partial;
     const now = Date.now();
-    if (!shouldFlushPartial(partial.length - flushedLen, now - lastFlushAt)) return;
+    if (!shouldFlushPartial(partial.length - flushedLen, now - lastFlushAt)) return Promise.resolve();
     flushedLen = partial.length;
     lastFlushAt = now;
-    await updateAiChatMessage(messageId, { content: partial });
+    const text = partial;
+    pendingFlush = pendingFlush.then(() => updateAiChatMessage(messageId, { content: text }));
+    return pendingFlush;
   };
   try {
     const config = await requireAiConfig(lang);
@@ -655,11 +665,13 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
         onActivity: (note) => setActivity(chatProgress, key, note),
       },
     );
+    await pendingFlush.catch(() => {}); // 在途节流写先落地（code-review P2-2）
     await updateAiChatMessage(messageId, { content: markdown, status: 'completed', error: null });
     await touchAiChat(chatId);
   } catch (e) {
     if (e instanceof AiCancelledError || ctrl.signal.reason instanceof AiCancelledError) {
       // 用户取消：保留部分正文（口径同 generateReport），cancelled 不命中任何补跑扫描
+      await pendingFlush.catch(() => {}); // 在途节流写先落地（code-review P2-2）
       await updateAiChatMessage(messageId, {
         ...(latestPartial ? { content: latestPartial } : {}),
         status: 'cancelled',

@@ -15,7 +15,9 @@ export function normalizeLang(l: unknown): Lang {
   return l === 'en' ? 'en' : 'zh';
 }
 
-const DICT: Record<Lang, Record<string, string>> = {
+// 导出供测试做 zh/en 集合一致性断言（服务层词典曾因无此测试漏过「key 误放 UI 词典」，
+// code-review 修复批补齐——两层词典各自的 zh/en 对齐都在 L1 钉住）
+export const DICT: Record<Lang, Record<string, string>> = {
   zh: {
     // ---- 训练库（src/db）校验消息 ----
     'athlete.range': '{key} 需在 {lo}–{hi} 之间',
@@ -96,6 +98,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.read_failed': 'AI 响应读取失败：{msg}',
     'ai.network_failed': 'AI 连接失败：{msg}',
     'ai.retried_note': '（已自动重试 {n} 次）',
+    // 生成取消 + 增量落库（2026-10，decisions §23）：服务层拼好、经 GenProgress.activity
+    // 透传给 UI 的动态文案（activity 是预本地化字符串，组件直接渲染不再过 useI18n）
+    'ai.toolRunning': '正在调用 {name}…',
+    'ai.toolDone': '✓ {name} · {chars} 字符',
+    'ai.degraded': '模型不支持工具调用，已改为单轮生成',
+    'ai.stream_truncated': 'AI 流式响应未正常收尾（缺少终止标记），正文可能被网络中间层截断',
     // 前台服务保活（src/ai/keepalive，2026-10-11 推翻「不做保活」决策）：生成期间
     // dataSync FGS 的通知文案（传给原生模块前按语言取好）
     'ai.keepalive_title': 'AI 生成进行中',
@@ -113,6 +121,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'srv.message_too_long': 'message 过长（上限 {n} 字）',
     'srv.chat_id_invalid': 'chat_id 参数无效',
     'srv.chat_not_found': '对话不存在',
+    'srv.report_not_found': '报告不存在',
     'srv.library_empty': '训练库为空',
     'srv.race_date': 'race_date 需为 YYYY-MM-DD',
     'srv.compare_not_found': '对比训练在训练库中找不到',
@@ -271,6 +280,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.read_failed': 'Failed to read the AI response: {msg}',
     'ai.network_failed': 'AI connection failed: {msg}',
     'ai.retried_note': ' (auto-retried {n}x)',
+    'ai.toolRunning': 'Calling {name}…',
+    'ai.toolDone': '✓ {name} · {chars} chars',
+    'ai.degraded': 'Model does not support tool calls — fell back to a single round',
+    'ai.stream_truncated': 'AI stream ended without a proper terminator — the output may have been truncated by a network proxy',
     'ai.keepalive_title': 'AI generation in progress',
     'ai.keepalive_body': 'Generation continues in the background — come back for the result',
     'ai.keepalive_channel': 'AI generation',
@@ -283,6 +296,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'srv.message_too_long': 'message too long (max {n} chars)',
     'srv.chat_id_invalid': 'invalid chat_id',
     'srv.chat_not_found': 'chat not found',
+    'srv.report_not_found': 'report not found',
     'srv.library_empty': 'training library is empty',
     'srv.race_date': 'race_date must be YYYY-MM-DD',
     'srv.compare_not_found': 'comparison workouts not found in the training library',

@@ -75,6 +75,15 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
             {m.status === 'cancelled' && (
               <View style={{ gap: 6 }}>
                 <Text style={styles.cancelledText}>{t('ai.badge.cancelled')}</Text>
+                {/* 重试期间（running）停止按钮同样可达——「疯狂重试能停」不分状态（code-review P1-2） */}
+                {running && !!onCancelMessage && (
+                  <Button compact mode="text" textColor={palette.red} onPress={() => onCancelMessage(m.id)}>
+                    {t('ai.cancelGenerate')}
+                  </Button>
+                )}
+                {!!progress?.activity && (
+                  <Text style={styles.activityNote}>{progress.activity}</Text>
+                )}
                 {!!m.content && <AiMarkdown markdown={m.content} />}
                 <Button
                   compact
@@ -96,6 +105,15 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
               <View style={{ gap: 6 }}>
                 <Text style={styles.failedText}>{t('session.failed')}</Text>
                 {!!m.error && <Text style={styles.failedErr}>{m.error}</Text>}
+                {/* 重试期间（running）停止按钮同样可达（同 cancelled 分支） */}
+                {running && !!onCancelMessage && (
+                  <Button compact mode="text" textColor={palette.red} onPress={() => onCancelMessage(m.id)}>
+                    {t('ai.cancelGenerate')}
+                  </Button>
+                )}
+                {!!progress?.activity && (
+                  <Text style={styles.activityNote}>{progress.activity}</Text>
+                )}
                 <Button
                   compact
                   mode="outlined"

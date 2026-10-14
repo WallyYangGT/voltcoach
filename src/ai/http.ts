@@ -160,12 +160,16 @@ function badBodyError(status: number, text: string, lang: Lang): AiTransportErro
  * 长报告请求可能已经等了数分钟，不重试就等于让用户手动再来一遍。
  * - **重试改用流式**（仅限不带 tools 的请求）：非流式长请求中途一行字节都不流动，
  *   最容易撞上网关/NAT 的空闲超时——真机"等半天后 JSON 解析失败"的现场形态；
- *   流式让字节持续流动，正文边收边攒。带 tools 的请求不切换（tool_calls 的增量帧
- *   与 SSE 组合解析复杂，保持非流式）。
+ *   流式让字节持续流动，正文边收边攒。（2026-10 增量落库起，生成链路的请求本身
+ *   已一律流式且支持 tool_calls 增量帧聚合——见 requestOnce；此处的重试切换仅
+ *   服务于"调用方未流式"的旧形态请求。）
  * - 已吐过字的流式响应不重试（正文已交给调用方，重来会造成重复内容）。
  * - 共用调用方的 signal：总超时预算不重置（首次失败若已耗掉大半预算，重试可能来不及）；
  *   等待期间被 abort 则不再补发。
  * 重试前经 onRetry 告知调用方（UI 进度）。
+ * 流式收尾校验终止标记（[DONE] 或 finish_reason，2026-10）：缺失即视为被中间层
+ * 截断，抛不可重试错误——非流式时代空/破损正文由 parseMessageBody 兜住，流式化后
+ * 同等完整性由该检查保证（防止截断正文静默落成 completed）。
  */
 export async function requestChatCompletion(
   fetchImpl: FetchLike,
@@ -294,6 +298,9 @@ async function requestOnce(
   let rawText = ''; // 原始正文（无 data: 帧时按普通 JSON 响应兜底）
   let sawFrame = false;
   let sawDelta = false; // 是否已收到增量帧（与整段 message 帧互斥，防正文重复）
+  let sawDone = false; // 终止标记：[DONE] 帧或任一帧 finish_reason 非空——流式化后
+  // 「正文写完但连接被中间层静默掐断」（干净 EOF，无 [DONE]/finish_reason）只有靠它
+  // 才能检出，否则截断正文会以 completed 静默落库（非流式时代 badBodyError 的等价防线）
   // tool_calls 增量帧聚合（agent 循环流式化，2026-10）：按 index 分桶，id/name/arguments
   // 均为增量字段按分片拼接（OpenAI 兼容口径；name 通常首帧给全，拼接幂等）
   const toolAcc = new Map<number, { id: string; name: string; args: string }>();
@@ -306,7 +313,11 @@ async function requestOnce(
     if (!s.startsWith('data:')) return;
     const data = s.slice(5).trim();
     sawFrame = true;
-    if (!data || data === '[DONE]') return; // 空 data 帧是部分网关的心跳，非错误
+    if (!data) return; // 空 data 帧是部分网关的心跳，非错误
+    if (data === '[DONE]') {
+      sawDone = true;
+      return;
+    }
     let obj: {
       error?: { message?: string };
       choices?: {
@@ -315,6 +326,7 @@ async function requestOnce(
           tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[];
         };
         message?: ChatMessage;
+        finish_reason?: string;
       }[];
     };
     try {
@@ -325,6 +337,7 @@ async function requestOnce(
     }
     if (obj.error) throw new AiTransportError(obj.error.message || JSON.stringify(obj.error), false);
     const choice = obj.choices?.[0];
+    if (choice?.finish_reason) sawDone = true;
     // 兼容两种形态：增量 delta（标准流式）与整段 message（部分账号不真正流式）。
     // ⚠️ 两种形态互斥：见过增量就不再认整段帧——部分网关会在 delta 流末尾补一帧带
     // message 的收尾帧，若无条件取 message.content，正文会被拼成两遍（静默污染落库正文）。
@@ -344,6 +357,23 @@ async function requestOnce(
         if (tc.function?.arguments) slot.args += tc.function.arguments;
         toolAcc.set(tc.index, slot);
       }
+      return;
+    }
+    // 整段 message 帧携带 tool_calls（无 delta 形态，与正文侧 wholeContent 同款兜底）：
+    // 部分端点收到 stream:true 仍一次性回完整 message——不接住会丢工具调用并误报空响应
+    const wholeTools = !sawDelta ? choice?.message?.tool_calls : undefined;
+    if (wholeTools?.length) {
+      sawDelta = true;
+      // 整段帧的 tool_calls 是完整有序数组（无增量 index 语义），按下标分桶
+      wholeTools.forEach((tc, i) =>
+        toolAcc.set(i, {
+          id: tc.id ?? '',
+          name: tc.function?.name ?? '',
+          args: tc.function?.arguments ?? '',
+        }),
+      );
+      const wholeContent = choice?.message?.content;
+      if (wholeContent) emit(wholeContent);
       return;
     }
     const wholeContent = choice?.message?.content;
@@ -397,6 +427,10 @@ async function requestOnce(
     return onStreamChunk ? content : msg;
   }
   if (toolAcc.size > 0) {
+    // 有产出但无终止标记：正文/工具调用可能被中间层静默掐断（干净 EOF）。
+    // retryable=false——已产出的内容不可重发（口径同"已吐字的流不重试"），宁可失败让
+    // 编排层落 failed/cancelled（部分正文已在行内），也不把截断结果当 completed 静默落库
+    if (!sawDone) throw new AiTransportError(t(lang, 'ai.stream_truncated'), false);
     // 流式带工具：按 message 对象返回（与调用方传 stream:false 的预期一致），正文可空
     const tool_calls: ToolCall[] = [...toolAcc.entries()]
       .sort((a, b) => a[0] - b[0])
@@ -404,6 +438,7 @@ async function requestOnce(
     return { role: 'assistant', content: fullText || null, tool_calls };
   }
   if (!fullText) throw new AiTransportError(t(lang, 'ai.empty'), true);
+  if (!sawDone) throw new AiTransportError(t(lang, 'ai.stream_truncated'), false);
   // 调用方未要求增量（本次是降级重试）：按 message 对象返回，与它传 stream:false 的预期一致
   return onStreamChunk ? fullText : { role: 'assistant', content: fullText };
 }

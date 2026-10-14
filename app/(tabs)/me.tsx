@@ -462,6 +462,9 @@ export default function MeScreen() {
             <Text style={styles.switchLabel}>{t('set.ai.stream')}</Text>
             <Switch value={aiStream} onValueChange={setAiStream} color={palette.volt} />
           </View>
+          {/* 2026-10 增量落库起生成链路一律流式（decisions §23），此开关仅作存储保留——
+              需要给用户一句说明防「关了怎么还在流式」的困惑（code-review P3-3） */}
+          <Text style={styles.helperText}>{t('set.ai.stream.vestigial')}</Text>
           <View style={styles.switchRow}>
             <Text style={styles.switchLabel}>{t('set.ai.agentic')}</Text>
             <Switch value={aiAgentic} onValueChange={setAiAgentic} color={palette.volt} />
@@ -576,6 +579,7 @@ const styles = StyleSheet.create({
   saveRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   saved: { color: palette.green, fontSize: 12 },
   note: { color: palette.faint, fontSize: 11, lineHeight: 16 },
+  helperText: { color: palette.faint, fontSize: 11, lineHeight: 16, marginTop: -2 },
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 4 },
   switchLabel: { color: palette.text, fontSize: 13, flex: 1 },
 });

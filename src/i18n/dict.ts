@@ -324,14 +324,13 @@ export const DICT = {
     'ai.retryNote': '响应被中断，正在自动重试（第 {n} 次尝试）',
     'ai.elapsed': '已等待 {t}',
     // ---- 2026-10：生成取消 + 增量落库实时预览（架构评审 P2） ----
+    // 注意：toolRunning/toolDone/degraded/stream_truncated 是服务层（core/i18n）文案，
+    // 经 GenProgress.activity 预本地化透传，不在此词典（code-review 修正）
     'ai.cancelGenerate': '取消生成',
     'ai.cancelConfirmTitle': '取消本次生成？',
     'ai.cancelConfirmBody': '将停止生成，已生成的部分会保留，可稍后重试；已消耗的 token 不退还。',
     'ai.badge.cancelled': '已取消',
     'ai.cancelledNote': '生成已取消，以下为已生成的部分：',
-    'ai.toolRunning': '正在调用 {name}…',
-    'ai.toolDone': '✓ {name} · {chars} 字符',
-    'ai.degraded': '模型不支持工具调用，已改为单轮生成',
     // ---- M3：AI 记忆页 ----
     'mem.title': 'AI 记忆',
     'mem.sub': 'AI 在交互中主动记录的用户个人事实（目标/伤病/日程/偏好等），会在后续报告与对话中生效。',
@@ -589,6 +588,7 @@ export const DICT = {
     'set.ai.timeout': '总超时（毫秒）',
     'set.ai.stall': '流式空闲超时（毫秒）',
     'set.ai.stream': '启用流式输出',
+    'set.ai.stream.vestigial': '生成链路自 0.2.7 起一律流式（增量落库与取消的前置），此开关仅保留兼容不再生效。',
     'set.ai.agentic': 'AI 工具调用（可查询训练库与做推演）',
     'set.ai.note': '说明：密钥保存在系统安全存储（Android Keystore），不会上传到其他任何地方；其余配置保存在本地训练库。模型名以你的账号可用列表为准。服务商预设只做快速填充，各项均可手动修改。',
     'set.save': '保存',
@@ -956,6 +956,7 @@ export const DICT = {
     'set.ai.timeout': 'Total timeout (ms)',
     'set.ai.stall': 'Stream idle timeout (ms)',
     'set.ai.stream': 'Enable streaming',
+    'set.ai.stream.vestigial': 'Generation always streams since 0.2.7 (required by incremental persistence and cancel) — this switch is kept for compatibility but no longer takes effect.',
     'set.ai.agentic': 'AI tool calls (query library & run simulations)',
     'set.ai.note': 'Note: the key is stored in the system secure storage (Android Keystore) and never leaves this device; other settings live in the local training library. Use a model name available to your account. Provider presets only pre-fill the fields; everything stays editable.',
     'set.save': 'Save',
@@ -1047,9 +1048,6 @@ export const DICT = {
     'ai.cancelConfirmBody': 'Generation stops and the partial output is kept for later retry. Tokens already spent are not refunded.',
     'ai.badge.cancelled': 'Cancelled',
     'ai.cancelledNote': 'Generation cancelled — partial output kept below:',
-    'ai.toolRunning': 'Calling {name}…',
-    'ai.toolDone': '✓ {name} · {chars} chars',
-    'ai.degraded': 'Model does not support tool calls — fell back to a single round',
     'mem.title': 'AI Memory',
     'mem.sub': 'Personal facts the AI records proactively during chats and reports (goals / injuries / schedule / preferences) — they take effect in later sessions.',
     'mem.cat.general': 'General',

@@ -256,7 +256,7 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
             elapsedSec={ai.elapsedSec}
             generating={ai.generating}
             onRetry={ai.retry}
-            onCancel={report.status === 'pending' ? cancelReport : undefined}
+            onCancel={cancelReport}
           />
           {report.status === 'completed' && (
             <View style={styles.followUp}>

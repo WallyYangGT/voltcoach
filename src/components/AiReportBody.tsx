@@ -41,13 +41,22 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
   const { t } = useI18n();
   if (!report) return null;
 
+  // 取消按钮的可达口径（code-review P1-2）：任务在跑（generating 含手动重试/残留
+  // 补跑——重试期间库状态仍是 failed/cancelled）就必须能停，这正是本功能要解决的
+  // 「疯狂重试停不下来」痛点；不可取消的窗口只有任务已结束后的静止态。
+  const confirmCancel = () => {
+    Alert.alert(t('ai.cancelConfirmTitle'), t('ai.cancelConfirmBody'), [
+      { text: t('common.cancel'), style: 'cancel' },
+      { text: t('ai.cancelGenerate'), style: 'destructive', onPress: onCancel },
+    ]);
+  };
+  const cancelButton = generating && !!onCancel && (
+    <Button compact mode="text" textColor={palette.red} onPress={confirmCancel}>
+      {t('ai.cancelGenerate')}
+    </Button>
+  );
+
   if (report.status === 'pending') {
-    const confirmCancel = () => {
-      Alert.alert(t('ai.cancelConfirmTitle'), t('ai.cancelConfirmBody'), [
-        { text: t('common.cancel'), style: 'cancel' },
-        { text: t('ai.cancelGenerate'), style: 'destructive', onPress: onCancel },
-      ]);
-    };
     return (
       <View style={styles.block}>
         <Text style={styles.pending}>{t('ai.panel.pending_hint')}</Text>
@@ -64,11 +73,7 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
         )}
         {/* 增量落库的部分正文实时预览（节流 2s/200 字回写，轮询 1.5s 拉到） */}
         {!!report.markdown && <AiMarkdown markdown={report.markdown} />}
-        {!!onCancel && (
-          <Button compact mode="text" textColor={palette.red} onPress={confirmCancel}>
-            {t('ai.cancelGenerate')}
-          </Button>
-        )}
+        {cancelButton}
       </View>
     );
   }
@@ -88,6 +93,14 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
             {generating ? t('ai.retrying') : t('session.retry')}
           </Button>
         </View>
+        {/* 重试期间库状态仍是 cancelled：活动/重试进度与取消按钮同样要可见（同 failed） */}
+        {!!progress?.activity && <Text style={styles.activity}>{progress.activity}</Text>}
+        {!!progress?.note && (
+          <Text style={styles.hint}>
+            {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
+          </Text>
+        )}
+        {cancelButton}
         {!!report.markdown && <AiMarkdown markdown={report.markdown} />}
       </View>
     );
@@ -109,11 +122,13 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
           </Button>
         </View>
         {/* 重试期间库状态仍是 failed：自动重试进度必须在这里也可见（用户此刻最需要知道"在补发"） */}
+        {!!progress?.activity && <Text style={styles.activity}>{progress.activity}</Text>}
         {!!progress?.note && (
           <Text style={styles.hint}>
             {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
           </Text>
         )}
+        {cancelButton}
       </View>
     );
   }

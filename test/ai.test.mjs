@@ -738,3 +738,98 @@ test('runAgentLoop: 非增量调用保持全非流式（记忆回顾轮等内部
   assert.equal(f.seen[0].body.stream, false);
   assert.equal(f.seen[1].body.stream, false);
 });
+
+// ---------------- code-review 修复批回归：截断检出 / 整段帧带工具 / 无 reason 取消 / 单轮流式降级 ----------------
+
+test('requestChatCompletion: 流式有正文但无终止标记（干净 EOF 截断）判失败不重试', async () => {
+  // code-review P1-1：推两帧后干净关流（无 [DONE]/finish_reason）——若静默返回，
+  // 截断正文会以 completed 落库；必须抛不可重试错误（已吐字口径）
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: '报告前半段，' } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: '写到一半' } }] }) + '\n\n',
+  ]);
+  await assert.rejects(
+    requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, { onStreamChunk: () => {} }),
+    (e) => {
+      assert.ok(e instanceof AiTransportError);
+      assert.match(e.message, /未正常收尾/);
+      assert.equal(e.retryable, false); // 已吐字不重发
+      return true;
+    },
+  );
+  assert.equal(f.seen.length, 1);
+});
+
+test('requestChatCompletion: finish_reason 非空即视为正常收尾（不发 [DONE] 的端点兼容）', async () => {
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: '正文' }, finish_reason: 'stop' }] }) + '\n\n',
+  ]);
+  const text = await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, { onStreamChunk: () => {} });
+  assert.equal(text, '正文');
+});
+
+test('requestChatCompletion: 整段 message 帧携带 tool_calls（无 delta 形态）照常聚合', async () => {
+  // code-review P2-4：部分端点收 stream:true 仍一次性回完整 message——工具侧须与
+  // 正文侧 wholeContent 同款兜底，否则丢工具调用并误报空响应
+  const f = sseFetch([
+    'data: ' + JSON.stringify({
+      choices: [{
+        message: {
+          content: '先看下数据',
+          tool_calls: [{ id: 'c1', index: 0, type: 'function', function: { name: 'x', arguments: '{"a":1}' } }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const res = await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, { onStreamChunk: () => {} });
+  assert.equal(res.content, '先看下数据');
+  assert.equal(res.tool_calls.length, 1);
+  assert.equal(res.tool_calls[0].function.name, 'x');
+});
+
+test('callAI: 外部 abort 无 reason（RN polyfill 退化形）仍判取消而非超时', async () => {
+  // code-review P2-3：本批最贵教训的回归钉——若实现退回"用 signal.reason 判身份"，
+  // 无 reason 的 abort 会落进 /aborted|timeout/ 误报总超时，此用例即红
+  const external = new AbortController();
+  const p = callAI(hangFetch(), CFG, '提示词', { timeoutMs: 30000, signal: external.signal });
+  await sleep(20);
+  external.abort(); // 故意不带 reason
+  await assert.rejects(p, (e) => e instanceof AiCancelledError);
+});
+
+test('runAgentLoop: 外部 abort 无 reason 同样判取消（非增量路径）', async () => {
+  const external = new AbortController();
+  const p = runAgentLoop(hangFetch(), CFG, [{ role: 'user', content: '问' }], [], async () => '{}', {
+    timeoutMs: 30000,
+    signal: external.signal,
+  });
+  await sleep(20);
+  external.abort();
+  await assert.rejects(p, (e) => e instanceof AiCancelledError);
+});
+
+test('callAI: forceStream 打开的流式被 400 拒 → 降非流式重试一次（code-review P2-1）', async () => {
+  // 非 agentic 单轮路径没有 agent 循环的降级梯子：端点不支持 stream 时此前一次即败
+  const seen = [];
+  const f = jsonFetch((body, idx) => {
+    seen.push(body);
+    if (idx === 0) return { status: 400, body: 'stream unsupported' };
+    return msg('非流式兜底成功');
+  });
+  const text = await callAI(f, { ...CFG, stream: false }, '提示词', { timeoutMs: 5000, forceStream: true });
+  assert.equal(text, '非流式兜底成功');
+  assert.equal(f.seen.length, 2);
+  assert.equal(seen[0].stream, true);
+  assert.equal(seen[1].stream, false);
+});
+
+test('callAI: 用户显式开启 stream 失败时不静默降级（尊重显式配置）', async () => {
+  const f = jsonFetch(() => ({ status: 400, body: 'nope' }));
+  await assert.rejects(
+    callAI(f, { ...CFG, stream: true }, '提示词', { timeoutMs: 5000 }),
+    /AI API 返回 400/,
+  );
+  assert.equal(f.seen.length, 1);
+});

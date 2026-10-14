@@ -162,4 +162,31 @@ describe('ChatBubbles', () => {
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onRetry).toHaveBeenCalledWith(9);
   });
+
+  it('failed 气泡重试中（running）停止按钮可达（code-review P1-2 同款覆盖）', async () => {
+    (isChatGenerating as jest.Mock).mockImplementation((_chatId: number, mid: number) => mid === 7);
+    const onCancelMessage = jest.fn();
+    const { getByText } = await renderWithProviders(
+      <ChatBubbles
+        chatId={CHAT_ID}
+        messages={[msg({ id: 7, role: 'assistant', status: 'failed', error: '超时' })]}
+        onRetry={() => {}}
+        onCancelMessage={onCancelMessage}
+      />,
+    );
+    fireEvent.press(getByText('取消生成'));
+    expect(onCancelMessage).toHaveBeenCalledWith(7);
+  });
+
+  it('failed 气泡静止（不在跑）不出停止按钮', async () => {
+    const { queryByText } = await renderWithProviders(
+      <ChatBubbles
+        chatId={CHAT_ID}
+        messages={[msg({ id: 8, role: 'assistant', status: 'failed', error: '空响应' })]}
+        onRetry={() => {}}
+        onCancelMessage={() => {}}
+      />,
+    );
+    expect(queryByText('取消生成')).toBeNull();
+  });
 });
