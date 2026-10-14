@@ -181,4 +181,38 @@ describe('AiReportBody', () => {
     fireEvent.press(getByText('重试'));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+
+  // ---------------- code-review P1-2：重试期间取消按钮可达 ----------------
+
+  it('failed 态重试中（generating）显示取消按钮，回调 onCancel（「疯狂重试能停」）', async () => {
+    const onCancel = jest.fn();
+    const { getByText } = await renderWithProviders(
+      <AiReportBody
+        report={reportOf({ status: 'failed', error: '旧失败' })}
+        progress={null}
+        elapsedSec={null}
+        generating
+        onRetry={() => {}}
+        onCancel={onCancel}
+      />,
+    );
+    fireEvent.press(getByText('取消生成'));
+    const buttons = (Alert.alert as jest.Mock).mock.calls.at(-1)[2] as { text: string; onPress?: () => void }[];
+    buttons.find((b) => b.text === '取消生成')?.onPress?.();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('failed 态静止（generating=false）不出取消按钮（无可停任务）', async () => {
+    const { queryByText } = await renderWithProviders(
+      <AiReportBody
+        report={reportOf({ status: 'failed', error: '旧失败' })}
+        progress={null}
+        elapsedSec={null}
+        generating={false}
+        onRetry={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(queryByText('取消生成')).toBeNull();
+  });
 });

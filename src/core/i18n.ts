@@ -96,6 +96,12 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.read_failed': 'AI 响应读取失败：{msg}',
     'ai.network_failed': 'AI 连接失败：{msg}',
     'ai.retried_note': '（已自动重试 {n} 次）',
+    // 生成取消 + 增量落库（2026-10，decisions §23）：服务层拼好、经 GenProgress.activity
+    // 透传给 UI 的动态文案（activity 是预本地化字符串，组件直接渲染不再过 useI18n）
+    'ai.toolRunning': '正在调用 {name}…',
+    'ai.toolDone': '✓ {name} · {chars} 字符',
+    'ai.degraded': '模型不支持工具调用，已改为单轮生成',
+    'ai.stream_truncated': 'AI 流式响应未正常收尾（缺少终止标记），正文可能被网络中间层截断',
     // 前台服务保活（src/ai/keepalive，2026-10-11 推翻「不做保活」决策）：生成期间
     // dataSync FGS 的通知文案（传给原生模块前按语言取好）
     'ai.keepalive_title': 'AI 生成进行中',
@@ -271,6 +277,10 @@ const DICT: Record<Lang, Record<string, string>> = {
     'ai.read_failed': 'Failed to read the AI response: {msg}',
     'ai.network_failed': 'AI connection failed: {msg}',
     'ai.retried_note': ' (auto-retried {n}x)',
+    'ai.toolRunning': 'Calling {name}…',
+    'ai.toolDone': '✓ {name} · {chars} chars',
+    'ai.degraded': 'Model does not support tool calls — fell back to a single round',
+    'ai.stream_truncated': 'AI stream ended without a proper terminator — the output may have been truncated by a network proxy',
     'ai.keepalive_title': 'AI generation in progress',
     'ai.keepalive_body': 'Generation continues in the background — come back for the result',
     'ai.keepalive_channel': 'AI generation',
