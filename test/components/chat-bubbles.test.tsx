@@ -111,4 +111,55 @@ describe('ChatBubbles', () => {
     fireEvent.press(buttons[1]);
     expect(onRetry).toHaveBeenCalledWith(8);
   });
+
+  // ---------------- 2026-10：增量落库实时预览 + 停止按钮 + cancelled 气泡 ----------------
+
+  it('pending 气泡：显示工具动态行与部分正文预览，停止按钮回调该条 messageId', async () => {
+    (getChatProgress as jest.Mock).mockReturnValue({
+      attempt: 0,
+      note: '',
+      activity: '正在调用 get_form_series…',
+    });
+    const onCancelMessage = jest.fn();
+    const { getByText } = await renderWithProviders(
+      <ChatBubbles
+        chatId={CHAT_ID}
+        messages={[msg({ id: 3, role: 'assistant', status: 'pending', content: '已生成的开头…' })]}
+        onRetry={() => {}}
+        onCancelMessage={onCancelMessage}
+      />,
+    );
+    expect(getByText('正在调用 get_form_series…')).toBeTruthy();
+    expect(getByText('已生成的开头…')).toBeTruthy();
+    fireEvent.press(getByText('取消生成'));
+    expect(onCancelMessage).toHaveBeenCalledTimes(1);
+    expect(onCancelMessage).toHaveBeenCalledWith(3);
+  });
+
+  it('pending 气泡：onCancelMessage 缺省时不显示停止按钮', async () => {
+    const { queryByText } = await renderWithProviders(
+      <ChatBubbles
+        chatId={CHAT_ID}
+        messages={[msg({ id: 3, role: 'assistant', status: 'pending' })]}
+        onRetry={() => {}}
+      />,
+    );
+    expect(queryByText('取消生成')).toBeNull();
+  });
+
+  it('cancelled 气泡：已取消标签 + 部分正文 + 重试回调该条 messageId', async () => {
+    const onRetry = jest.fn();
+    const { getByText } = await renderWithProviders(
+      <ChatBubbles
+        chatId={CHAT_ID}
+        messages={[msg({ id: 9, role: 'assistant', status: 'cancelled', content: '被取消前写的一半。' })]}
+        onRetry={onRetry}
+      />,
+    );
+    expect(getByText('已取消')).toBeTruthy();
+    expect(getByText('被取消前写的一半。')).toBeTruthy();
+    fireEvent.press(getByText('重试'));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onRetry).toHaveBeenCalledWith(9);
+  });
 });

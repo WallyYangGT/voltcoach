@@ -246,6 +246,7 @@ export default function AiCenterScreen() {
                 </View>
                 {entry.status === 'pending' && <Text style={styles.pending}>{t('ai.badge.pending')}</Text>}
                 {entry.status === 'failed' && <Text style={styles.failed}>{t('ai.badge.failed')}</Text>}
+                {entry.status === 'cancelled' && <Text style={styles.pending}>{t('ai.badge.cancelled')}</Text>}
                 <Text style={styles.time}>{entry.time}</Text>
               </View>
               <Text style={styles.cardTitle} numberOfLines={1}>

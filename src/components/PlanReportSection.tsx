@@ -35,6 +35,8 @@ export function PlanReportSection({ report, onViewReport }: Props) {
         <Text style={styles.note}>{t('session.generating')}</Text>
       ) : report.status === 'failed' ? (
         <Text style={[styles.note, { color: palette.red }]}>{t('session.failed')}</Text>
+      ) : report.status === 'cancelled' ? (
+        <Text style={styles.note}>{t('ai.badge.cancelled')}</Text>
       ) : null}
     </View>
   );

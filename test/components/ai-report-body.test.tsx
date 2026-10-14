@@ -6,11 +6,19 @@
  * completed 态渲染 Markdown、report 为 null 不渲染。
  */
 import React from 'react';
+import { Alert } from 'react-native';
 import { fireEvent } from '@testing-library/react-native';
 import { AiReportBody } from '@/components/AiReportBody';
 import type { AiReportRow } from '@/db';
 import type { GenProgress } from '@/services/aiGenerate';
 import { renderWithProviders } from './helpers/render';
+
+// 取消确认框（Alert.alert）mock：断言弹窗文案并手动触发破坏性按钮的 onPress
+jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+
+beforeEach(() => {
+  (Alert.alert as jest.Mock).mockClear();
+});
 
 function reportOf(partial: Partial<AiReportRow>): AiReportRow {
   return {
@@ -98,5 +106,79 @@ describe('AiReportBody', () => {
       />,
     );
     expect(getByText('训练负荷结构合理。')).toBeTruthy();
+  });
+
+  // ---------------- 2026-10：增量落库实时预览 + 取消 + cancelled 态 ----------------
+
+  it('pending 态：显示工具调用动态行与已生成部分正文（增量落库预览）', async () => {
+    const progress: GenProgress = { attempt: 0, note: '', activity: '✓ get_activity_summary · 2048 字符' };
+    const { getByText } = await renderWithProviders(
+      <AiReportBody
+        report={reportOf({ status: 'pending', markdown: '已生成的开头部分。' })}
+        progress={progress}
+        elapsedSec={12}
+        generating
+        onRetry={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(getByText('✓ get_activity_summary · 2048 字符')).toBeTruthy();
+    expect(getByText('已生成的开头部分。')).toBeTruthy();
+  });
+
+  it('pending 态：onCancel 缺省时不显示取消按钮', async () => {
+    const { queryByText } = await renderWithProviders(
+      <AiReportBody
+        report={reportOf({ status: 'pending' })}
+        progress={null}
+        elapsedSec={null}
+        generating
+        onRetry={() => {}}
+      />,
+    );
+    expect(queryByText('取消生成')).toBeNull();
+  });
+
+  it('pending 态：取消按钮先弹二次确认，确认后才回调 onCancel（token 防误触）', async () => {
+    const onCancel = jest.fn();
+    const { getByText } = await renderWithProviders(
+      <AiReportBody
+        report={reportOf({ status: 'pending' })}
+        progress={null}
+        elapsedSec={null}
+        generating
+        onRetry={() => {}}
+        onCancel={onCancel}
+      />,
+    );
+    fireEvent.press(getByText('取消生成'));
+    expect(onCancel).not.toHaveBeenCalled(); // 确认框阶段不触发
+    expect(Alert.alert).toHaveBeenCalledWith(
+      '取消本次生成？',
+      '将停止生成，已生成的部分会保留，可稍后重试；已消耗的 token 不退还。',
+      expect.any(Array),
+    );
+    // 模拟用户点确认框的破坏性按钮（第三枚：destructive）
+    const buttons = (Alert.alert as jest.Mock).mock.calls.at(-1)[2] as { text: string; onPress?: () => void }[];
+    buttons.find((b) => b.text === '取消生成')?.onPress?.();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancelled 态：已取消横幅 + 部分正文保留 + 重试回调 onRetry（原行重跑）', async () => {
+    const onRetry = jest.fn();
+    const { getByText } = await renderWithProviders(
+      <AiReportBody
+        report={reportOf({ status: 'cancelled', markdown: '# 已生成的部分\n\n前半段分析。' })}
+        progress={null}
+        elapsedSec={null}
+        generating={false}
+        onRetry={onRetry}
+      />,
+    );
+    expect(getByText('已取消')).toBeTruthy();
+    expect(getByText('生成已取消，以下为已生成的部分：')).toBeTruthy();
+    expect(getByText('前半段分析。')).toBeTruthy();
+    fireEvent.press(getByText('重试'));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

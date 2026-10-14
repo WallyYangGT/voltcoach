@@ -28,7 +28,7 @@ import {
   type AiReportRow,
   type StoredPlan,
 } from '@/db';
-import { isChatGenerating, runChatGeneration, submitChatMessage, createReportDraft, generateReport } from '@/services/aiGenerate';
+import { cancelChatGeneration, isChatGenerating, runChatGeneration, submitChatMessage, createReportDraft, generateReport } from '@/services/aiGenerate';
 import { localDay } from '@/core/local-day';
 import { formatDuration } from '@/core/metrics';
 import type { SimRiskFlag } from '@/planning/planning';
@@ -215,6 +215,18 @@ export default function PlanScreen() {
       );
     },
     [chatId, lang],
+  );
+
+  // 取消消息生成（2026-10）：直接停止不弹框（口径同会话页气泡）；状态由任务回写，
+  // 页面既有的 pending 轮询会自然把气泡带到 cancelled 态
+  const cancelMessage = useCallback(
+    (messageId: number) => {
+      if (chatId == null) return;
+      void cancelChatGeneration(chatId, messageId).catch((e) =>
+        console.warn('计划会话取消失败:', e),
+      );
+    },
+    [chatId],
   );
 
   // 重设追问（AP4）：计划会话是全局单线程，多周追问历史每轮全量进 prompt——
@@ -544,7 +556,14 @@ export default function PlanScreen() {
               <ResetFollowUpButton scope="plan" disabled={chatBusy} onReset={resetPlanChat} />
             )}
           </View>
-          {chatId != null && <ChatBubbles chatId={chatId} messages={messages} onRetry={retry} />}
+          {chatId != null && (
+            <ChatBubbles
+              chatId={chatId}
+              messages={messages}
+              onRetry={retry}
+              onCancelMessage={cancelMessage}
+            />
+          )}
         </View>
       </ScrollView>
 

@@ -1,8 +1,10 @@
 /**
  * ChatBubbles — 追问/对话消息气泡流（会话详情页与训练详情页共用）。
  *
- * 三态口径同 M3：pending 显示"生成中…"（有传输级自动重试时附重试进度）、failed
- * 显示错误 + 重试、completed 渲染 Markdown。user 消息右对齐、AI 左对齐。
+ * 状态口径：pending 显示"生成中…"（有传输级自动重试时附重试进度、有工具调用时附
+ * 动态行，2026-10 增量落库后附部分正文实时预览与停止按钮——直接停止不弹框，对话
+ * 单次消耗小）；cancelled 显示"已取消" + 部分正文 + 重试；failed 显示错误 + 重试；
+ * completed 渲染 Markdown。user 消息右对齐、AI 左对齐。
  * M5：重试按消息逐条生效（此前固定重跑第一条失败消息，点第 3 条实际重试第 1 条）；
  * 该消息在跑时重试按钮禁用（此前无 disabled，「实际在重试还能点」即此）。
  */
@@ -18,21 +20,24 @@ import { AiMarkdown } from './AiMarkdown';
 interface Props {
   chatId: number;
   messages: AiChatMessageRow[];
-  /** 失败气泡上的重试：以该条消息重跑生成 */
+  /** 失败/取消气泡上的重试：以该条消息重跑生成 */
   onRetry: (messageId: number) => void;
+  /** 停止该条消息的生成（2026-10，仅 pending 气泡显示；缺省不显示按钮） */
+  onCancelMessage?: (messageId: number) => void;
 }
 
-export function ChatBubbles({ chatId, messages, onRetry }: Props) {
+export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Props) {
   const { t } = useI18n();
   return (
     <View style={styles.list}>
       {messages.map((m) => {
-        // pending（生成中）与 failed（重试中）都可能带传输级自动重试进度；
-        // 在跑判定看进程内注册表（手动重试/残留补跑时库状态仍是 failed）
+        // pending（生成中）与 failed/cancelled（重试中）都可能带传输级自动重试进度；
+        // 在跑判定看进程内注册表（手动重试/残留补跑时库状态仍是 failed/cancelled）
         const running = m.status !== 'completed' && isChatGenerating(chatId, m.id);
-        const progress = m.status === 'pending' || m.status === 'failed'
-          ? getChatProgress(chatId, m.id)
-          : null;
+        const progress =
+          m.status === 'pending' || m.status === 'failed' || m.status === 'cancelled'
+            ? getChatProgress(chatId, m.id)
+            : null;
         return (
           <View
             key={m.id}
@@ -40,7 +45,47 @@ export function ChatBubbles({ chatId, messages, onRetry }: Props) {
             {m.status === 'pending' && (
               <View style={{ gap: 4 }}>
                 <Text style={styles.pendingNote}>{t('session.generating')}</Text>
-                {!!progress && (
+                {!!progress?.activity && (
+                  <Text style={styles.activityNote}>{progress.activity}</Text>
+                )}
+                {!!progress?.note && (
+                  <Text style={styles.progressNote}>
+                    {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
+                  </Text>
+                )}
+                {/* 增量落库的部分正文实时预览（口径同 AiReportBody 的 pending 预览） */}
+                {!!m.content &&
+                  (m.role === 'user' ? (
+                    <Text style={styles.bubbleUserText}>{m.content}</Text>
+                  ) : (
+                    <AiMarkdown markdown={m.content} />
+                  ))}
+                {/* 停止按钮只给 AI 气泡（user 消息不存在生成态）；直接停止不弹确认框 */}
+                {!!onCancelMessage && m.role === 'assistant' && (
+                  <Button
+                    compact
+                    mode="text"
+                    textColor={palette.red}
+                    onPress={() => onCancelMessage(m.id)}>
+                    {t('ai.cancelGenerate')}
+                  </Button>
+                )}
+              </View>
+            )}
+            {m.status === 'cancelled' && (
+              <View style={{ gap: 6 }}>
+                <Text style={styles.cancelledText}>{t('ai.badge.cancelled')}</Text>
+                {!!m.content && <AiMarkdown markdown={m.content} />}
+                <Button
+                  compact
+                  mode="outlined"
+                  textColor={palette.volt}
+                  disabled={running}
+                  onPress={() => onRetry(m.id)}>
+                  {running || progress ? t('ai.retrying') : t('session.retry')}
+                </Button>
+                {/* 重试期间库状态仍是 cancelled：自动重试进度要在这里也可见（同 AiReportBody） */}
+                {!!progress?.note && (
                   <Text style={styles.progressNote}>
                     {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
                   </Text>
@@ -60,7 +105,7 @@ export function ChatBubbles({ chatId, messages, onRetry }: Props) {
                   {running || progress ? t('ai.retrying') : t('session.retry')}
                 </Button>
                 {/* 重试期间库状态仍是 failed：自动重试进度要在这里也可见（同 AiReportBody） */}
-                {!!progress && (
+                {!!progress?.note && (
                   <Text style={styles.progressNote}>
                     {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
                   </Text>
@@ -88,7 +133,9 @@ const styles = StyleSheet.create({
   bubbleAi: { alignSelf: 'flex-start', backgroundColor: palette.panel, borderWidth: 1, borderColor: palette.lineSoft },
   bubbleUserText: { color: palette.text, fontSize: 13, lineHeight: 20 },
   pendingNote: { color: palette.orange, fontSize: 12 },
+  activityNote: { color: palette.orange, fontSize: 11, lineHeight: 16 },
   progressNote: { color: palette.faint, fontSize: 11, lineHeight: 16 },
   failedText: { color: palette.red, fontSize: 13, fontWeight: '700' },
   failedErr: { color: palette.muted, fontSize: 12 },
+  cancelledText: { color: palette.orange, fontSize: 13, fontWeight: '700' },
 });
