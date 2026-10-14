@@ -563,3 +563,6 @@ const styles = StyleSheet.create({
   switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4, paddingHorizontal: 4 },
   switchLabel: { color: palette.text, fontSize: 13, flex: 1 },
 });
+
+// 路由级错误边界（架构评审 T2）：本屏渲染异常在此兜底，不再冒泡到根边界丢失导航位置
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';

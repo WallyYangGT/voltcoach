@@ -361,3 +361,6 @@ const styles = StyleSheet.create({
   metricVal: { color: palette.text, fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
   metricLabel: { color: palette.faint, fontSize: 11 },
 });
+
+// 路由级错误边界（架构评审 T2）：本屏渲染异常在此兜底，不再冒泡到根边界丢失导航位置
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';

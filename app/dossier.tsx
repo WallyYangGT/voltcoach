@@ -236,3 +236,6 @@ const styles = StyleSheet.create({
   rowLabel: { color: palette.muted, fontSize: 12.5, flex: 1 },
   rowValue: { color: palette.text, fontSize: 12.5, fontWeight: '600', fontVariant: ['tabular-nums'] },
 });
+
+// 路由级错误边界（架构评审 T2）：本屏渲染异常在此兜底，不再冒泡到根边界丢失导航位置
+export { ErrorScreen as ErrorBoundary } from '@/components/ErrorScreen';
