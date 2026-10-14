@@ -1,11 +1,11 @@
 /**
- * 首页仪表盘（M2）：本周训练计划卡（首屏最顶——今天该练什么第一眼可见）+
- * CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练；
- * 右下角对话快捷 FAB（直达 /ai/session/chat-new）。
+ * 首页仪表盘（M2）：「和教练讨论一下」输入卡片（首屏最顶——AI 体验整合批 AP1，
+ * 替代原右下角对话 FAB）+ 本周训练计划卡 + 负荷仪表盘标题组 +
+ * CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练。
  * 移植自 Web 版 views/dashboard.js：hero 瓦片/趋势/月度/最近训练同在首页（Web 版即此
- * 信息架构），App 侧空库引导语按移动端信息架构改指「训练」tab。数据一次并行取齐：
+ * 信息架构），App 侧空库引导语按移动端信息架构改指「记录」tab。数据一次并行取齐：
  * recentFormDaily(90)（趋势图与 hero 大数字同源，序列末端已延伸到今天）/ monthlySummary(6) /
- * listActivities(6) / getAiConfig（训练计划卡与对话 FAB 共用的「已配置 Key」门）；
+ * listActivities(6) / getAiConfig（对话卡片与训练计划卡共用的「已配置 Key」门）；
  * FTP 科学估算面板见 FtpEstimatePanel（dash.ftp_btn 入口）。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -18,7 +18,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { FAB } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { TrendChart, type TrendPoint } from '@/charts/TrendChart';
@@ -34,6 +33,7 @@ import {
   monthlySummary,
   recentFormDaily,
 } from '@/db';
+import { ChatInviteCard } from '@/components/ChatInviteCard';
 import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
 import { WeeklyPlanCard } from '@/components/WeeklyPlanCard';
@@ -101,6 +101,16 @@ export default function HomeScreen() {
           }}
         />
       }>
+      {/* 「和教练讨论一下」输入卡片（AP1 首屏最顶；未配置 Key 整卡隐藏，
+          与计划卡/FAB 同口径）——点击直达新对话页并自动聚焦输入框 */}
+      {configured === true && (
+        <ChatInviteCard onPress={() => router.push('/ai/session/chat-new')} />
+      )}
+
+      {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏）。
+          顶卡之下第二位：今天该练什么第一眼可见 */}
+      <WeeklyPlanCard />
+
       <View style={styles.titleRow}>
         <Text style={styles.title}>{t('dash.title')}</Text>
         <Pressable hitSlop={10} style={styles.glossBtn} onPress={() => setGlossOpen(true)}>
@@ -108,10 +118,6 @@ export default function HomeScreen() {
         </Pressable>
       </View>
       <Text style={styles.sub}>{t('dash.sub')}</Text>
-
-      {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏）。
-          首屏最顶：今天该练什么第一眼可见 */}
-      <WeeklyPlanCard />
 
       {/* hero 瓦片：CTL 蓝 / ATL 红 / TSB 绿（附 form 简评）/ FTP volt */}
       <View style={styles.heroGrid}>
@@ -214,17 +220,6 @@ export default function HomeScreen() {
       {/* 指标说明弹窗（Web 版 glossaryHtml 同源词条） */}
       <GlossaryModal visible={glossOpen} onClose={() => setGlossOpen(false)} />
       </ScrollView>
-
-      {/* 对话快捷 FAB（activities 页导入 FAB 同款）：直达 /ai/session/chat-new，
-          与底部 AI tab 的「新对话」同一目标页——纯加速入口非替代；未配置 Key 隐藏 */}
-      {configured === true && (
-        <FAB
-          icon="chat"
-          color={palette.bg}
-          style={styles.fab}
-          onPress={() => router.push('/ai/session/chat-new')}
-        />
-      )}
     </View>
   );
 }
@@ -293,7 +288,6 @@ function Metric({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.bg },
   page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
-  fab: { position: 'absolute', right: 16, bottom: 16, backgroundColor: palette.volt },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: palette.text, fontSize: 22, fontWeight: '700' },
   glossBtn: {

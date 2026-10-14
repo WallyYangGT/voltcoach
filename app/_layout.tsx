@@ -116,10 +116,12 @@ function RootStack() {
         name="activity/[id]"
         options={{ animation: 'slide_from_right' }}
       />
-      {/* M3：AI 会话详情（报告正文+追问 / 直接对话）与记忆管理页 */}
+      {/* M3：AI 会话详情（报告正文+追问 / 直接对话）与记忆管理页。
+          AP1：转场改自底展开——会话页是「和教练对话」的独立面板，所有入口
+          （首页输入卡片/AI tab/报告页）一致呈展开感，区别于右滑进详情页的层级感 */}
       <Stack.Screen
         name="ai/session/[id]"
-        options={{ animation: 'slide_from_right' }}
+        options={{ animation: 'slide_from_bottom' }}
       />
       <Stack.Screen
         name="memory"

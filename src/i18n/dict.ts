@@ -284,6 +284,8 @@ export const DICT = {
     'ai.scenario.generate': '生成',
     'ai.center.deleteChat': '删除对话',
     'ai.center.deleteChatMsg': '删除该对话及其全部消息？',
+    // ---- AI 体验整合批（AP1/AP2）：首页对话入口卡片与对话页空态引导共用占位文案 ----
+    'ai.invite.placeholder': '和教练讨论一下…',
     // ---- AI 复盘报告面板（训练详情页内嵌；key 沿用 Web 版 views/activities.js 的 ai.panel.*） ----
     'ai.panel': 'AI 复盘报告',
     'ai.panel.pending': 'AI 复盘报告（生成中…）',
@@ -980,6 +982,8 @@ export const DICT = {
     'ai.scenario.generate': 'Generate',
     'ai.center.deleteChat': 'Delete chat',
     'ai.center.deleteChatMsg': 'Delete this chat and all its messages?',
+    // ---- AI 体验整合批（AP1/AP2）：首页对话入口卡片与对话页空态引导共用占位文案 ----
+    'ai.invite.placeholder': 'Ask your coach…',
     'ai.panel': 'AI Review Report',
     'ai.panel.pending': 'AI Review Report (generating…)',
     'ai.panel.failed': 'AI Review Report (failed)',

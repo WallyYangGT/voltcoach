@@ -37,12 +37,16 @@ export default function AiSessionScreen() {
   const { t, lang } = useI18n();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id?: string }>();
+  const params = useLocalSearchParams<{ id?: string; autoFocus?: string | string[] }>();
   const raw = Array.isArray(params.id) ? params.id[0] : (params.id ?? '');
   // 路由参数解析：<type>-<id>（chat-new 为新建对话的特殊形态）
   const [kind, idStr] = raw.split('-');
   const entityId = /^\d+$/.test(idStr ?? '') ? Number(idStr) : null;
   const isNewChat = raw === 'chat-new';
+  // AP1：进入即聚焦输入框——chat-new 天然聚焦；replace 到真实 id 时经参数续焦
+  // （首页输入卡片入口直达可输入态；从会话中心浏览既有对话不聚焦）
+  const rawAutoFocus = Array.isArray(params.autoFocus) ? params.autoFocus[0] : params.autoFocus;
+  const wantsFocus = isNewChat || rawAutoFocus === '1';
 
   const [sending, setSending] = useState(false);
 
@@ -172,9 +176,13 @@ export default function AiSessionScreen() {
         const err = await ai.sendFollowUp(text);
         if (err) Alert.alert(err);
       } else if (isNewChat) {
-        // 新对话：首条消息落库建对话后 replace 到真实 id（返回列表可见）
+        // 新对话：首条消息落库建对话后 replace 到真实 id（返回列表可见）；
+        // autoFocus 续传——replace 会重挂载页面，不带参数键盘会收起
         const { chatId, messageId } = await submitChatMessage({ mode: 'chat', message: text }, lang);
-        router.replace(`/ai/session/chat-${chatId}`);
+        router.replace({
+          pathname: '/ai/session/[id]',
+          params: { id: `chat-${chatId}`, autoFocus: '1' },
+        });
         void runChatGeneration(chatId, messageId, lang).catch((e) =>
           console.warn('对话生成任务异常:', e),
         );
@@ -238,12 +246,14 @@ export default function AiSessionScreen() {
       </ScrollView>
 
       {/* 输入行：report 页仅 completed 后开放追问；chat 页常开。
-          键盘可见时 KeyboardAvoidingView 已垫起整个页面，再保留 insets.bottom 会双重垫高 */}
+          键盘可见时 KeyboardAvoidingView 已垫起整个页面，再保留 insets.bottom 会双重垫高。
+          autoFocus 仅 chat 分支生效（AP1：首页卡片/chat-new 入口进入即聚焦） */}
       {(kind === 'chat' || report?.status === 'completed') && (
         <AskInput
           placeholder={kind === 'report' ? t('session.followUp.hint') : t('session.chat.hint')}
           sending={sending}
           onSend={send}
+          autoFocus={kind === 'chat' && wantsFocus}
           style={[styles.inputRow, { paddingBottom: (kbVisible ? 0 : insets.bottom) + 10 }]}
         />
       )}
