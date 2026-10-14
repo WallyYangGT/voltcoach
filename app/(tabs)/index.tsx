@@ -34,6 +34,7 @@ import {
   recentFormDaily,
 } from '@/db';
 import { ChatInviteCard } from '@/components/ChatInviteCard';
+import { AiFtpUpdateBanner } from '@/components/AiFtpUpdateBanner';
 import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
 import { WeeklyPlanCard } from '@/components/WeeklyPlanCard';
@@ -151,6 +152,9 @@ export default function HomeScreen() {
           </View>
         )}
       </View>
+
+      {/* AI 教练 FTP 更新披露条（S3：快照存在且未被后续修改时显示，撤销后经 onChanged 刷新 hero） */}
+      <AiFtpUpdateBanner onChanged={load} />
 
       {/* FTP 科学估算面板（展开时渲染，采纳写回后经 onApplied 刷新 hero） */}
       {ftpOpen && <FtpEstimatePanel onApplied={load} />}

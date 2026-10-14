@@ -280,6 +280,54 @@ export async function getFtpMeta(): Promise<FtpMeta> {
   }
 }
 
+/** AI 教练更新 FTP 的快照（athlete JSON 扩展字段 ai_ftp_update；首页披露条与撤销入口用，S3） */
+export interface AiFtpUpdateSnapshot {
+  old_ftp_w: number;
+  new_ftp_w: number;
+  updated_at: string;
+}
+
+/** 读 AI 更新快照（无行/损坏/字段不全返回 null） */
+export async function getAiFtpUpdate(): Promise<AiFtpUpdateSnapshot | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = 'athlete'`,
+  );
+  if (!row) return null;
+  try {
+    const s = JSON.parse(row.value)?.ai_ftp_update;
+    if (
+      s &&
+      typeof s === 'object' &&
+      typeof s.old_ftp_w === 'number' &&
+      typeof s.new_ftp_w === 'number' &&
+      typeof s.updated_at === 'string'
+    )
+      return s as AiFtpUpdateSnapshot;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 写/清 AI 更新快照（null 清除）。沿用 athlete 行整写先例：基于 getEffectiveAthlete
+ * 的合并结果写回（Object.assign 天然保活 ftp_updated_at 等其它扩展字段，不加列、
+ * 不动 SCHEMA_VERSION）。与 setAthlete 分开——快照不是骑手参数，不走其校验与溯源戳。
+ */
+export async function setAiFtpUpdate(snapshot: AiFtpUpdateSnapshot | null): Promise<void> {
+  // getEffectiveAthlete 经 Object.assign 合并行 JSON，返回对象已含全部扩展字段，整写回即保活
+  const merged = { ...(await getEffectiveAthlete()) } as Record<string, unknown>;
+  if (snapshot) merged.ai_ftp_update = snapshot;
+  else delete merged.ai_ftp_update;
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES ('athlete', ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    JSON.stringify(merged),
+  );
+}
+
 /**
  * 更新骑手参数（允许只给部分字段）：校验 → 合并当前值写库。
  * 非法值抛 Error（message 按 lang 双语，界面直接透传展示）。
