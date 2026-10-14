@@ -346,7 +346,10 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     const config = await requireAiConfig(lang);
     const report = await getAiReport(reportId);
     if (!report) throw new Error(t(lang, 'srv.report_not_found'));
-    if (report.status === 'cancelled') return { started: false }; // 用户已取消（竞态守卫）：不覆盖
+    // 注意：这里不挡 cancelled——cancelXxxGeneration 与 fire 的竞态窗口只有几毫秒
+    // （取消按钮只在行已 pending 时可见 = 任务已注册 controller，abort 路径必然命中），
+    // 而手动 Retry（cancelled 行原行重跑）是合法路径；自动补跑/续跑扫描只认 pending，
+    // 天然不会碰 cancelled 行，无需额外守卫。
     let finalPrompt = report.prompt;
     if (config.agentic !== false) {
       finalPrompt += '\n\n' + buildAgenticSection(lang);
@@ -620,8 +623,7 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     const config = await requireAiConfig(lang);
     const chat = await getAiChat(chatId);
     if (!chat) throw new Error(t(lang, 'srv.chat_not_found'));
-    if (chat.messages.find((m) => m.id === messageId)?.status === 'cancelled')
-      return { started: false }; // 用户已取消（竞态守卫）：不覆盖
+    // 不挡 cancelled（口径同 generateReport：手动重试是合法路径，自动补跑只认 pending）
     const history = chat.messages
       .filter((m) => m.status === 'completed' && m.content)
       .map((m) => ({ role: m.role, content: m.content }));

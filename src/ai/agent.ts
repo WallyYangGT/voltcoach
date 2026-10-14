@@ -83,10 +83,17 @@ export async function callAI(
   if (cfg.temperature != null) request.temperature = Number(cfg.temperature);
 
   const ctrl = new AbortController();
-  // 外部取消信号 → 内部 ctrl（reason 原样透传，AiCancelledError 靠它穿越超时分类）
-  const forwardAbort = () => ctrl.abort(signal?.reason);
+  // 外部取消信号 → 内部 ctrl。⚠️ 取消身份不依赖 signal.reason——RN 的
+  // AbortController polyfill 对 abort(reason) 的 reason 支持不可靠（冒烟实证：
+  // reason 退化为默认 AbortError，消息含 "Aborted"，会被超时分类误报成总超时），
+  // 故用闭包标志位做取消身份，agent 层把它转成 AiCancelledError 再上抛
+  let externallyCancelled = false;
+  const forwardAbort = () => {
+    externallyCancelled = true;
+    ctrl.abort();
+  };
   if (signal) {
-    if (signal.aborted) ctrl.abort(signal.reason);
+    if (signal.aborted) forwardAbort();
     else signal.addEventListener('abort', forwardAbort);
   }
   const totalTimer = setTimeout(() => ctrl.abort(new Error('total timeout')), effectiveTimeoutMs);
@@ -119,8 +126,7 @@ export async function callAI(
   } catch (e) {
     // 用户取消必须先于超时分类抛出——否则会被下面的 /aborted|timeout/ 正则
     // 误报成"总超时"（取消不是故障，编排层要据此回写 cancelled 而非 failed）
-    if (e instanceof AiCancelledError) throw e;
-    if (ctrl.signal.reason instanceof AiCancelledError) throw ctrl.signal.reason;
+    if (externallyCancelled || e instanceof AiCancelledError) throw new AiCancelledError();
     const reason = (ctrl.signal.reason as Error | undefined)?.message || (e instanceof Error ? e.message : '');
     if (reason === 'stall timeout') {
       throw new Error(t(lang, 'ai.stall', { sec: stallMs / 1000 }));
@@ -180,10 +186,16 @@ export async function runAgentLoop(
   const useTools = Array.isArray(tools) && tools.length > 0;
 
   const ctrl = new AbortController();
-  // 外部取消信号 → 内部 ctrl（reason 原样透传，AiCancelledError 靠它穿越超时分类）
-  const forwardAbort = () => ctrl.abort(signal?.reason);
+  // 外部取消信号 → 内部 ctrl。⚠️ 取消身份不依赖 signal.reason（RN polyfill 对
+  // abort(reason) 的 reason 支持不可靠，冒烟实证会退化为默认 AbortError 被误报
+  // 成总超时），用闭包标志位做取消身份，agent 层转成 AiCancelledError 上抛
+  let externallyCancelled = false;
+  const forwardAbort = () => {
+    externallyCancelled = true;
+    ctrl.abort();
+  };
   if (signal) {
-    if (signal.aborted) ctrl.abort(signal.reason);
+    if (signal.aborted) forwardAbort();
     else signal.addEventListener('abort', forwardAbort);
   }
   const totalTimer = setTimeout(() => ctrl.abort(new Error('total timeout')), effectiveTimeoutMs);
@@ -230,13 +242,13 @@ export async function runAgentLoop(
     let toolsActive = useTools;
     for (let round = 0; round < maxRounds; round++) {
       // 轮边界检查取消：abort 落在工具执行/轮间时，不必等下一次 fetch 拒绝才停
-      if (ctrl.signal.reason instanceof AiCancelledError) throw ctrl.signal.reason;
+      if (externallyCancelled) throw new AiCancelledError();
       roundContent = '';
       let msg: ChatMessage;
       try {
         msg = (await callOnce(history, toolsActive ? tools : undefined)) as ChatMessage;
       } catch (e) {
-        if (ctrl.signal.reason instanceof AiCancelledError) throw ctrl.signal.reason;
+        if (externallyCancelled || e instanceof AiCancelledError) throw new AiCancelledError();
         if (toolsActive && streaming) {
           // 降级梯子第一级：流式轮失败（传输级或 4xx）→ 本轮降非流式重试（保工具），
           // 兼容不支持 stream+tools 组合的端点；streaming 已置 false，后续轮保持非流式
@@ -319,8 +331,7 @@ export async function runAgentLoop(
     throw new Error(t(lang, 'ai.empty'));
   } catch (e) {
     // 用户取消必须先于超时分类抛出（同 callAI——取消不是故障，编排层据此回写 cancelled）
-    if (e instanceof AiCancelledError) throw e;
-    if (ctrl.signal.reason instanceof AiCancelledError) throw ctrl.signal.reason;
+    if (externallyCancelled || e instanceof AiCancelledError) throw new AiCancelledError();
     const reason = (ctrl.signal.reason as Error | undefined)?.message || (e instanceof Error ? e.message : '');
     if (
       reason === 'total timeout' ||
