@@ -131,15 +131,23 @@ export async function callAI(
     // 端点可能不支持 stream）→ 降非流式重试一次。仅限系统强制的流式——用户在设置里
     // 显式开启的 stream 失败时不静默改行为。agent 循环的梯子在 runAgentLoop 内。
     if (useStream && forceStream && e instanceof AiTransportError) {
-      const fallback = (await requestChatCompletion(
-        fetchImpl,
-        cfg.base_url,
-        cfg.api_key,
-        { ...request, stream: false },
-        { signal: ctrl.signal, onRetry, lang },
-      )) as ChatMessage;
-      if (!fallback.content) throw new Error(t(lang, 'ai.empty'));
-      return fallback.content;
+      try {
+        const fallback = (await requestChatCompletion(
+          fetchImpl,
+          cfg.base_url,
+          cfg.api_key,
+          { ...request, stream: false },
+          { signal: ctrl.signal, onRetry, lang },
+        )) as ChatMessage;
+        if (!fallback.content) throw new Error(t(lang, 'ai.empty'));
+        return fallback.content;
+      } catch (e2) {
+        // 降级请求在飞时被取消：此处已是 catch 体内，抛错不会再被本 catch 分类——
+        // 必须就地恢复取消身份（否则裸 AbortError 逃出，RN 形态落 failed 而非
+        // cancelled，code-review 二轮 P2 实证），其余错误原样上抛走既有分类
+        if (externallyCancelled || e2 instanceof AiCancelledError) throw new AiCancelledError();
+        throw e2;
+      }
     }
     const reason = (ctrl.signal.reason as Error | undefined)?.message || (e instanceof Error ? e.message : '');
     if (reason === 'stall timeout') {

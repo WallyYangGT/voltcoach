@@ -15,7 +15,9 @@ export function normalizeLang(l: unknown): Lang {
   return l === 'en' ? 'en' : 'zh';
 }
 
-const DICT: Record<Lang, Record<string, string>> = {
+// 导出供测试做 zh/en 集合一致性断言（服务层词典曾因无此测试漏过「key 误放 UI 词典」，
+// code-review 修复批补齐——两层词典各自的 zh/en 对齐都在 L1 钉住）
+export const DICT: Record<Lang, Record<string, string>> = {
   zh: {
     // ---- 训练库（src/db）校验消息 ----
     'athlete.range': '{key} 需在 {lo}–{hi} 之间',
@@ -119,6 +121,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'srv.message_too_long': 'message 过长（上限 {n} 字）',
     'srv.chat_id_invalid': 'chat_id 参数无效',
     'srv.chat_not_found': '对话不存在',
+    'srv.report_not_found': '报告不存在',
     'srv.library_empty': '训练库为空',
     'srv.race_date': 'race_date 需为 YYYY-MM-DD',
     'srv.compare_not_found': '对比训练在训练库中找不到',
@@ -293,6 +296,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     'srv.message_too_long': 'message too long (max {n} chars)',
     'srv.chat_id_invalid': 'invalid chat_id',
     'srv.chat_not_found': 'chat not found',
+    'srv.report_not_found': 'report not found',
     'srv.library_empty': 'training library is empty',
     'srv.race_date': 'race_date must be YYYY-MM-DD',
     'srv.compare_not_found': 'comparison workouts not found in the training library',

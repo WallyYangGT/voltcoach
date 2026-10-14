@@ -894,3 +894,27 @@ test('词典 zh/en key 集合一致（en 缺 key 时 t() 兜底会向英文用�
   const en = Object.keys(DICT.en).sort();
   assert.deepEqual(en, zh);
 });
+
+test('core 词典（src/core/i18n）zh/en key 集合一致（服务层词典与 UI 词典分层，各自对齐）', async () => {
+  // code-review 修复批补的结构缺口：服务层词典此前无一致性测试，「服务层 key 误放
+  // UI 词典」（t() 解析不到回退裸 key）正是从这道空档逃逸的
+  const { DICT: CORE } = await import('../src/core/i18n.ts');
+  const zh = Object.keys(CORE.zh).sort();
+  const en = Object.keys(CORE.en).sort();
+  assert.deepEqual(en, zh);
+});
+
+test('服务层高频 key 必须在 core 词典可解析（防再误放 UI 词典）', async () => {
+  const { t } = await import('../src/core/i18n.ts');
+  for (const key of [
+    'ai.toolRunning',
+    'ai.toolDone',
+    'ai.degraded',
+    'ai.stream_truncated',
+    'ai.keepalive_title',
+    'srv.report_not_found',
+    'srv.chat_not_found',
+  ]) {
+    assert.notEqual(t('zh', key), key, `core 词典缺 key: ${key}`);
+  }
+});
