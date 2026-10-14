@@ -16,6 +16,7 @@ import { Appbar, Button, SegmentedButtons } from 'react-native-paper';
 import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  deleteAiChat,
   findPlanChat,
   getAiChat,
   getAiConfig,
@@ -44,6 +45,7 @@ import {
 } from '@/core/training-plan';
 import { PlanTable, type PlanTableColumn } from '@/components/PlanTable';
 import { PlanReportSection } from '@/components/PlanReportSection';
+import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { AskInput } from '@/components/AskInput';
 import { ChatBubbles } from '@/components/ChatBubbles';
 import { useI18n } from '@/i18n';
@@ -214,6 +216,23 @@ export default function PlanScreen() {
     },
     [chatId, lang],
   );
+
+  // 重设追问（AP4）：计划会话是全局单线程，多周追问历史每轮全量进 prompt——
+  // 重设即开新话题（token 止血）。删会话后置空本地态，下次发送走 chatId=null
+  // 的惰性新建路径。生成中禁用（防删掉在飞会话）
+  const chatBusy =
+    messages.some((m) => m.status === 'pending') ||
+    (chatId != null && messages.some((m) => isChatGenerating(chatId, m.id)));
+  const resetPlanChat = useCallback(async () => {
+    if (chatId == null) return;
+    try {
+      await deleteAiChat(chatId);
+      setChatId(null);
+      setMessages([]);
+    } catch (e) {
+      Alert.alert(e instanceof Error ? e.message : String(e));
+    }
+  }, [chatId]);
 
   const onGenerate = useCallback(async () => {
     if (generating) return;
@@ -519,7 +538,12 @@ export default function PlanScreen() {
 
         {/* 计划会话 */}
         <View style={styles.chatSection}>
-          <Text style={styles.sectionTitle}>{t('plan.chat.head')}</Text>
+          <View style={styles.chatHead}>
+            <Text style={styles.sectionTitle}>{t('plan.chat.head')}</Text>
+            {chatId != null && (
+              <ResetFollowUpButton scope="plan" disabled={chatBusy} onReset={resetPlanChat} />
+            )}
+          </View>
           {chatId != null && <ChatBubbles chatId={chatId} messages={messages} onRetry={retry} />}
         </View>
       </ScrollView>
@@ -583,6 +607,7 @@ const styles = StyleSheet.create({
   historyNote: { color: palette.text, fontSize: 12 },
   historyRange: { color: palette.muted, fontSize: 11, fontVariant: ['tabular-nums'] },
   chatSection: { gap: 8, paddingHorizontal: 0 },
+  chatHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   emptyText: { color: palette.muted, textAlign: 'center', lineHeight: 24, paddingVertical: 8 },
   inputRow: {
     paddingHorizontal: 16,

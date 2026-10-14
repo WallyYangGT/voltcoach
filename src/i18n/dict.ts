@@ -286,6 +286,11 @@ export const DICT = {
     'ai.center.deleteChatMsg': '删除该对话及其全部消息？',
     // ---- AI 体验整合批（AP1/AP2）：首页对话入口卡片与对话页空态引导共用占位文案 ----
     'ai.invite.placeholder': '和教练讨论一下…',
+    // ---- AI 体验整合批（AP4）：重设追问（docker 版「清除追问」语义平移） ----
+    'ai.followup.reset': '重设追问',
+    'ai.reset.title': '重设追问',
+    'ai.reset.followupBody': '将删除该报告下的全部追问消息，不可恢复。',
+    'ai.reset.planBody': '将删除计划会话的全部消息，不可恢复。',
     // ---- AI 复盘报告面板（训练详情页内嵌；key 沿用 Web 版 views/activities.js 的 ai.panel.*） ----
     'ai.panel': 'AI 复盘报告',
     'ai.panel.pending': 'AI 复盘报告（生成中…）',
@@ -985,6 +990,11 @@ export const DICT = {
     'ai.center.deleteChatMsg': 'Delete this chat and all its messages?',
     // ---- AI 体验整合批（AP1/AP2）：首页对话入口卡片与对话页空态引导共用占位文案 ----
     'ai.invite.placeholder': 'Ask your coach…',
+    // ---- AI 体验整合批（AP4）：重设追问（docker 版「清除追问」语义平移） ----
+    'ai.followup.reset': 'Reset follow-up',
+    'ai.reset.title': 'Reset follow-up',
+    'ai.reset.followupBody': 'This deletes all follow-up messages for this report. This cannot be undone.',
+    'ai.reset.planBody': 'This deletes all plan chat messages. This cannot be undone.',
     'ai.panel': 'AI Review Report',
     'ai.panel.pending': 'AI Review Report (generating…)',
     'ai.panel.failed': 'AI Review Report (failed)',

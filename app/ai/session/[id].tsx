@@ -21,8 +21,9 @@ import { AiReportBody } from '@/components/AiReportBody';
 import { AskInput } from '@/components/AskInput';
 import { ChatBubbles } from '@/components/ChatBubbles';
 import { ChatEmptyHero } from '@/components/ChatEmptyHero';
+import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { useAiReport } from '@/components/useAiReport';
-import { getAiChat, type AiChatRow } from '@/db';
+import { deleteAiChat, getAiChat, type AiChatRow } from '@/db';
 import {
   isChatGenerating,
   runChatGeneration,
@@ -144,6 +145,22 @@ export default function AiSessionScreen() {
     [chat, lang, kind, reloadReport, loadChat],
   );
 
+  /** 重设追问（AP4）：删该报告的追问会话（报告保留），reload 重新查找（null 即恢复
+      干净态），下轮提问惰性新建。docker 版「清除追问」语义平移；生成中禁用 */
+  const followUpBusy =
+    !!chat &&
+    (chat.messages.some((m) => m.status === 'pending') ||
+      chat.messages.some((m) => isChatGenerating(chat.id, m.id)));
+  const resetFollowUp = useCallback(async () => {
+    if (kind !== 'report' || !chat) return;
+    try {
+      await deleteAiChat(chat.id);
+      await ai.reload();
+    } catch (e) {
+      Alert.alert(e instanceof Error ? e.message : String(e));
+    }
+  }, [chat, kind, ai]);
+
   /** 重新生成报告：新建一份（旧报告留在历史列表里），随后路由切到新报告 */
   const regenerate = useCallback(() => {
     void (async () => {
@@ -241,7 +258,16 @@ export default function AiSessionScreen() {
               kind === 'report' && report?.status === 'completed' && styles.followUpTop,
             ]}>
             {kind === 'report' && report?.status === 'completed' && (
-              <Text style={styles.followUpHead}>{t('session.followUp.hint')}</Text>
+              <View style={styles.followUpHead}>
+                <Text style={styles.followUpHeadText}>{t('session.followUp.hint')}</Text>
+                {chat && (
+                  <ResetFollowUpButton
+                    scope="followup"
+                    disabled={followUpBusy}
+                    onReset={resetFollowUp}
+                  />
+                )}
+              </View>
             )}
             <ChatBubbles chatId={chat?.id ?? -1} messages={chatMessages} onRetry={retryChat} />
           </View>
@@ -273,6 +299,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
   followUp: { gap: 8 },
   followUpTop: { borderTopWidth: 1, borderTopColor: palette.lineSoft, paddingTop: 10, marginTop: 4 },
-  followUpHead: { color: palette.faint, fontSize: 11 },
+  followUpHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  followUpHeadText: { color: palette.faint, fontSize: 11 },
   inputRow: { paddingHorizontal: 12, paddingTop: 6 },
 });
