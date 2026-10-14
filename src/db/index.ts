@@ -823,7 +823,8 @@ export async function getLang(): Promise<Lang> {
 
 /** 保存界面语言（仅认 zh/en，非法值抛 Error） */
 export async function setLang(lang: Lang): Promise<Lang> {
-  if (lang !== 'zh' && lang !== 'en') throw new Error('lang 仅支持 zh / en');
+  // 开发者向 invariant：lang 本身无效时词典不可用，只能用非本地化文案（勿改走 i18n）
+  if (lang !== 'zh' && lang !== 'en') throw new Error(`Unsupported lang: ${lang} (zh/en only)`);
   const db = await getDb();
   await db.runAsync(
     `INSERT INTO settings (key, value) VALUES ('lang', ?)

@@ -7,7 +7,7 @@
  * 报告正文并接上追问。顶部「AI 分析」按钮走 analyze()：已有报告则直接露出本面板，
  * 没有则新建并触发后台生成（口径同 Web 版「已有报告时跳到底部，否则触发分析」）。
  */
-import React, { useCallback, useImperativeHandle, useRef, useState, type Ref } from 'react';
+import React, { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -47,6 +47,14 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
   const [looking, setLooking] = useState(true); // 首次查找中：先不渲染，避免"无报告"CTA 闪一下
   const [configured, setConfigured] = useState<boolean | null>(null); // 未配置 AI → 复制提示词兜底
   const [copied, setCopied] = useState(false);
+  // 「已复制」flash 的定时器：组件卸载时清理（否则卸载后 setState）
+  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+    },
+    [],
+  );
   const busyRef = useRef(false); // analyze 在飞行中（防连点造重复报告）
   const ai = useAiReport(reportId, lang);
 
@@ -153,7 +161,8 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
     try {
       await Clipboard.setStringAsync(await buildReportPrompt('review', { file_name: fileName }, lang));
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (flashTimer.current) clearTimeout(flashTimer.current);
+      flashTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch (e) {
       Alert.alert(t('ai.center.copyFailed', { msg: e instanceof Error ? e.message : String(e) }));
     }
