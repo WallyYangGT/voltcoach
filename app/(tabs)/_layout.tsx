@@ -1,5 +1,5 @@
 /**
- * 底部导航：首页 / 训练 / AI / 我的（四目的地信息架构）
+ * 底部导航：首页 / 记录 / 对话 / 我的（四目的地信息架构）
  *
  * 说明：Expo SDK 57 的 expo-router 已移除 @react-navigation 集成，官方路线是
  * NativeTabs（安卓原生 Material 3 底栏 / iOS UITabBar），比 JS tabs 更贴 MD3，
@@ -22,7 +22,7 @@ export default function TabsLayout() {
         <NativeTabs.Trigger.Label>{t('tab.activities')}</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="ai">
-        <NativeTabs.Trigger.Icon md="auto_awesome" sf="sparkles" />
+        <NativeTabs.Trigger.Icon md="forum" sf="bubble.left.and.bubble.right" />
         <NativeTabs.Trigger.Label>{t('tab.ai')}</NativeTabs.Trigger.Label>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="me">

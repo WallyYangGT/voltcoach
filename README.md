@@ -62,7 +62,7 @@ npx expo start --android  # Metro 开发服务 + 模拟器/真机
 
 ## 目录导览
 
-- `app/` — Expo Router 页面路由（底部四 tab：首页/训练/AI/我的）
+- `app/` — Expo Router 页面路由（底部四 tab：首页/记录/对话/我的）
 - `src/` — 业务代码（`core/` 纯函数算法层；`prompts/skills/` AI 技能知识库源文件）
 - `modules/` — 本地 Expo 原生模块（`generation-keepalive/`：AI 生成后台保活前台服务，android-only）
 - `plugins/` — 本地 config plugin（prebuild 时注入 manifest 声明）
