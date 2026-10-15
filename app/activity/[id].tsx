@@ -27,6 +27,7 @@ import { AiReviewPanel, type AiReviewPanelHandle } from '@/components/AiReviewPa
 import type { AskInputInstance } from '@/components/AskInput';
 import type { Summary } from '@/core/analyze';
 import { formatAnomaly } from '@/core/i18n';
+import { localDayFromUtc } from '@/core/local-day';
 import {
   buildActivityMetrics,
   buildCadenceMetrics,
@@ -84,6 +85,9 @@ export default function ActivityDetailScreen() {
 
   const [summary, setSummary] = useState<Summary | null | undefined>(undefined); // undefined=加载中
   const [thinned, setThinned] = useState<Awaited<ReturnType<typeof thinRecords>> | null>(null);
+  // 标题日期按本地日历日展示（双口径统一）：records 首帧时刻换算（本页已加载逐秒
+  // 数据，零额外 IO），与 AI 报告标题同源同口径；无逐秒数据回退存储 UTC 日
+  const [dateLabel, setDateLabel] = useState<string | null>(null);
   // 踩踏时间分解（从完整逐秒数据现算——不是抽稀后的 thinned，占比才准）
   const [pedal, setPedal] = useState<PedalTimeBreakdown | null>(null);
   // 功率可信度标记（v2）：true = 该骑行功率不可信，已从训练档案功率基线排除
@@ -177,6 +181,7 @@ export default function ActivityDetailScreen() {
             // 0W 根治后 summary.pedal_time 为权威数据源（与 AI 同源）；旧数据（升级前
             // 入库的 summary 无该字段）回退 records 现算，口径同 core/pedalTime
             setPedal(s.pedal_time ?? (stored ? pedalTimeBreakdown(stored) : null));
+            setDateLabel(stored?.length ? localDayFromUtc(stored[0].timestamp) : null);
           }
         }
       } catch (e) {
@@ -340,7 +345,7 @@ export default function ActivityDetailScreen() {
       <Appbar.Header style={styles.header}>
         <Appbar.BackAction color={palette.text} onPress={() => router.back()} />
         <Appbar.Content
-          title={`${a.date} · ${t(`sport.${a.sport}` as never)}`}
+          title={`${dateLabel ?? a.date} · ${t(`sport.${a.sport}` as never)}`}
           titleStyle={{ color: palette.text }}
         />
         <Appbar.Action

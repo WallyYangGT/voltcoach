@@ -25,7 +25,7 @@ import { bytesToBase64, unpackBackup } from '@/backup/archive';
 import { findDuplicateGroups } from '@/core/dedupe';
 import { formatDuration } from '@/core/metrics';
 import { copyStoredRecord, deleteStoredRecord } from '@/records-store';
-import { invalidateReportTitles } from '@/services/aiTitle';
+import { invalidateReportTitles, useRideDateLabels } from '@/services/aiTitle';
 import {
   SCHEMA_VERSION,
   deleteActivity,
@@ -59,6 +59,8 @@ export default function DataScreen() {
 
   // —— 重复记录检查（M5） ——
   const [dupGroups, setDupGroups] = useState<ActivityRideKey[][] | null>(null);
+  // 重复组头日期按本地日历日展示（双口径统一，与训练列表同源同口径）
+  const dateLabels = useRideDateLabels((dupGroups ?? []).map((g) => g[0]?.file_name));
   const [scanning, setScanning] = useState(false);
   const [merging, setMerging] = useState(false);
 
@@ -386,7 +388,7 @@ export default function DataScreen() {
           {dupGroups?.map((g) => (
             <View key={g[0].file_name} style={styles.dupGroup}>
               <Text style={styles.dupGroupHead}>
-                {g[0].date} · {formatDuration(g[0].duration_sec)} ·{' '}
+                {dateLabels.get(g[0].file_name) ?? g[0].date} · {formatDuration(g[0].duration_sec)} ·{' '}
                 {/* 距离口径与训练列表一致（先按 0.1km 取整再显示，避免列表 18.00 / 此处 17.99 打架） */}
                 {g[0].distance_km != null ? `${(Math.round(g[0].distance_km * 10) / 10).toFixed(2)} km` : '—'}
               </Text>

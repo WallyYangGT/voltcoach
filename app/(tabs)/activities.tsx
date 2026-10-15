@@ -21,7 +21,7 @@ import {
 } from '@/db';
 import { useI18n } from '@/i18n';
 import { deleteStoredRecord } from '@/records-store';
-import { invalidateReportTitles } from '@/services/aiTitle';
+import { invalidateReportTitles, useRideDateLabels } from '@/services/aiTitle';
 import { palette } from '@/theme';
 
 export default function ActivitiesScreen() {
@@ -30,6 +30,9 @@ export default function ActivitiesScreen() {
   const insets = useSafeAreaInsets();
   const [items, setItems] = useState<ActivityListItem[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // 行日期按本地日历日展示（双口径统一，2026-10）：activities.date 是 UTC 日，早骑差
+  // 一天；首帧时刻换算（带缓存，渐进补齐），与 AI 报告标题同源同口径，缺首帧回退原值
+  const dateLabels = useRideDateLabels((items ?? []).map((r) => r.file_name));
   // 左滑行的控制器（按文件名索引）：同一时刻只留一行展开，避免多行悬空
   const swipeRefs = useRef(new Map<string, SwipeableMethods>());
 
@@ -151,7 +154,7 @@ export default function ActivitiesScreen() {
                 })
               }>
               <View style={styles.cardTop}>
-                <Text style={styles.date}>{item.date}</Text>
+                <Text style={styles.date}>{dateLabels.get(item.file_name) ?? item.date}</Text>
                 <View style={styles.badges}>
                   <Text style={[styles.sport, item.category === 'race' && { color: palette.volt }]}>
                     {t(`cat.${item.category}` as never)}

@@ -13,6 +13,7 @@ import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { deleteMemory, listAllMemories, type AiMemoryRow } from '@/db';
+import { localDayFromUtc } from '@/core/local-day';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -102,7 +103,8 @@ function MemoryCard({ m, onDelete }: { m: AiMemoryRow; onDelete: (m: AiMemoryRow
   return (
     <View style={styles.card}>
       <View style={styles.head}>
-        <Text style={styles.date}>{String(m.created_at).slice(0, 10)}</Text>
+        {/* created_at 是 SQLite UTC 时刻文本 → 本地日历日（双口径统一；解析失败回退原前 10 位） */}
+        <Text style={styles.date}>{localDayFromUtc(m.created_at) ?? String(m.created_at).slice(0, 10)}</Text>
         <Text style={[styles.cat, m.category === 'strategy' && styles.strategyCat]}>
           {t(`mem.cat.${m.category}` as never)}
         </Text>

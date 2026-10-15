@@ -20,7 +20,7 @@ import { Button, Chip, Icon, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getAiConfig, listActivities, listAiChats, listAiReports, deleteAiChat, type AiChatListItem, type AiReportListItem, type AiReportMode } from '@/db';
 import { buildReportPrompt, createReportDraft, generateReport } from '@/services/aiGenerate';
-import { buildReportTitles } from '@/services/aiTitle';
+import { buildReportTitles, useRideDateLabels } from '@/services/aiTitle';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -387,13 +387,15 @@ function ActivityPicker({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  // 日期按本地日历日展示（双口径统一，与训练列表同源同口径）
+  const dateLabels = useRideDateLabels(acts.map((a) => a.file_name));
   const sel = acts.find((a) => a.file_name === selected);
   return (
     <View>
       <Pressable style={styles.pickerRow} onPress={() => setOpen((v) => !v)}>
         <Text style={styles.pickerLabel}>{label}</Text>
         <Text style={[styles.pickerValue, { color: sel ? palette.text : palette.faint }]} numberOfLines={1}>
-          {sel ? `${sel.date} · ${sel.file_name}` : label}
+          {sel ? `${dateLabels.get(sel.file_name) ?? sel.date} · ${sel.file_name}` : label}
         </Text>
         <Icon source={open ? 'chevron-up' : 'chevron-down'} size={18} color={palette.muted} />
       </Pressable>
@@ -409,7 +411,7 @@ function ActivityPicker({
                   setOpen(false);
                 }}>
                 <Text style={styles.pickerItemText} numberOfLines={1}>
-                  {a.date} · {t(`cat.${a.category}` as never)} · {a.file_name}
+                  {dateLabels.get(a.file_name) ?? a.date} · {t(`cat.${a.category}` as never)} · {a.file_name}
                 </Text>
               </Pressable>
             ))}
