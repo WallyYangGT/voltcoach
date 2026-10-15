@@ -159,23 +159,29 @@ export interface PlanValidationResult {
 
 /**
  * 结构化训练计划校验。
- * - 硬错：结构缺失、日期非法、窗长越界、valid_to 已过去 / valid_from 过早、
- *   课次越窗 / 一天多课 / 课型越界 / 时长越界（rest 外 10–600 分钟）/ tss 越界；
+ * - 硬错：结构缺失、日期非法、窗长越界、valid_to 已过去 / valid_from 过早（ops 档豁免，
+ *   见下）、课次越窗 / 一天多课 / 课型越界 / 时长越界（rest 外 10–600 分钟）/ tss 越界；
  * - 合理性（05 技能阈值，PLAN_VALIDATION 单源）：质量课间隔、休息日保留、减量周节奏；
- *   create 档记入 warnings（生成整份重生成代价高，降级为提示），adjust 档记入
+ *   create 档记入 warnings（生成整份重生成代价高，降级为提示），adjust/ops 档记入
  *   violations（会话调整逐次校验，不合理直接拒绝并说明理由）。
- * 拒收判定：`!result.ok || (mode === 'adjust' && result.violations.length > 0)`。
+ * 拒收判定：`!result.ok || (mode !== 'create' && result.violations.length > 0)`。
+ *
+ * mode 'ops'（课次级局部调整专用）：与 adjust 同为硬拒档，差异仅一处——豁免
+ * `valid_from 过早`检查。该检查的语义是「模型提交的日期笔误容错窗」（from_max_past_days），
+ * 而 ops 链路的 valid_from 直接取自 App 存量计划、不经模型之手：计划进行到第 8 天起
+ * 该墙会把所有局部调整 100% 拒掉（code-review P1-1），故在链路上豁免。整发
+ * （update_training_plan）仍走 adjust——整发的 valid_from 由模型给出，容错窗语义仍在。
  */
 export function validateTrainingPlan(
   raw: unknown,
   today: string,
-  mode: 'create' | 'adjust',
+  mode: 'create' | 'adjust' | 'ops',
   lang: Lang = 'zh',
 ): PlanValidationResult {
   const errors: string[] = [];
   const warnings: PlanIssue[] = [];
   const violations: PlanIssue[] = [];
-  const flag = (issue: PlanIssue) => (mode === 'adjust' ? violations : warnings).push(issue);
+  const flag = (issue: PlanIssue) => (mode === 'create' ? warnings : violations).push(issue);
   const fail = (msg: string) => {
     errors.push(msg);
     return { ok: false, plan: null, errors, warnings, violations };
@@ -198,7 +204,7 @@ export function validateTrainingPlan(
         n: span,
       }),
     );
-  if (!isDateStr(today) || diffDays(from, today) > PLAN_VALIDATION.from_max_past_days)
+  if (mode !== 'ops' && (!isDateStr(today) || diffDays(from, today) > PLAN_VALIDATION.from_max_past_days))
     errors.push(t(lang, 'tp.from_past', { n: PLAN_VALIDATION.from_max_past_days }));
   if (isDateStr(today) && diffDays(today, to) < 0)
     errors.push(t(lang, 'tp.to_past', { date: today }));

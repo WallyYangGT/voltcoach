@@ -1915,31 +1915,35 @@ export async function getPlanReportLink(reportId: number): Promise<string | null
   }
 }
 
-/** 记一条报告→计划锚（generateReport 收尾调用；超上限剪最旧——对象键插入序） */
+/** 记一条报告→计划锚（generateReport 收尾调用；超上限剪最旧）。读改写包事务：
+ *  resumeInterruptedGenerations 会并行 fire 多条 generateReport，两条报告毫秒级窗口内
+ *  先后完成时非事务的读改写会丢一次更新（code-review P2-1，照 savePlanVersion 先例） */
 export async function recordPlanReportLink(reportId: number, planCreatedAt: string): Promise<void> {
   const db = await getDb();
-  const row = await db.getFirstAsync<{ value: string }>(
-    `SELECT value FROM settings WHERE key = ?`,
-    PLAN_LINKS_KEY,
-  );
-  let links: Record<string, string> = {};
-  if (row) {
-    try {
-      const parsed = JSON.parse(row.value);
-      if (parsed && typeof parsed === 'object') links = parsed;
-    } catch {
-      links = {}; // 行损坏重开
+  await db.withTransactionAsync(async () => {
+    const row = await db.getFirstAsync<{ value: string }>(
+      `SELECT value FROM settings WHERE key = ?`,
+      PLAN_LINKS_KEY,
+    );
+    let links: Record<string, string> = {};
+    if (row) {
+      try {
+        const parsed = JSON.parse(row.value);
+        if (parsed && typeof parsed === 'object') links = parsed;
+      } catch {
+        links = {}; // 行损坏重开
+      }
     }
-  }
-  links[String(reportId)] = planCreatedAt;
-  const keys = Object.keys(links);
-  for (const k of keys.slice(0, Math.max(0, keys.length - PLAN_LINKS_CAP))) delete links[k];
-  await db.runAsync(
-    `INSERT INTO settings (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    PLAN_LINKS_KEY,
-    JSON.stringify(links),
-  );
+    links[String(reportId)] = planCreatedAt;
+    const keys = Object.keys(links);
+    for (const k of keys.slice(0, Math.max(0, keys.length - PLAN_LINKS_CAP))) delete links[k];
+    await db.runAsync(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      PLAN_LINKS_KEY,
+      JSON.stringify(links),
+    );
+  });
 }
 
 /**

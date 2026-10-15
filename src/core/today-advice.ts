@@ -10,8 +10,9 @@
  * ② 计划课型交叉——生效计划的质量课遇 TSB 深负提示降级或顺延；计划休息日/无课
  *    不出课表；无生效计划降级为纯状态建议（生成计划引导在组件层）；
  * ③ 双出口的判定半边——workoutTarget 供 generateWorkout 本地秒出课表（easy 档给
- *    recovery：generateWorkout 自身 tsb<-20 的降级线在本档之下不再触发，两层口径
- *    不打架）；深聊出口的预填文案在组件层按本结构拼。
+ *    recovery：该档在 generateWorkout 的 tsb_recovery 降级线之下时，generateWorkout
+ *    以 key !== 'recovery' 守卫不再二次降级，两层口径不打架）；深聊出口的预填文案
+ *    在组件层按本结构拼。
  *
  * 不返回文案（展示与 i18n 在组件层走词典）；tsb 由调用方传 recentFormDaily 末端
  * （与 hero 同源不重算），本层只取整为展示值。
@@ -97,7 +98,8 @@ export function computeTodayAdvice({
   if (level === 'easy') {
     workoutTarget = 'recovery';
   } else if (level === 'train') {
-    if (session) workoutTarget = TYPE_TO_TARGET[session.type];
+    // 与 planned 同一门控收口（code-review P3-3）：session 只在 hasPlan 时有意义
+    if (planned && session) workoutTarget = TYPE_TO_TARGET[session.type];
     else if (!hasPlan) workoutTarget = 'endurance'; // 无计划：纯状态建议仍可本地出自由骑车表
   }
 

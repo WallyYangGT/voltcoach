@@ -136,6 +136,10 @@ export function applyPlanSessionOps(
       const from = checkDate(o.from, name, i);
       const to = from != null ? checkDate(o.to, name, i) : null;
       if (from == null || to == null) break;
+      if (from === to) {
+        errors.push(t(lang, 'tp.op.same_day', { i, op: name, date: from }));
+        break;
+      }
       const src = working[indexOf(from)];
       if (!src) {
         errors.push(t(lang, 'tp.op.no_session', { i, op: name, date: from }));
@@ -154,6 +158,10 @@ export function applyPlanSessionOps(
       const a = checkDate(o.a, name, i);
       const b = a != null ? checkDate(o.b, name, i) : null;
       if (a == null || b == null) break;
+      if (a === b) {
+        errors.push(t(lang, 'tp.op.same_day', { i, op: name, date: a }));
+        break;
+      }
       const sa = working[indexOf(a)];
       const sb = working[indexOf(b)];
       if (!sa || !sb) {
@@ -277,9 +285,11 @@ export function applyPlanSessionOps(
   }
   if (errors.length) return fail(errors);
 
-  // 全计划复检（adjust 档）：合理性违规（质量课间隔/休息日/减量周）进 violations 硬拒，
+  // 全计划复检（ops 档）：合理性违规（质量课间隔/休息日/减量周）进 violations 硬拒，
   // 格式硬错（窗口/越界等，正常到不了这里——操作日期已逐个验过）进 errors。
-  // 先按日期升序（diffDays(a,b)=b−a，取 diffDays(b.date,a.date) 即升序比较器）
+  // ops 档豁免 valid_from 回看墙（from_max_past_days）：该墙防的是「模型提交的日期
+  // 笔误」，而本链路 valid_from 是 App 存量值——计划进行中（>7 天）时墙会拒掉一切，
+  // code-review P1-1。先按日期升序（diffDays(a,b)=b−a，取 diffDays(b.date,a.date) 即升序比较器）
   working.sort((a, b) => diffDays(b.date, a.date));
   const merged: TrainingPlan = {
     valid_from: plan.valid_from,
@@ -287,7 +297,7 @@ export function applyPlanSessionOps(
     goal: plan.goal,
     sessions: resolvePlanTss(working),
   };
-  const v = validateTrainingPlan(merged, today, 'adjust', lang);
+  const v = validateTrainingPlan(merged, today, 'ops', lang);
   if (!v.ok) return fail(v.errors);
   if (v.violations.length) return fail([], v.violations);
   return { ok: true, plan: v.plan, errors: [], violations: [], applied };

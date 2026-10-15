@@ -24,11 +24,12 @@ const s = (date, type, duration_min, tss = null, note = null) => ({
   note,
 });
 
-/** 夹具计划：10-12（周一，已过去）endurance / 10-13 today threshold / 10-14 rest /
- *  10-15 endurance / 10-17 rest / 10-19 sweet_spot / 10-21 rest（窗 10-12 ~ 10-25；
- *  质量课 10-13 与 10-19 间隔 6 天，初始即过 adjust 档复检） */
+/** 夹具计划：**进行中计划**（valid_from = today-10，code-review P1-1 的逃逸场景——
+ *  旧夹具 valid_from=today-1「刚生成的窗」结构性绕过了 valid_from 回看墙）；窗
+ *  10-03 ~ 10-25，10-12（已过去）endurance / 10-13 today threshold / 10-14 rest /
+ *  10-15 endurance / 10-17 rest / 10-19 sweet_spot / 10-21 rest（质量课间隔 6 天） */
 const plan = () => ({
-  valid_from: '2026-10-12',
+  valid_from: '2026-10-03',
   valid_to: '2026-10-25',
   goal: '基础期',
   sessions: [
@@ -186,6 +187,22 @@ test('顺序语义：后续操作看到前面操作的结果（先 move 腾位�
   assert.equal(r.plan.sessions.find((x) => x.date === '2026-10-15').type, 'recovery');
   assert.equal(r.plan.sessions.find((x) => x.date === '2026-10-16').type, 'endurance');
   assert.equal(r.applied.length, 2);
+});
+
+test('P1-1 回归：进行中计划（valid_from 早于 7 天墙）局部调整不受 valid_from 回看墙拒绝', () => {
+  // adjust 档对同一窗会报 from_past 硬错；ops 档豁免（valid_from 是 App 存量值非模型输入）
+  const r = applyPlanSessionOps(plan(), [{ op: 'move', from: '2026-10-15', to: '2026-10-16' }], TODAY);
+  assert.equal(r.ok, true);
+  assert.equal(applyPlanSessionOps(plan(), [{ op: 'remove', date: '2026-10-15' }], TODAY).ok, true);
+});
+
+test('P2-2：move/swap 源与目标同日 → 拒绝（防零效果操作落新版本谎报已调整）', () => {
+  const mv = applyPlanSessionOps(plan(), [{ op: 'move', from: '2026-10-15', to: '2026-10-15' }], TODAY);
+  assert.equal(mv.ok, false);
+  assert.match(mv.errors[0], /相同/);
+  const sw = applyPlanSessionOps(plan(), [{ op: 'swap', a: '2026-10-15', b: '2026-10-15' }], TODAY);
+  assert.equal(sw.ok, false);
+  assert.match(sw.errors[0], /相同/);
 });
 
 test('ops 空 / 超上限 / 未知操作名', () => {

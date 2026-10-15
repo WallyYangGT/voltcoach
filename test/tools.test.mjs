@@ -574,11 +574,15 @@ test('adjust_plan_sessions：操作级错误与合理性违规都整批拒、不
 
 test('adjust_plan_sessions：合规局部调整落库 origin=adjust——applied 回传、TSS 重估、change_note 裁剪', async () => {
   const stored = {
-    plan: planObj([
-      pSession(day(0), 'threshold', 60),
-      pSession(day(2), 'endurance', 90),
-      pSession(day(4), 'rest', null),
-    ]),
+    // 进行中计划（valid_from = today-10）：钉 ops 链路不受 valid_from 回看墙影响（P1-1）
+    plan: {
+      ...planObj([
+        pSession(day(0), 'threshold', 60),
+        pSession(day(2), 'endurance', 90),
+        pSession(day(4), 'rest', null),
+      ]),
+      valid_from: day(-10),
+    },
     created_at: 'x', origin: 'generate', source_report_id: null, change_note: null, warnings: [],
   };
   const io = fakeIo({ getTrainingPlan: async () => stored });
