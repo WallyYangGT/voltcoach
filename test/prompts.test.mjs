@@ -25,6 +25,8 @@ const {
   headlineSummaryForPrompt,
   localizeTimestamps,
   thinToWeekly,
+  withLocalActivityDate,
+  withLocalActivityDates,
 } = await import('../src/prompts/prompts.ts');
 const { buildChatSystemSection } = await import('../src/prompts/chat.ts');
 const { ATHLETE } = await import('../src/core/settings.ts');
@@ -97,8 +99,9 @@ test('周期规划/减量/对比提示词：数据段与固化问题齐全', () 
   const months = [{ month: '2026-03', tss: 900 }];
   const recent = [{ file_name: 'a.fit', date: '2026-03-25', tss: 60 }];
   const plan = buildPlanPrompt({ months, formSeries, recentActivities: recent }, ATHLETE, null, null, 'zh', new Date());
-  assert.match(plan, /## 逐月训练汇总/);
-  assert.match(plan, /## 近期 CTL\/ATL\/TSB 走势（逐周取样，每天 0 点值）/);
+  // 聚合序列的 UTC 口径在段落标题内如实注明（双口径统一后残存的 UTC 标签面）
+  assert.match(plan, /## 逐月训练汇总（按 UTC 日历日切分月份，清晨骑行计入前一日）/);
+  assert.match(plan, /## 近期 CTL\/ATL\/TSB 走势（逐周取样，每天 0 点值；日期为 UTC 日历日，清晨骑行计入前一日）/);
   assert.match(plan, /## 近期训练清单/);
   assert.match(plan, /5\. 中期（4-8 周）应侧重什么能力短板/);
 
@@ -109,6 +112,7 @@ test('周期规划/减量/对比提示词：数据段与固化问题齐全', () 
   assert.match(taper, /## 比赛信息/);
   assert.match(taper, /比赛日期：2026-04-20（距今 25 天）/);
   assert.match(taper, /## 当前状态（今日 CTL\/ATL\/TSB）/);
+  assert.match(taper, /日期为 UTC 日历日，清晨骑行计入前一日/);
   assert.match(taper, /5\. 指出当前数据中的风险点/);
 
   const b = sampleSummary();
@@ -197,6 +201,62 @@ test('localizeTimestamps：UTC 时间戳改写为本地偏移（时刻不变）�
   // 数组与嵌套对象递归
   const nested = localizeTimestamps({ list: [{ at: iso }] });
   assert.equal(new Date(nested.list[0].at).getTime(), Date.parse(iso));
+});
+
+test('双口径统一：withLocalActivityDate(s) 把喂模型的纯日期字段换算为本地日历日', () => {
+  // 时区无关断言：预期值用 Date 本地分量现算（20:00Z 在 +8 已是次日，CI=UTC 仍是同日）
+  const expectDay = (utcText) => {
+    const d = new Date(Date.parse(utcText));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const startAt = '2026-03-25T20:00:00Z';
+  const summary = { activity: { date: '2026-03-25', sport: 'cycling' }, power: { tss: 60 } };
+  const out = withLocalActivityDate(summary, startAt);
+  assert.equal(out.activity.date, expectDay(startAt));
+  assert.equal(out.power.tss, 60);
+  assert.equal(summary.activity.date, '2026-03-25'); // 入参不被修改
+  // 无首帧/解析失败：原样返回（宁可保留 UTC 日也不猜）
+  assert.equal(withLocalActivityDate(summary, null), summary);
+  assert.equal(withLocalActivityDate(summary, 'bad-date'), summary);
+  // 已是本地日（或无 activity.date）：原样返回
+  assert.equal(withLocalActivityDate({ activity: { date: expectDay(startAt) } }, startAt).activity.date, expectDay(startAt));
+  const empty = {};
+  assert.equal(withLocalActivityDate(empty, startAt), empty);
+
+  const rows = [
+    { file_name: 'a.fit', date: '2026-03-25', tss: 60 },
+    { file_name: 'b.fit', date: '2026-03-25', tss: 0 },
+  ];
+  const starts = new Map([['a.fit', startAt], ['b.fit', null]]);
+  const outRows = withLocalActivityDates(rows, starts);
+  assert.equal(outRows[0].date, expectDay(startAt));
+  assert.equal(outRows[1].date, '2026-03-25'); // 缺首帧回退原值
+  assert.equal(rows[0].date, '2026-03-25'); // 入参不被修改
+});
+
+test('当前时间段：utc_note 退役，改为本地口径一句话备注（双语）', () => {
+  const zh = buildDateSection(new Date('2026-03-26T10:00:00'), 'zh');
+  assert.match(zh, /训练数据中的日期与时间均为本地时区口径/);
+  assert.doesNotMatch(zh, /UTC 口径/);
+  const en = buildDateSection(new Date('2026-03-26T10:00:00'), 'en');
+  assert.match(en, /local-time based/);
+  assert.doesNotMatch(en, /stay UTC-based/);
+});
+
+test('记忆段日期：UTC 时刻换算为本地日历日（清晨写入不再标成前一天）', () => {
+  // created_at 为 SQLite datetime('now') 的 UTC 文本；时区无关断言：预期用 Date 本地分量现算
+  const expectDay = (utcText) => {
+    const d = new Date(Date.parse(`${utcText.replace(' ', 'T')}Z`));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const s = buildMemorySection(
+    [{ id: 1, content: '晨骑习惯', category: 'preference', created_at: '2026-03-01 20:00:00' }],
+    'zh',
+  );
+  assert.match(s, new RegExp(`\\[${expectDay('2026-03-01 20:00:00')}\\] \\(#1`));
+  // 解析失败回退原值前 10 位（缺 created_at 同口径）
+  const s2 = buildMemorySection([{ id: 2, content: 'x', created_at: 'garbled' }], 'zh');
+  assert.match(s2, /\[garbled\] \(#2/);
 });
 
 test('thinToWeekly：每 7 天取样一个点且含最后一天', () => {

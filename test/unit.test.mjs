@@ -918,3 +918,25 @@ test('服务层高频 key 必须在 core 词典可解析（防再误放 UI 词�
     assert.notEqual(t('zh', key), key, `core 词典缺 key: ${key}`);
   }
 });
+
+test('localDayFromUtc: UTC 时刻转本地日历日（ISO/SQLite 双形态），纯日期与非法输入返回 null', async () => {
+  // 时区无关断言：预期值用 Date 本地分量现算（本机=UTC+8 与 CI=UTC 都绿），
+  // 早于本地凌晨的瞬间语义（UTC+8 早 0–8 点 = UTC 日 +1）由「同一时刻的本地分量」隐式覆盖
+  const { localDayFromUtc } = await import('../src/core/local-day.ts');
+  const expectDay = (utcText) => {
+    const d = new Date(Date.parse(utcText));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  // records 首帧形态（ISO UTC，含毫秒）
+  assert.equal(localDayFromUtc('2026-03-25T11:51:24.000Z'), expectDay('2026-03-25T11:51:24.000Z'));
+  assert.equal(localDayFromUtc('2026-03-25T20:00:00Z'), expectDay('2026-03-25T20:00:00Z'));
+  // SQLite datetime('now') 形态（UTC 文本无时区标记）
+  assert.equal(localDayFromUtc('2026-03-01 10:00:00'), expectDay('2026-03-01T10:00:00Z'));
+  assert.equal(localDayFromUtc('2026-03-01 10:00:00'.replace(' ', 'T') + 'Z'), expectDay('2026-03-01T10:00:00Z'));
+  // 纯日期不是时刻（activities.date 无法精确换算）→ null，调用方回退原值
+  assert.equal(localDayFromUtc('2026-03-25'), null);
+  assert.equal(localDayFromUtc('not-a-date'), null);
+  assert.equal(localDayFromUtc(''), null);
+  assert.equal(localDayFromUtc(null), null);
+  assert.equal(localDayFromUtc(undefined), null);
+});

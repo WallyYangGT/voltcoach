@@ -26,6 +26,7 @@ import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '@/core/form';
 import type { CyclingRideInput } from '@/core/ftp';
 import { t, type Lang } from '@/core/i18n';
 import { isShortMemoryExpired, type MemoryScope } from '@/core/memory';
+import { localDay } from '@/core/local-day';
 import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
 import { ATHLETE, AI_CONFIG, FTP_ESTIMATION, PLAN_VALIDATION, type AiConfig, type AthleteParams } from '@/core/settings';
 import type { PlanIssue, TrainingPlan } from '@/core/training-plan';
@@ -747,16 +748,17 @@ export async function computeForm(date: string, lang: Lang = 'zh') {
 
 /**
  * 最近 N 天逐日负荷序列 [{ date, tss, ctl, atl, tsb }]（口径与旧版 recentFormDaily 一致）。
- * 递推用 core/form 的 formSeriesDaily；序列末端延伸到今天（UTC，无训练日 TSS=0 照常
- * 参与衰减），趋势图与「当前体能指数」反映今天而不是停在最后一次训练的日期。
+ * 递推用 core/form 的 formSeriesDaily；序列末端延伸到今天（无训练日 TSS=0 照常参与
+ * 衰减），趋势图与「当前体能指数」反映今天而不是停在最后一次训练的日期。
  * 默认 90 天为仪表盘趋势图口径（Web 版 dashboard 同款）。
+ * 今天锚取本地日历日（双口径统一，2026-10）：末端=本地今天，清晨骑行计入今日负荷；
+ * 内部日行标签仍沿 activities.date 的 UTC 日口径（聚合桶，段落/图轴只到月粒度）。
  */
 export async function recentFormDaily(days = 90): Promise<{ date: string; tss: number; ctl: number; atl: number; tsb: number }[]> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ d: string | null }>(`SELECT MAX(date) AS d FROM activities`);
   if (!row?.d) return [];
-  // 活动日期为 UTC 口径（records 时间戳的 ISO 前 10 位），今天同样取 UTC
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDay();
   const series = await dailyTssSeries(row.d < today ? today : row.d);
   return formSeriesDaily(series).slice(-days);
 }

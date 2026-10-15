@@ -1,5 +1,5 @@
 /**
- * aiTitle.ts — AI 报告标题装配（App 层：从库里取骑行信息 → core/reportTitle 拼串）
+ * aiTitle.ts — AI 报告标题装配 + 骑行首帧时刻/本地日缓存（App 层）。
  *
  * core/reportTitle 只做日期格式化与分支选择，骑行信息（运动类型、起骑时刻）要在
  * 这里从训练库取：活动行来自 listActivityRideKeys（一次全表查询，按 file_name 建索引），
@@ -10,10 +10,16 @@
  *  - titleCache：标题键（lang + 报告标识字段）→ 标题文本，让「报告详情页 1.5s 轮询
  *    刷新」这类同内容重算只花一次 Map 查找，不再重查库/读盘。
  * 导入、删除、合并重复都会改数据，各自调用 invalidateReportTitles() 清缓存。
+ *
+ * 2026-10 双口径统一：startCache 对外开放（getRideStartAt）——首帧时刻是行级
+ * 本地日历日的唯一精确瞬间源（summary 里没有 start_time），AI 数据面整形
+ * （withLocalActivityDate(s)）与 UI 展示面（useRideDateLabels）共用同一缓存与
+ * 同一换算源，与报告标题天然同口径。
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import type { Lang } from '@/core/i18n';
+import { localDayFromUtc } from '@/core/local-day';
 import { reportTitle, type ReportTitleTranslate, type RideBrief } from '@/core/reportTitle';
 import { listActivityRideKeys } from '@/db';
 import { useI18n } from '@/i18n';
@@ -46,6 +52,60 @@ export function invalidateReportTitles(fileName?: string): void {
 }
 
 /**
+ * 单个骑行的首帧时刻（ISO UTC；带进程内缓存）。本地日历日换算的瞬间源——
+ * AI 数据面整形与 UI 展示面共用，缺 records/读盘失败返回 null（调用方回退 UTC 日）。
+ */
+export async function getRideStartAt(fileName: string): Promise<string | null> {
+  let startAt = startCache.get(fileName);
+  if (startAt === undefined) {
+    startAt = await readStoredRecordStart(fileName);
+    startCache.set(fileName, startAt);
+  }
+  return startAt;
+}
+
+/**
+ * 批量解析骑行本地日历日标签（展示面用）：fileNames → Map(file_name → 本地日)。
+ * 缺首帧/解析失败的键不进 Map，调用方以 `labels.get(name) ?? row.date` 回退存储 UTC 日。
+ * 语义上假定传入的是一小批（调用方大批量自行分片，见 useRideDateLabels）。
+ */
+export async function resolveRideDateLabels(fileNames: (string | null | undefined)[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  for (const name of new Set(fileNames)) {
+    if (!name) continue;
+    const day = localDayFromUtc(await getRideStartAt(name));
+    if (day) out.set(name, day);
+  }
+  return out;
+}
+
+/**
+ * 骑行本地日标签的 React 装配（列表类屏共用）：fileNames 变化时解析。首帧读取是
+ * 整包 gzip 解压（cold ~几十 ms/条），列表 200 行按 8 条分批渐进 setState——先出
+ * UTC 日标签，本地日随解析进度补齐（多数骑行两种口径同日，翻转不可感知）；
+ * 进程内缓存命中后同批同步完成。返回的 Map 只含解析成功的键。
+ */
+export function useRideDateLabels(fileNames: (string | null | undefined)[]): Map<string, string> {
+  const key = fileNames.filter(Boolean).join('|');
+  const [labels, setLabels] = useState<Map<string, string>>(() => new Map());
+  useEffect(() => {
+    let alive = true;
+    const names = key ? key.split('|') : [];
+    void (async () => {
+      for (let i = 0; i < names.length; i += 8) {
+        const batch = await resolveRideDateLabels(names.slice(i, i + 8));
+        if (!alive) return;
+        if (batch.size) setLabels((prev) => new Map([...prev, ...batch]));
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [key]);
+  return labels;
+}
+
+/**
  * 标题键：只含影响标题的字段（轮询产生的同内容新对象命中同一键）。
  * 含时区偏移——标题按本地时区格式化，进程存活期间改时区（罕见）要让键失效。
  */
@@ -62,11 +122,7 @@ async function loadBrief(
   if (!fileName) return null;
   const row = rows.get(fileName);
   if (!row) return null;
-  let startAt = startCache.get(fileName);
-  if (startAt === undefined) {
-    startAt = await readStoredRecordStart(fileName);
-    startCache.set(fileName, startAt);
-  }
+  const startAt = await getRideStartAt(fileName);
   return {
     // 'unknown' 视为未知 → 标题走泛称模板（与列表里显示「未知」徽章同源）
     sport: row.sport === 'unknown' ? null : row.sport,

@@ -45,6 +45,7 @@ import {
   updateAiChatMessage,
   updateAiReport,
   getActivitySummary,
+  listActivityRideKeys,
   listPendingAiReportRefs,
   listPendingChatMessageRefs,
   saveMemory,
@@ -60,16 +61,18 @@ import {
 } from '@/ai/keepalive';
 import { callAI, runAgentLoop } from '@/ai/agent';
 import { t, type Lang } from '@/core/i18n';
-import { localDay } from '@/core/local-day';
+import { localDay, localDayFromUtc } from '@/core/local-day';
+import type { AthleteDossier } from '@/core/dossier';
 import { shouldFlushPartial, withinResumeWindow } from '@/core/report-status';
 import { safeName, thinRecords } from '@/core/records';
 import { extractPlanFromMarkdown, validateTrainingPlan } from '@/core/training-plan';
 
-import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildDossierSection, buildMemorySection, buildMemoryReviewPrompt } from '@/prompts/prompts';
+import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildDossierSection, buildMemorySection, buildMemoryReviewPrompt, withLocalActivityDate, withLocalActivityDates } from '@/prompts/prompts';
 import { buildSkillsSection } from '@/prompts/skills';
 import { buildChatSystemSection } from '@/prompts/chat';
 import { toolDefs, createExecuteTool, type ToolIo } from '@/tools';
 import { loadStoredRecords } from '@/records-store';
+import { getRideStartAt } from './aiTitle';
 import { applyAiFtpUpdate } from './ftp-apply';
 import { reanalyzeActivity } from './reanalyze';
 import { setPowerFlagAndRefresh, recalibrateActivityPower } from './power-calib';
@@ -85,6 +88,7 @@ function buildToolIo(): ToolIo {
       if (!records) return null;
       return thinRecords(records, opts);
     },
+    readRecordStart: (name) => getRideStartAt(name),
     recentFormDaily: (days) => recentFormDaily(days),
     monthlySummary: (n) => monthlySummary(n),
     getAthleteState: () => getAthleteState(),
@@ -173,9 +177,40 @@ async function callAiMaybeAgentic(
 // ---------------- 报告：prompt 组装与生成任务 ----------------
 
 /**
+ * 活动行的首帧时刻映射（withLocalActivityDates 入参；getRideStartAt 自带进程内
+ * 缓存，同屏/同会话重复装配不再读盘）。
+ */
+async function rideStartsOf(rows: { file_name: string }[]): Promise<Map<string, string | null>> {
+  const starts = new Map<string, string | null>();
+  for (const r of rows) starts.set(r.file_name, await getRideStartAt(r.file_name));
+  return starts;
+}
+
+/** 锚 UTC 日 → 本地日历日（按当日任一骑行的首帧换算）；当日无骑行或无首帧返回 null */
+async function localDayOfRideDay(utcDay: string): Promise<string | null> {
+  const rides = await listActivityRideKeys();
+  const hit = rides.find((r) => r.sport === 'cycling' && r.date === utcDay);
+  if (!hit) return null;
+  return localDayFromUtc(await getRideStartAt(hit.file_name));
+}
+
+/**
+ * 档案段入参的锚日本地化（喂模型前，settings 缓存不动）：锚骑行首帧时刻换算
+ * 本地日历日，与「当前时间」段同日历；换算失败保持 UTC 原值。工具层 get_dossier
+ * 的同款整形（含 8 周周界重排）在 tools/execute.ts。
+ */
+async function localAnchorDossier(dossier: AthleteDossier | null): Promise<AthleteDossier | null> {
+  if (!dossier?.anchor_date) return dossier;
+  const local = await localDayOfRideDay(dossier.anchor_date);
+  return local && local !== dossier.anchor_date ? { ...dossier, anchor_date: local } : dossier;
+}
+
+/**
  * 组装报告基础提示词（对标 server.js buildPromptForMode）：数据取数 + 四场景
  * builder。skills 四场景统一注入；该提示词也是"复制提示词"兜底模式的产出
  * （agentic 工具指引与记忆段只在真实调用时追加，复制出去的提示词无法回调本机）。
+ * 双口径统一（2026-10）：数据面的纯日期字段（activity.date / 活动行清单 / 档案锚日）
+ * 喂模型前换算为本地日历日；体能走势序列的 UTC 聚合口径在段落标题内注明。
  */
 export async function buildReportPrompt(
   mode: AiReportMode,
@@ -186,22 +221,23 @@ export async function buildReportPrompt(
   const skills = buildSkillsSection(lang);
   // 个人训练档案段（本地聚合长期基线；无骑行数据为 null 整段省略——首次使用/
   // 空库时提示词与旧形态一致）
-  const dossierSection = buildDossierSection(await getDossier(), lang);
+  const dossierSection = buildDossierSection(await localAnchorDossier(await getDossier()), lang);
   if (mode === 'review') {
     const name = safeName(String(context.file_name ?? ''));
     const summary = name ? await getActivitySummary(name) : null;
     if (!summary)
       throw new Error(t(lang, 'tool.summary_not_found', { name: context.file_name ?? '(未提供)' }));
-    return buildReviewPrompt(summary, athlete, profile, skills, lang, new Date(), dossierSection);
+    return buildReviewPrompt(withLocalActivityDate(summary, name ? await getRideStartAt(name) : null), athlete, profile, skills, lang, new Date(), dossierSection);
   }
   if (mode === 'plan') {
     const daily = await recentFormDaily(56);
     if (!daily.length) throw new Error(t(lang, 'srv.library_empty'));
+    const recent = await listActivities(10);
     return buildPlanPrompt(
       {
         months: await monthlySummary(3),
         formSeries: thinToWeekly(daily),
-        recentActivities: await listActivities(10),
+        recentActivities: withLocalActivityDates(recent, await rideStartsOf(recent)),
       },
       athlete,
       profile,
@@ -215,19 +251,22 @@ export async function buildReportPrompt(
     const raceDate = context.race_date;
     if (!raceDate || !/^\d{4}-\d{2}-\d{2}$/.test(raceDate))
       throw new Error(t(lang, 'srv.race_date'));
-    const today = new Date().toISOString().slice(0, 10);
+    // today 用本地日历日：race_date 是模型/用户按本地日历给的，daysLeft 同日历相减
+    // 才不出一天偏差（UTC+8 清晨原实现整体后移一天）
+    const today = localDay();
     const form = await computeForm(today, lang);
     if (!form) throw new Error(t(lang, 'srv.library_empty'));
     const daysLeft = Math.round(
       (Date.parse(raceDate + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z')) / 86400000,
     );
+    const recent = await listActivities(10);
     return buildTaperPrompt(
       {
         raceDate,
         daysLeft,
         form,
         formSeries: thinToWeekly(await recentFormDaily(56)),
-        recentActivities: await listActivities(10),
+        recentActivities: withLocalActivityDates(recent, await rideStartsOf(recent)),
       },
       athlete,
       profile,
@@ -242,8 +281,17 @@ export async function buildReportPrompt(
     const b = safeName(String(context.compare_with ?? ''));
     const sa = a ? await getActivitySummary(a) : null;
     const sb = b ? await getActivitySummary(b) : null;
-    if (!sa || !sb) throw new Error(t(lang, 'srv.compare_not_found'));
-    return buildComparePrompt(sa, sb, athlete, profile, skills, lang, new Date(), dossierSection);
+    if (!sa || !sb || !a || !b) throw new Error(t(lang, 'srv.compare_not_found'));
+    return buildComparePrompt(
+      withLocalActivityDate(sa, await getRideStartAt(a)),
+      withLocalActivityDate(sb, await getRideStartAt(b)),
+      athlete,
+      profile,
+      skills,
+      lang,
+      new Date(),
+      dossierSection,
+    );
   }
   throw new Error(t(lang, 'srv.unknown_mode', { mode }));
 }
@@ -575,9 +623,12 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
   ]);
   // 专业知识库注入 chat 直接对话与 plan 计划会话；follow_up 快答场景不注入（口径同旧版）
   const skills = chat.mode === 'follow_up' ? null : buildSkillsSection(lang);
-  // follow_up：关联报告正文 + 压缩训练数据（报告可能已被滚动清理，缺则仅靠训练数据）
+  // follow_up：关联报告正文 + 压缩训练数据（报告可能已被滚动清理，缺则仅靠训练数据）；
+  // 双口径统一：summary 的活动日期与档案锚日换算为本地日历日（与「当前时间」段同日历）
   const rep = chat.report_id != null ? await getAiReport(chat.report_id) : null;
-  const summary = chat.mode === 'follow_up' && chat.file_name ? await getActivitySummary(chat.file_name) : null;
+  const rawSummary = chat.mode === 'follow_up' && chat.file_name ? await getActivitySummary(chat.file_name) : null;
+  const rideStart = chat.mode === 'follow_up' && chat.file_name ? await getRideStartAt(chat.file_name) : null;
+  const summary = rawSummary ? withLocalActivityDate(rawSummary, rideStart) : null;
   return buildChatSystemSection(
     {
       mode: chat.mode,
@@ -587,7 +638,7 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
       skills,
       memories,
       now: new Date(),
-      dossierSection: buildDossierSection(dossier, lang),
+      dossierSection: buildDossierSection(await localAnchorDossier(dossier), lang),
       reportMarkdown: rep?.markdown ?? null,
       summary,
       historyTurns: answeredTurns,
