@@ -141,7 +141,7 @@ describe('AiReportBody', () => {
 
   it('pending 态：取消按钮先弹二次确认，确认后才回调 onCancel（token 防误触）', async () => {
     const onCancel = jest.fn();
-    const { getByText } = await renderWithProviders(
+    const { getByText, getByTestId } = await renderWithProviders(
       <AiReportBody
         report={reportOf({ status: 'pending' })}
         progress={null}
@@ -151,6 +151,8 @@ describe('AiReportBody', () => {
         onCancel={onCancel}
       />,
     );
+    // 2026-10-15 视觉强化：按钮改 outlined+图标，testID 钉住取消按钮存在性
+    expect(getByTestId('cancel-generate')).toBeTruthy();
     fireEvent.press(getByText('取消生成'));
     expect(onCancel).not.toHaveBeenCalled(); // 确认框阶段不触发
     expect(Alert.alert).toHaveBeenCalledWith(

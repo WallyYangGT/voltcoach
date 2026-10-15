@@ -50,8 +50,18 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
       { text: t('ai.cancelGenerate'), style: 'destructive', onPress: onCancel },
     ]);
   };
+  // 停止按钮视觉口径（2026-10-15，同 ChatBubbles）：描边 + stop 图标 + 右对齐 +
+  // orange——「停止」是主动控制不是错误恢复，红色系留给 failed 盒；Alert 二次确认
+  // 逻辑不动（token 已在消耗，防误触）
   const cancelButton = generating && !!onCancel && (
-    <Button compact mode="text" textColor={palette.red} onPress={confirmCancel}>
+    <Button
+      compact
+      mode="outlined"
+      icon="stop"
+      textColor={palette.orange}
+      style={styles.cancelBtn}
+      testID="cancel-generate"
+      onPress={confirmCancel}>
       {t('ai.cancelGenerate')}
     </Button>
   );
@@ -146,4 +156,6 @@ const styles = StyleSheet.create({
   failedErr: { color: palette.muted, fontSize: 12 },
   cancelledBox: { borderWidth: 1, borderColor: palette.lineSoft, borderRadius: 10, gap: 6, padding: 12 },
   cancelledText: { color: palette.orange, fontSize: 13, fontWeight: '700' },
+  // 停止按钮：主题 outline 是 line 灰，需显式盖边框色（先例 ai 页 volt 描边）
+  cancelBtn: { borderColor: palette.orange, alignSelf: 'flex-end' },
 });

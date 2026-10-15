@@ -1,7 +1,8 @@
 /**
- * 首页仪表盘（M2）：「和教练讨论一下」输入卡片（首屏最顶——AI 体验整合批 AP1，
- * 替代原右下角对话 FAB）+ 本周训练计划卡 + 负荷仪表盘标题组 +
- * CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练。
+ * 首页仪表盘（M2）：本周训练计划卡 + 今日建议卡 + 负荷仪表盘标题组 +
+ * CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练；
+ * 「和教练讨论一下」输入卡片吸底常驻（2026-10-15 用户需求：位置迁移非推翻 AP1——
+ * 入口从「首屏顶部一处」变「常驻可见」，会话页转场/聚焦链路不动）。
  * 移植自 Web 版 views/dashboard.js：hero 瓦片/趋势/月度/最近训练同在首页（Web 版即此
  * 信息架构），App 侧空库引导语按移动端信息架构改指「记录」tab。数据一次并行取齐：
  * recentFormDaily(90)（趋势图与 hero 大数字同源，序列末端已延伸到今天）/ monthlySummary(6) /
@@ -18,6 +19,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { TrendChart, type TrendPoint } from '@/charts/TrendChart';
@@ -62,8 +64,13 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [ftpOpen, setFtpOpen] = useState(false); // FTP 科学估算面板展开态（dash.ftp_btn）
   const [glossOpen, setGlossOpen] = useState(false); // 指标说明弹窗（标题旁「?」）
-  // LLM Key 已配置（训练计划卡自加载，此处只喂对话 FAB；null=加载中不渲染防闪）
+  // LLM Key 已配置（训练计划卡自加载，此处只喂吸底对话卡；null=加载中不渲染防闪）
   const [configured, setConfigured] = useState<boolean | null>(null);
+  // 键盘可见（吸底卡底部避让：键盘可见时归零防 KeyboardAvoidingView 双垫，照会话页
+  // AskInput 的现成口径——本页虽无输入框，返回键带出键盘残影的场景仍按同口径兜住）
+  const kbVisible = useKeyboardState((s) => s.isVisible);
+  // 吸底卡实测高度（onLayout）：ScrollView 内容末端补等高 padding，防最后一张卡被遮
+  const [dockH, setDockH] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -98,7 +105,7 @@ export default function HomeScreen() {
     <View style={styles.root}>
       <ScrollView
         style={styles.page}
-        contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 96, gap: 12 }}
+        contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 96 + dockH, gap: 12 }}
         refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -110,14 +117,8 @@ export default function HomeScreen() {
           }}
         />
       }>
-      {/* 「和教练讨论一下」输入卡片（AP1 首屏最顶；未配置 Key 整卡隐藏，
-          与计划卡/FAB 同口径）——点击直达新对话页并自动聚焦输入框 */}
-      {configured === true && (
-        <ChatInviteCard onPress={() => router.push('/ai/session/chat-new')} />
-      )}
-
       {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏）。
-          顶卡之下第二位：今天该练什么第一眼可见 */}
+          内容流首位：今天该练什么第一眼可见 */}
       <WeeklyPlanCard />
 
       <View style={styles.titleRow}>
@@ -237,6 +238,17 @@ export default function HomeScreen() {
       {/* 指标说明弹窗（Web 版 glossaryHtml 同源词条） */}
       <GlossaryModal visible={glossOpen} onClose={() => setGlossOpen(false)} />
       </ScrollView>
+
+      {/* 「和教练讨论一下」输入卡吸底常驻（2026-10-15：全宽仿输入框样式不变，
+          位置对标原对话 FAB 的底部区；未配置 Key 整卡隐藏与计划卡同口径）。
+          底部避让照会话页 AskInput 口径：键盘可见时 insets.bottom 归零防双垫 */}
+      {configured === true && (
+        <View
+          style={[styles.inviteDock, { paddingBottom: (kbVisible ? 0 : insets.bottom) + 10 }]}
+          onLayout={(e) => setDockH(e.nativeEvent.layout.height)}>
+          <ChatInviteCard onPress={() => router.push('/ai/session/chat-new')} />
+        </View>
+      )}
     </View>
   );
 }
@@ -305,6 +317,9 @@ function Metric({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.bg },
   page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
+  // 吸底对话卡容器：横向 padding 与内容流对齐；高度经 onLayout 实测后补进
+  // ScrollView 内容末端 padding（96 为底部 tab 预留基线）
+  inviteDock: { paddingHorizontal: 16 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: palette.text, fontSize: 22, fontWeight: '700' },
   glossBtn: {

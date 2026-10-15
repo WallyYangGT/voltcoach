@@ -60,12 +60,17 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
                   ) : (
                     <AiMarkdown markdown={m.content} />
                   ))}
-                {/* 停止按钮只给 AI 气泡（user 消息不存在生成态）；直接停止不弹确认框 */}
+                {/* 停止按钮只给 AI 气泡（user 消息不存在生成态）；直接停止不弹确认框。
+                    视觉口径（2026-10-15）：描边 + stop 图标 + 右对齐 + orange——「停止」是
+                    主动控制不是错误恢复，红色系留给 failed 盒，消掉「红色=出错」的联想 */}
                 {!!onCancelMessage && m.role === 'assistant' && (
                   <Button
                     compact
-                    mode="text"
-                    textColor={palette.red}
+                    mode="outlined"
+                    icon="stop"
+                    textColor={palette.orange}
+                    style={styles.cancelBtn}
+                    testID="cancel-generate"
                     onPress={() => onCancelMessage(m.id)}>
                     {t('ai.cancelGenerate')}
                   </Button>
@@ -77,7 +82,14 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
                 <Text style={styles.cancelledText}>{t('ai.badge.cancelled')}</Text>
                 {/* 重试期间（running）停止按钮同样可达——「疯狂重试能停」不分状态（code-review P1-2） */}
                 {running && !!onCancelMessage && (
-                  <Button compact mode="text" textColor={palette.red} onPress={() => onCancelMessage(m.id)}>
+                  <Button
+                    compact
+                    mode="outlined"
+                    icon="stop"
+                    textColor={palette.orange}
+                    style={styles.cancelBtn}
+                    testID="cancel-generate"
+                    onPress={() => onCancelMessage(m.id)}>
                     {t('ai.cancelGenerate')}
                   </Button>
                 )}
@@ -107,7 +119,14 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
                 {!!m.error && <Text style={styles.failedErr}>{m.error}</Text>}
                 {/* 重试期间（running）停止按钮同样可达（同 cancelled 分支） */}
                 {running && !!onCancelMessage && (
-                  <Button compact mode="text" textColor={palette.red} onPress={() => onCancelMessage(m.id)}>
+                  <Button
+                    compact
+                    mode="outlined"
+                    icon="stop"
+                    textColor={palette.orange}
+                    style={styles.cancelBtn}
+                    testID="cancel-generate"
+                    onPress={() => onCancelMessage(m.id)}>
                     {t('ai.cancelGenerate')}
                   </Button>
                 )}
@@ -156,4 +175,6 @@ const styles = StyleSheet.create({
   failedText: { color: palette.red, fontSize: 13, fontWeight: '700' },
   failedErr: { color: palette.muted, fontSize: 12 },
   cancelledText: { color: palette.orange, fontSize: 13, fontWeight: '700' },
+  // 停止按钮：主题 outline 是 line 灰，需显式盖边框色（先例 ai 页 volt 描边）
+  cancelBtn: { borderColor: palette.orange, alignSelf: 'flex-end' },
 });
