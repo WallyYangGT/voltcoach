@@ -347,6 +347,23 @@ export function planValidity(
   return { state: 'valid', days_left: left };
 }
 
+/**
+ * 按入库时刻（StoredPlan.created_at）定位计划版本——报告↔计划结构化关联的解析半边
+ * （U1 收尾③）：锚是位置无关的 created_at 串，版本号按位置推导（与计划页同口径：
+ * 当前版 = history.length + 1，history[i] = history.length - i）。
+ * 版本被 history_keep 裁出历史后返回 null（UI 显示「已归档」）。
+ */
+export function locatePlanVersion(
+  current: { created_at: string } | null,
+  history: { created_at: string }[],
+  createdAt: string,
+): { versionNo: number; inHistory: boolean } | null {
+  if (current?.created_at === createdAt) return { versionNo: history.length + 1, inHistory: false };
+  const idx = history.findIndex((h) => h.created_at === createdAt);
+  if (idx < 0) return null;
+  return { versionNo: history.length - idx, inHistory: true };
+}
+
 /** 长期视图的周聚合行（week_start 为 ISO 周一；recovery = 相对全计划最大周的减量周标记） */
 export interface PlanWeekAgg {
   week_start: string;

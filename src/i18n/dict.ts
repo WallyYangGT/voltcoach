@@ -358,6 +358,9 @@ export const DICT = {
     // 注意：toolRunning/toolDone/degraded/stream_truncated 是服务层（core/i18n）文案，
     // 经 GenProgress.activity 预本地化透传，不在此词典（code-review 修正）
     'ai.cancelGenerate': '取消生成',
+    // 报告↔计划结构化关联（U1③：锚在 settings 链接行，chip 在 PlanLinkChip）
+    'ai.plan_link.chip': '关联计划 · 第 {n} 版（{from} ~ {to}）',
+    'ai.plan_link.archived': '关联计划版本已归档',
     'ai.cancelConfirmTitle': '取消本次生成？',
     'ai.cancelConfirmBody': '将停止生成，已生成的部分会保留，可稍后重试；已消耗的 token 不退还。',
     'ai.badge.cancelled': '已取消',
@@ -1119,6 +1122,9 @@ export const DICT = {
     'ai.elapsed': 'Waiting {t}',
     // ---- 2026-10: generation cancel + incremental live preview ----
     'ai.cancelGenerate': 'Cancel generation',
+    // Report ↔ plan link (U1: anchor in settings row, chip rendered by PlanLinkChip)
+    'ai.plan_link.chip': 'Linked plan · v{n} ({from} ~ {to})',
+    'ai.plan_link.archived': 'Linked plan version archived',
     'ai.cancelConfirmTitle': 'Cancel this generation?',
     'ai.cancelConfirmBody': 'Generation stops and the partial output is kept for later retry. Tokens already spent are not refunded.',
     'ai.badge.cancelled': 'Cancelled',

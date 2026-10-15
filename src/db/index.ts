@@ -1888,3 +1888,56 @@ export async function savePlanVersion(
   });
   return versionsTotal;
 }
+
+// ---------------- 报告 ↔ 计划结构化关联（U1 收尾③，settings 松散引用行） ----------------
+// 拍板（2026-10-15）：不加列、不动 SCHEMA_VERSION 与备份包闸门——沿 ai_ftp_update 快照
+// 先例走 settings JSON 行。锚 = StoredPlan.created_at（位置无关，版本被替换/挪历史后
+// 仍可定位）；版本号展示按位置推导（locatePlanVersion）。上限条数防 reports 滚动保留
+// 期间链接行无界增长（ai_reports 每 mode 留 30，四 mode 最多 ~120 行链接）。
+
+const PLAN_LINKS_KEY = 'plan_report_links';
+const PLAN_LINKS_CAP = 200;
+
+/** 报告关联的计划锚（该报告生成完成时锚定的 StoredPlan.created_at；无关联返回 null） */
+export async function getPlanReportLink(reportId: number): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`,
+    PLAN_LINKS_KEY,
+  );
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.value) as Record<string, string>;
+    const anchor = parsed[String(reportId)];
+    return typeof anchor === 'string' ? anchor : null;
+  } catch {
+    return null; // 行损坏按无关联处理
+  }
+}
+
+/** 记一条报告→计划锚（generateReport 收尾调用；超上限剪最旧——对象键插入序） */
+export async function recordPlanReportLink(reportId: number, planCreatedAt: string): Promise<void> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`,
+    PLAN_LINKS_KEY,
+  );
+  let links: Record<string, string> = {};
+  if (row) {
+    try {
+      const parsed = JSON.parse(row.value);
+      if (parsed && typeof parsed === 'object') links = parsed;
+    } catch {
+      links = {}; // 行损坏重开
+    }
+  }
+  links[String(reportId)] = planCreatedAt;
+  const keys = Object.keys(links);
+  for (const k of keys.slice(0, Math.max(0, keys.length - PLAN_LINKS_CAP))) delete links[k];
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    PLAN_LINKS_KEY,
+    JSON.stringify(links),
+  );
+}

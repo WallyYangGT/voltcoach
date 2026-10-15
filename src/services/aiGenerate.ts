@@ -40,6 +40,7 @@ import {
   monthlySummary,
   recentFormDaily,
   addAiChatMessage,
+  recordPlanReportLink,
   savePlanVersion,
   touchAiChat,
   updateAiChatMessage,
@@ -438,7 +439,18 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     await updateAiReport(reportId, { markdown, status: 'completed', error: null });
     // v2 训练计划载体：plan 报告完成后提取 ```plan-json 结构化计划落库（失败仅告警，
     // 不影响报告完成态——首页卡按「上次生成未产出有效计划」降级提示，可重新生成）
-    if (report.mode === 'plan') await extractAndStorePlanFromReport(reportId, markdown, lang);
+    let linkedPlanCreatedAt: string | null = null;
+    if (report.mode === 'plan') {
+      linkedPlanCreatedAt = await extractAndStorePlanFromReport(reportId, markdown, lang);
+    }
+    // 报告↔计划结构化关联（U1 收尾③）：settings 松散引用行。plan 模式锚产出的新版本
+    // （提取失败不锚）；其它模式锚生成时的当前版（无计划不写）。失败只告警不损报告。
+    try {
+      const anchor = linkedPlanCreatedAt ?? (report.mode === 'plan' ? null : (await getCurrentPlan())?.created_at ?? null);
+      if (anchor) await recordPlanReportLink(reportId, anchor);
+    } catch (e) {
+      console.warn(`[AI] 报告 #${reportId} 的计划关联写入失败（不影响报告）:`, e);
+    }
     // 确定性记忆回顾轮（2026-10-13 拍板，decisions §20）：mem.rule.2「收尾回顾补记」
     // 此前 100% 依赖模型在主生成轮自觉执行，工具降级/轮数耗尽/模型偷懒三条静默路径
     // 都会让记忆绝迹——报告完成后编排层强制补跑一次回顾（见 runMemoryReviewRound），
@@ -494,12 +506,13 @@ export async function cancelReportGeneration(reportId: number): Promise<boolean>
  * plan 报告生成成功后的结构化计划提取：```plan-json 围栏 → create 档校验
  * （合理性只警告不拒收）→ savePlanVersion 落库。全程自吞异常——提取失败只告警，
  * 报告保持 completed（正文仍是完整的规划解读；结构化计划可重新生成补齐）。
+ * 返回落库版本的 created_at（U1③ 报告→计划锚；提取失败返回 null）。
  */
 async function extractAndStorePlanFromReport(
   reportId: number,
   markdown: string,
   lang: Lang,
-): Promise<void> {
+): Promise<string | null> {
   try {
     const { plan, error } = extractPlanFromMarkdown(markdown, lang);
     if (!plan) throw new Error(error ?? t(lang, 'tp.no_block'));
@@ -513,8 +526,12 @@ async function extractAndStorePlanFromReport(
     console.log(
       `[AI] 结构化计划已从报告 #${reportId} 落库（${v.plan.sessions.length} 课次，合理性提示 ${v.warnings.length} 条）`,
     );
+    // 刚落库的版本即当前版，读回 created_at 作报告→计划锚（savePlanVersion 不回传锚）
+    const stored = await getCurrentPlan().catch(() => null);
+    return stored?.created_at ?? null;
   } catch (e) {
     console.warn(`[AI] 报告 #${reportId} 的结构化计划提取失败（报告已完成，可重新生成）:`, e);
+    return null;
   }
 }
 

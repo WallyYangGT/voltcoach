@@ -9,7 +9,7 @@
  * 进页补跑不在进程内跑的占位消息，轮询收尾静默重载计划（调整可能已落新版本）。
  * 未配置 LLM Key 显示去配置引导（本页正常只从首页计划卡进入，防御可达路径）。
  */
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button, SegmentedButtons } from 'react-native-paper';
@@ -71,6 +71,12 @@ export default function PlanScreen() {
   const insets = useSafeAreaInsets();
   const kbVisible = useKeyboardState((s) => s.isVisible);
   const scrollRef = useRef<ScrollView>(null);
+  // 深链 version 参数（U1③：报告 chip「关联计划 · 第 N 版」→ 定位历史版本）
+  const params = useLocalSearchParams<{ version?: string | string[] }>();
+  const rawVersion = Array.isArray(params.version) ? params.version[0] : params.version;
+  const pendingVersionRef = useRef<number | null>(
+    rawVersion != null && /^\d+$/.test(rawVersion) ? Number(rawVersion) : null,
+  );
 
   const [cfg, setCfg] = useState<boolean | null>(null);
   const [stored, setStored] = useState<StoredPlan | null>(null);
@@ -126,6 +132,19 @@ export default function PlanScreen() {
       void load();
     }, [load]),
   );
+
+  // 深链版本定位（U1③）：历史加载后把 version 序号换算为 history 下标消费一次，
+  // 越界/已被 history_keep 裁剪 → 静默停在当前版；历史条目点击同款（setViewing + 长期视图）
+  useEffect(() => {
+    if (cfg == null || pendingVersionRef.current == null) return; // 未加载完不消费
+    const n = pendingVersionRef.current;
+    pendingVersionRef.current = null;
+    const idx = history.length - n;
+    if (idx >= 0 && idx < history.length) {
+      setViewing(idx);
+      setTab('long');
+    }
+  }, [cfg, history]);
 
   // 会话：残留补跑 + pending 轮询（口径同 ai/session/[id]），收尾静默重载计划
   useEffect(() => {

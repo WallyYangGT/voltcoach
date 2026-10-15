@@ -18,6 +18,7 @@ import type { GenProgress } from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiMarkdown } from './AiMarkdown';
+import { PlanLinkChip } from './PlanLinkChip';
 
 /** 已等待时长：秒 → "m:ss"（超过 1 小时只显示到分） */
 function fmtElapsed(sec: number): string {
@@ -143,11 +144,22 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
     );
   }
 
+  // 报告↔计划结构化关联（U1③）：completed 态顶部条件小链接（无关联的存量报告整段隐藏）
+  if (report.status === 'completed') {
+    return (
+      <View style={styles.completedWrap}>
+        <PlanLinkChip reportId={report.id} />
+        <AiMarkdown markdown={report.markdown} />
+      </View>
+    );
+  }
+
   return <AiMarkdown markdown={report.markdown} />;
 }
 
 const styles = StyleSheet.create({
   block: { gap: 4, paddingVertical: 6 },
+  completedWrap: { gap: 6, paddingVertical: 6 },
   pending: { color: palette.text, fontSize: 13, lineHeight: 20 },
   hint: { color: palette.faint, fontSize: 11.5, lineHeight: 17 },
   activity: { color: palette.orange, fontSize: 11.5, lineHeight: 17 },
