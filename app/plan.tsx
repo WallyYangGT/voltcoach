@@ -45,6 +45,7 @@ import {
 } from '@/core/training-plan';
 import { PlanTable, type PlanTableColumn } from '@/components/PlanTable';
 import { PlanAdherenceCard } from '@/components/PlanAdherenceCard';
+import { PlanAdjustBanner } from '@/components/PlanAdjustBanner';
 import { PlanReportSection } from '@/components/PlanReportSection';
 import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { AskInput } from '@/components/AskInput';
@@ -435,6 +436,9 @@ export default function PlanScreen() {
             </Pressable>
           </View>
         )}
+
+        {/* AI 调整披露条（U1 收尾④：当前版来自会话调整时显示摘要 + 撤销入口） */}
+        <PlanAdjustBanner />
 
         {/* 历史版本查看条 */}
         {viewing != null && history[viewing] && (

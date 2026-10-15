@@ -42,6 +42,7 @@ import { ChatInviteCard } from '@/components/ChatInviteCard';
 import { AiFtpUpdateBanner } from '@/components/AiFtpUpdateBanner';
 import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
+import { PlanAdjustBanner } from '@/components/PlanAdjustBanner';
 import { TodayAdviceCard } from '@/components/TodayAdviceCard';
 import { WeeklyPlanCard } from '@/components/WeeklyPlanCard';
 import { useI18n } from '@/i18n';
@@ -132,6 +133,9 @@ export default function HomeScreen() {
       {/* 今日建议卡（U1 收尾①：本地零 token「今天怎么办」，与计划卡「这周怎么排」分工；
           纯本地计算不被 LLM Key 门控，空库整卡隐藏） */}
       <TodayAdviceCard last={last} athlete={data?.athlete ?? null} trainedToday={trainedToday} />
+
+      {/* AI 调整披露条（U1 收尾④：当前版来自会话调整时显示摘要 + 撤销入口） */}
+      <PlanAdjustBanner />
 
       <View style={styles.titleRow}>
         <Text style={styles.title}>{t('dash.title')}</Text>

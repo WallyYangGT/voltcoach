@@ -1941,3 +1941,34 @@ export async function recordPlanReportLink(reportId: number, planCreatedAt: stri
     JSON.stringify(links),
   );
 }
+
+/**
+ * 撤销最近一次计划版本替换（U1 收尾④「披露与可逆」的撤销半边）：事务内
+ * current ↔ history[0] 交换——被撤销的版本进历史头部（再点一次撤销可换回，
+ * 无数据丢失）；history_keep 裁剪口径不变。无历史版本或状态异常返回 false。
+ */
+export async function undoLastPlanVersion(): Promise<boolean> {
+  const db = await getDb();
+  let undone = false;
+  await db.withTransactionAsync(async () => {
+    const [current, history] = await Promise.all([getCurrentPlan(), getPlanHistory()]);
+    // 只有历史而没有当前版属异常状态（savePlanVersion 先有当前版才有历史），不动
+    if (!current || history.length === 0) return;
+    const restored = history[0];
+    const versions = [current, ...history.slice(1)].slice(0, PLAN_VALIDATION.history_keep);
+    await db.runAsync(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      PLAN_HISTORY_KEY,
+      JSON.stringify({ shape: PLAN_STORE_SHAPE, versions } satisfies PlanHistoryEntry),
+    );
+    await db.runAsync(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      PLAN_CURRENT_KEY,
+      JSON.stringify({ shape: PLAN_STORE_SHAPE, current: restored } satisfies PlanCurrentEntry),
+    );
+    undone = true;
+  });
+  return undone;
+}
