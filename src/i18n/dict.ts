@@ -137,7 +137,7 @@ export const DICT = {
     // ---- 底部导航（App 新信息架构） ----
     'tab.home': '首页',
     'tab.activities': '记录',
-    'tab.ai': 'AI',
+    'tab.ai': '对话',
     'tab.me': '我的',
 
     // ---- M2：首页仪表盘（dash.* 文案与 Web 版同 key 逐字一致；empty 按 App 信息架构改指「记录」tab，AP5 随 tab 改名联动） ----
@@ -276,7 +276,7 @@ export const DICT = {
     'gloss.a4.d': '本机把训练数据、负荷走势与指标口径拼装成 Markdown 提示词，调用 OpenAI 兼容接口（默认 Kimi）生成报告；未配置 API 密钥时展示完整提示词，可一键复制到任意 AI 使用。',
 
     'activities.title': '记录',
-    'ai.title': 'AI',
+    'ai.title': '对话',
     // ---- M3：AI 会话中心（统一历史列表 + Bottom Sheet 场景选择流） ----
     'ai.center.new': '新对话',
     'ai.center.report': '生成报告',
@@ -778,7 +778,7 @@ export const DICT = {
 
     'tab.home': 'Home',
     'tab.activities': 'Records',
-    'tab.ai': 'AI',
+    'tab.ai': 'Chat',
     'tab.me': 'Me',
 
     'dash.title': 'Load Dashboard',
@@ -912,7 +912,7 @@ export const DICT = {
     'gloss.a4.d': 'On-device, training data, load trends and metric definitions are assembled into a Markdown prompt and sent to an OpenAI-compatible API (Kimi by default); without an API key the full prompt is shown for one-click copy to any AI.',
 
     'activities.title': 'Records',
-    'ai.title': 'AI',
+    'ai.title': 'Chat',
     'me.title': 'Me',
     'me.ftp': 'FTP',
     'me.maxhr': 'Max HR',
