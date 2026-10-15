@@ -437,8 +437,13 @@ export default function PlanScreen() {
           </View>
         )}
 
-        {/* AI 调整披露条（U1 收尾④：当前版来自会话调整时显示摘要 + 撤销入口） */}
-        <PlanAdjustBanner />
+        {/* AI 调整披露条（U1 收尾④）：props 驱动——页面轮询收尾 load() 刷新 stored/
+            history，本页内完成的调整立即反映（§22 P1-3「banner 不可达」同款教训） */}
+        <PlanAdjustBanner
+          stored={stored}
+          history={history}
+          onChanged={load}
+        />
 
         {/* 历史版本查看条 */}
         {viewing != null && history[viewing] && (

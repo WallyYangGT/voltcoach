@@ -29,6 +29,9 @@
  *   MOCK_TOOL_SCRIPT=plan_ops —— 课次级局部调整剧本：get_training_plan →
  *   adjust_plan_sessions 单课 move（阈值课 d1→d5）→ 正文确认，用于「局部调整 → 落库 →
  *   撤销」冒烟；请求体字节数已打日志（与 plan_adjust 对比局部 vs 整发的载荷）。
+ *   （plan 系三剧本自 2026-10-15 起同时支持流式与非流式：App 生成链路 §23 起强制
+ *   流式，流式形态下发 SSE delta tool_calls 增量帧 + 内容分帧 + [DONE]；
+ *   ftp/memory 剧本仍只支持非流式——历史冒烟用，如需流式 e2e 随 plan 系模式补齐。）
  *   MOCK_TOOL_SCRIPT=memory —— 记忆回顾剧本：save_memory（scope=short 演示分层）→
  *   正文「已记录」。主生成轮与报告后记忆回顾轮各自最多触发一次记录，用于
  *   「报告后确定性记忆回顾 + 记忆页短期/长期分区」冒烟。
@@ -161,9 +164,10 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // 计划剧本（MOCK_TOOL_SCRIPT=plan / plan_adjust / plan_ops）：按历史中 role:"tool" 消息数确定轮次
+    // 计划剧本（MOCK_TOOL_SCRIPT=plan / plan_adjust / plan_ops）：按历史中 role:"tool"
+    // 消息数确定轮次。⚠️ App 生成链路自 §23 起强制流式——剧本必须同时支持流式
+    // （SSE delta tool_calls 增量帧 + 内容分帧 + [DONE]）与非流式两种形态
     if (
-      !stream &&
       (TOOL_SCRIPT === 'plan' || TOOL_SCRIPT === 'plan_adjust' || TOOL_SCRIPT === 'plan_ops') &&
       Array.isArray(parsed.tools) &&
       parsed.tools.length > 0
@@ -197,7 +201,25 @@ const server = http.createServer((req, res) => {
       console.log(`  -> mock script ${TOOL_SCRIPT}: request ${body.length} bytes, msgs=${parsed.messages?.length ?? 0}`);
       if (toolMsgCount < steps.length) {
         const step = steps[toolMsgCount];
-        console.log(`  -> mock script ${TOOL_SCRIPT}: issue ${step.name} (round ${toolMsgCount + 1})`);
+        console.log(`  -> mock script ${TOOL_SCRIPT}: issue ${step.name} (round ${toolMsgCount + 1}, stream=${stream})`);
+        const argsJson = JSON.stringify(step.args);
+        if (stream) {
+          // 流式形态：SSE delta 帧——首帧带 id/name，参数 JSON 分块增量，finish_reason 收尾
+          res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+          const sse = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+          const id = `mock-plan-${toolMsgCount}`;
+          sse({
+            id,
+            choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `${id}-call`, type: 'function', function: { name: step.name, arguments: '' } }] } }],
+          });
+          for (let i = 0; i < argsJson.length; i += 64) {
+            sse({ id, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: argsJson.slice(i, i + 64) } }] } }] });
+          }
+          sse({ id, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
+          res.write('data: [DONE]\n\n');
+          res.end();
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -212,7 +234,7 @@ const server = http.createServer((req, res) => {
                     {
                       id: `mock-plan-call-${toolMsgCount}`,
                       type: 'function',
-                      function: { name: step.name, arguments: JSON.stringify(step.args) },
+                      function: { name: step.name, arguments: argsJson },
                     },
                   ],
                 },
@@ -226,8 +248,20 @@ const server = http.createServer((req, res) => {
       // 剧本工具用尽 → 正文回复（plan 末轮附 plan-json 块，供 App 提取落库）
       const reply =
         TOOL_SCRIPT === 'plan' ? PLAN_REPLY() : TOOL_SCRIPT === 'plan_ops' ? PLAN_OPS_REPLY : ADJUST_REPLY;
-      console.log(`  -> mock script ${TOOL_SCRIPT}: final reply`);
+      console.log(`  -> mock script ${TOOL_SCRIPT}: final reply (stream=${stream})`);
       contentCalls += 1;
+      if (stream) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+        const sse = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+        const id = `mock-${TOOL_SCRIPT}-final`;
+        for (let i = 0; i < reply.length; i += 60) {
+          sse({ id, choices: [{ index: 0, delta: { content: reply.slice(i, i + 60) } }] });
+        }
+        sse({ id, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(
         JSON.stringify({

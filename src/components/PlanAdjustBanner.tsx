@@ -3,9 +3,13 @@
  *
  * 当前版 origin='adjust'（最近一次落库来自会话调整）时显示摘要（哪天调的 +
  * change_note）+ 撤销入口：undoLastPlanVersion 回滚上一版本（current↔history[0]
- * 交换，可再撤销换回）。沿 AiFtpUpdateBanner 先例（voltDim 描边 + Alert 二次确认），
- * 自加载（getCurrentPlan + getPlanHistory，useFocusEffect 每次回焦点重取——
- * WeeklyPlanCard 同款，tab 常驻挂载下调整后返回首页立即可见）。
+ * 交换，可再撤销换回）。沿 AiFtpUpdateBanner 先例（voltDim 描边 + Alert 二次确认）。
+ *
+ * 数据两条路（§22 P1-3 同款教训：tab 常驻挂载下「只在挂载时自查」会漏更新）：
+ * - props 传入（plan 页）：页面轮询收尾 load() 刷新 stored/history，本页内完成的
+ *   调整立即反映；
+ * - 自加载（首页）：getCurrentPlan + getPlanHistory + useFocusEffect 每次回焦点
+ *   重取——调整发生在计划页，返回首页即回焦点，立即可见。
  * 显示条件：当前版是 adjust 落库——被生成新版替换/手动撤销后自然隐藏。
  */
 import { useFocusEffect } from 'expo-router';
@@ -16,15 +20,25 @@ import { localDayFromUtc } from '@/core/local-day';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
-export function PlanAdjustBanner({ onChanged }: { onChanged?: () => void }) {
+interface Props {
+  /** 由宿主下传（plan 页：轮询收尾已刷新）；缺省自加载（首页） */
+  stored?: StoredPlan | null;
+  /** 与 stored 配套的历史（撤销入口的可达判断用）；缺省自加载 */
+  history?: StoredPlan[];
+  /** 撤销成功后回调（宿主刷新自身数据） */
+  onChanged?: () => void;
+}
+
+export function PlanAdjustBanner({ stored: storedProp, history: historyProp, onChanged }: Props) {
   const { t } = useI18n();
-  const [data, setData] = useState<{ stored: StoredPlan; history: StoredPlan[] } | null>(null);
+  const [self, setSelf] = useState<{ stored: StoredPlan; history: StoredPlan[] } | null>(null);
   const [busy, setBusy] = useState(false);
+  const selfMode = storedProp === undefined;
 
   const load = useCallback(async () => {
     try {
       const [stored, history] = await Promise.all([getCurrentPlan(), getPlanHistory()]);
-      setData(stored ? { stored, history } : null);
+      setSelf(stored ? { stored, history } : null);
     } catch (e) {
       console.warn('计划调整披露条加载失败:', e);
     }
@@ -32,12 +46,12 @@ export function PlanAdjustBanner({ onChanged }: { onChanged?: () => void }) {
 
   useFocusEffect(
     useCallback(() => {
-      void load();
-    }, [load]),
+      if (selfMode) void load();
+    }, [selfMode, load]),
   );
 
-  if (!data || data.stored.origin !== 'adjust') return null;
-  const { stored, history } = data;
+  const stored = selfMode ? (self?.stored ?? null) : (storedProp ?? null);
+  const history = selfMode ? (self?.history ?? []) : (historyProp ?? []);
 
   const undo = () => {
     Alert.alert(t('plan.adjust.undo_title'), t('plan.adjust.undo_body'), [
@@ -50,7 +64,7 @@ export function PlanAdjustBanner({ onChanged }: { onChanged?: () => void }) {
           undoLastPlanVersion()
             .then((ok) => {
               if (ok) {
-                void load(); // 撤销后当前版回退为 generate → 条目自然隐藏
+                if (selfMode) void load(); // 撤销后当前版回退为 generate → 条目自然隐藏
                 onChanged?.();
               } else {
                 Alert.alert(t('plan.adjust.undo_title'), t('plan.adjust.undo_stale'));
@@ -61,11 +75,12 @@ export function PlanAdjustBanner({ onChanged }: { onChanged?: () => void }) {
               Alert.alert(t('data.err.generic'), e instanceof Error ? e.message : String(e));
             })
             .finally(() => setBusy(false));
-          },
+        },
       },
     ]);
   };
 
+  if (!stored || stored.origin !== 'adjust') return null;
   const day = localDayFromUtc(stored.created_at) ?? stored.created_at.slice(0, 10);
   return (
     <View style={styles.banner} testID="plan-adjust-banner">

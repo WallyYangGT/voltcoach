@@ -108,4 +108,20 @@ describe('PlanAdjustBanner', () => {
     });
     expect(undoLastPlanVersion).toHaveBeenCalledTimes(1);
   });
+
+  it('props 模式（plan 页）：不自查请求，adjust 版直接显示；宿主刷新下传 generate 版即隐藏', async () => {
+    const screen = await renderWithProviders(
+      <PlanAdjustBanner stored={plan()} history={[generateOrigin()]} />,
+    );
+    await act(async () => {});
+    expect(screen.getByTestId('plan-adjust-banner')).toBeTruthy();
+    expect(screen.getByText(/周一阈值课顺延至周二/)).toBeTruthy();
+    expect(getCurrentPlan).not.toHaveBeenCalled(); // props 模式不自查（冒烟实证本页内调整的即时反映）
+
+    const regenerated = await renderWithProviders(
+      <PlanAdjustBanner stored={generateOrigin()} history={[plan()]} />,
+    );
+    await act(async () => {});
+    expect(regenerated.queryByTestId('plan-adjust-banner')).toBeNull();
+  });
 });
