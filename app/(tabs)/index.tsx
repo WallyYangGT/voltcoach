@@ -19,7 +19,6 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { TrendChart, type TrendPoint } from '@/charts/TrendChart';
@@ -69,9 +68,6 @@ export default function HomeScreen() {
   const [glossOpen, setGlossOpen] = useState(false); // 指标说明弹窗（标题旁「?」）
   // LLM Key 已配置（训练计划卡自加载，此处只喂吸底对话卡；null=加载中不渲染防闪）
   const [configured, setConfigured] = useState<boolean | null>(null);
-  // 键盘可见（吸底卡底部避让：键盘可见时归零防 KeyboardAvoidingView 双垫，照会话页
-  // AskInput 的现成口径——本页虽无输入框，返回键带出键盘残影的场景仍按同口径兜住）
-  const kbVisible = useKeyboardState((s) => s.isVisible);
   // 吸底卡实测高度（onLayout）：ScrollView 内容末端补等高 padding，防最后一张卡被遮
   const [dockH, setDockH] = useState(0);
 
@@ -256,11 +252,12 @@ export default function HomeScreen() {
       </ScrollView>
 
       {/* 「和教练讨论一下」输入卡吸底常驻（2026-10-15：全宽仿输入框样式不变，
-          位置对标原对话 FAB 的底部区；未配置 Key 整卡隐藏与计划卡同口径）。
-          底部避让照会话页 AskInput 口径：键盘可见时 insets.bottom 归零防双垫 */}
+          位置对标原 FAB 的底部区；未配置 Key 整卡隐藏与计划卡同口径）。
+          底部间距压到 6px（用户反馈贴近 tab 栏）：tab 屏里手势区已被 tab 栏消费，
+          不再加 insets.bottom（与 tab 栏双计会造成大空隙）；键盘可见时归零 */}
       {configured === true && (
         <View
-          style={[styles.inviteDock, { paddingBottom: (kbVisible ? 0 : insets.bottom) + 10 }]}
+          style={styles.inviteDock}
           onLayout={(e) => setDockH(e.nativeEvent.layout.height)}>
           <ChatInviteCard onPress={() => router.push('/ai/session/chat-new')} />
         </View>
@@ -333,9 +330,9 @@ function Metric({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.bg },
   page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
-  // 吸底对话卡容器：横向 padding 与内容流对齐；高度经 onLayout 实测后补进
-  // ScrollView 内容末端 padding（96 为底部 tab 预留基线）
-  inviteDock: { paddingHorizontal: 16 },
+  // 吸底对话卡容器：横向 padding 与内容流对齐，底部 6px 贴近 tab 栏；高度经
+  // onLayout 实测后补进 ScrollView 内容末端 padding（96 为底部 tab 预留基线）
+  inviteDock: { paddingHorizontal: 16, paddingBottom: 6 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: palette.text, fontSize: 22, fontWeight: '700' },
   glossBtn: {
