@@ -41,6 +41,7 @@ import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
 import { WeeklyPlanCard } from '@/components/WeeklyPlanCard';
 import { useI18n } from '@/i18n';
+import { useRideDateLabels } from '@/services/aiTitle';
 import { palette } from '@/theme';
 
 /** 仪表盘一次加载的数据包（loading 态用 null 区分于空库） */
@@ -90,6 +91,8 @@ export default function HomeScreen() {
   );
 
   const last = data && data.daily.length ? data.daily[data.daily.length - 1] : null;
+  // 最近训练行日期按本地日历日展示（双口径统一，与训练列表/报告标题同源同口径）
+  const dateLabels = useRideDateLabels((data?.recent ?? []).map((r) => r.file_name));
 
   return (
     <View style={styles.root}>
@@ -210,7 +213,7 @@ export default function HomeScreen() {
                 })
               }>
               <View style={styles.recentTop}>
-                <Text style={styles.recentDate}>{item.date}</Text>
+                <Text style={styles.recentDate}>{dateLabels.get(item.file_name) ?? item.date}</Text>
                 <View style={styles.badges}>
                   <Text style={[styles.recentSport, item.category === 'race' && { color: palette.volt }]}>
                     {t(`cat.${item.category}` as never)}

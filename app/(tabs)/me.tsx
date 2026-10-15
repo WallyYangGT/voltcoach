@@ -20,6 +20,7 @@ import {
 import { OnelapSyncCard } from '@/components/OnelapSyncCard';
 import { KeepAliveCard } from '@/components/KeepAliveCard';
 import type { FormSnapshot } from '@/core/form';
+import { localDay } from '@/core/local-day';
 import type { AthleteParams } from '@/core/settings';
 import { computeForm, getAiConfig, getAthleteState, getProfile, rebuildDossierQuietly, setAiConfig, setAthlete, setProfile } from '@/db';
 import { useI18n } from '@/i18n';
@@ -74,7 +75,8 @@ export default function MeScreen() {
 
   const load = useCallback(async () => {
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      // 今天用本地日历日（双口径统一）：清晨打开设置页体能指数反映的是今天而不是昨天
+      const today = localDay();
       const [state, form, prof, ai] = await Promise.all([
         getAthleteState(),
         computeForm(today, lang),

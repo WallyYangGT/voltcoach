@@ -26,4 +26,4 @@
 ## Aligning with the current time
 
 - The "Current Date & Time" section of the prompt gives today's date, weekday, time and timezone; base all "this week / next week / days to race" reasoning on it.
-- Activity dates in the training library are UTC-based and may differ from the local calendar by one day; use local dates for future scheduling and mind the gap when citing past activities.
+- Activity dates in the training library share the same local calendar as the "Current Date & Time" section (early-morning sessions already converted) — reason on one calendar directly. Only the CTL/ATL/TSB trend series and monthly summaries are aggregated by UTC calendar day (noted in their section headings); mind that gap when citing them for a specific day.

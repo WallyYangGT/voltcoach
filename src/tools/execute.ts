@@ -22,7 +22,8 @@ import type { AthleteParams } from '../core/settings.ts';
 import { AGENTIC, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from '../core/settings.ts';
 import { estimateFtpFromHistory, type CyclingRideInput } from '../core/ftp.ts';
 import { t, type Lang } from '../core/i18n.ts';
-import { localDay } from '../core/local-day.ts';
+import { localDay, localDayFromUtc } from '../core/local-day.ts';
+import { addDaysStr } from '../core/dossier.ts';
 import { safeName, type ThinResult } from '../core/records.ts';
 import {
   formatPlanIssue,
@@ -31,7 +32,13 @@ import {
   type PlanIssue,
   type TrainingPlan,
 } from '../core/training-plan.ts';
-import { compactSummaryForPrompt, localizeTimestamps, type PromptProfile } from '../prompts/prompts.ts';
+import {
+  compactSummaryForPrompt,
+  localizeTimestamps,
+  withLocalActivityDate,
+  withLocalActivityDates,
+  type PromptProfile,
+} from '../prompts/prompts.ts';
 import { generateWorkout, simulateForm, type PlanDay } from '../planning/planning.ts';
 
 /** 工具层数据访问接口（由服务层绑定 db / records-store，测试注入假实现） */
@@ -57,6 +64,11 @@ export interface ToolIo {
    * 绑定层：records-store 读取 → parseRecordsCsv → thinRecords（口径与旧 loadRecords 一致）。
    */
   loadRecords(fileName: string, opts: { maxPoints: number; startSec?: number; endSec?: number }): Promise<ThinResult | null>;
+  /**
+   * records 首帧时间戳（起骑时刻 ISO UTC；本地日历日换算的瞬间源）；无数据返回 null。
+   * 绑定层：records-store.readStoredRecordStart（带进程内缓存，导入/删除/合并时失效）。
+   */
+  readRecordStart(fileName: string): Promise<string | null>;
   /** 最近 N 天逐日负荷序列 */
   recentFormDaily(days: number): Promise<{ date: string; tss: number; ctl: number; atl: number; tsb: number }[]>;
   /** 最近 N 个月汇总 */
@@ -134,6 +146,8 @@ const toolListActivities: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
   const limit = clampInt(args?.limit, 1, AGENTIC.list_limit, 20);
   let list = await io.listActivities();
+  // 日期范围过滤按存储 UTC 日比较（存储列是纯日期、无时刻不可精确换算，清晨骑行的
+  // 边缘 ±1 天可接受）；返回结果的 date 在下方统一改写为本地日历日
   if (args?.start_date != null) {
     if (!DATE_RE.test(String(args.start_date)))
       return errResult(t(lang, 'tool.date_invalid', { key: 'start_date' }));
@@ -146,7 +160,10 @@ const toolListActivities: ToolImpl = async (args, ctx, io) => {
   }
   if (args?.sport != null) list = list.filter((a) => a.sport === args.sport);
   if (args?.category != null) list = list.filter((a) => a.category === args.category);
-  return toResult({ count: Math.min(list.length, limit), activities: list.slice(0, limit) }, lang);
+  const page = list.slice(0, limit);
+  const starts = new Map<string, string | null>();
+  for (const a of page) starts.set(a.file_name, await io.readRecordStart(a.file_name));
+  return toResult({ count: page.length, activities: withLocalActivityDates(page, starts) }, lang);
 };
 
 const toolGetActivitySummary: ToolImpl = async (args, ctx, io) => {
@@ -155,7 +172,12 @@ const toolGetActivitySummary: ToolImpl = async (args, ctx, io) => {
   if (!name) return errResult(t(lang, 'tool.name_invalid'));
   const summary = await io.getActivitySummary(name);
   if (!summary) return errResult(t(lang, 'tool.summary_not_found', { name }));
-  return toResult(compactSummaryForPrompt(summary, lang), lang);
+  // 双口径统一：activity.date 经首帧时刻换算为本地日历日（与「当前时间」段同日历），
+  // 缺首帧（如记录被清）保持 UTC 原值
+  return toResult(
+    compactSummaryForPrompt(withLocalActivityDate(summary, await io.readRecordStart(name)), lang),
+    lang,
+  );
 };
 
 const toolGetActivityRecords: ToolImpl = async (args, ctx, io) => {
@@ -223,8 +245,9 @@ const toolSimulateForm: ToolImpl = async (args, ctx, io) => {
   let startCtl = Number(args?.start_ctl);
   let startAtl = Number(args?.start_atl);
   if (!Number.isFinite(startCtl) || !Number.isFinite(startAtl)) {
-    const today = new Date().toISOString().slice(0, 10);
-    const cur = await io.computeForm(today); // 训练库为空时返回 null，按 0 起步
+    // 缺省起点取「今天」的库内快照：今天用本地日历日（与计划/当前时间同日历，
+    // 清晨推演不再把今天算成昨天）
+    const cur = await io.computeForm(localDay()); // 训练库为空时返回 null，按 0 起步
     startCtl = cur?.ctl ?? 0;
     startAtl = cur?.atl ?? 0;
   }
@@ -274,7 +297,8 @@ const toolSaveMemory: ToolImpl = async (args, ctx, io) => {
     {
       ok: true,
       memory_id: id,
-      date: new Date().toISOString().slice(0, 10),
+      // 本地日历日（清晨写入的记忆不再向模型报告「昨天」）
+      date: localDay(),
     },
     ctx?.lang || 'zh',
   );
@@ -285,8 +309,55 @@ const toolGetDossier: ToolImpl = async (_args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
   const dossier = await io.getDossier();
   if (!dossier) return errResult(t(lang, 'tool.dossier_empty'));
-  return toResult(dossier, lang);
+  return toResult(await localDossierForPrompt(dossier, io), lang);
 };
+
+/**
+ * 档案数据的本地日整形（喂模型前，settings 缓存不动）：锚日 anchor_date 改写为
+ * 锚骑行（当日任一骑行的首帧）的本地日历日；8 周负荷的周界 start/end 按本地锚
+ * 重排（同一套 addDaysStr 日串算术，保持「周界连续、锚日收尾」结构）。值本身仍按
+ * UTC 日桶聚合（周界标签平移 ±1 天、清晨骑行的归桶不改——精确归桶需要逐骑行
+ * 首帧重算，成本不值）；peak_power[].date 与 intensity 月桶无瞬间源，保持 UTC 原样。
+ */
+async function localDossierForPrompt(dossier: unknown, io: ToolIo): Promise<unknown> {
+  const d = dossier as {
+    anchor_date?: string | null;
+    load_shape?: { weeks?: { start: string; end: string }[] } | null;
+  };
+  if (!d?.anchor_date) return dossier;
+  let localAnchor: string | null = null;
+  try {
+    const rides = await io.listActivities();
+    const candidates = rides.filter((r) => r.sport === 'cycling' && r.date === d.anchor_date);
+    for (const r of candidates) {
+      const local = localDayFromUtc(await io.readRecordStart(r.file_name));
+      if (local) {
+        localAnchor = local;
+        break;
+      }
+    }
+  } catch {
+    return dossier; // 清单/首帧读取失败：保持 UTC 原值，不因整形阻断工具返回
+  }
+  if (!localAnchor || localAnchor === d.anchor_date) return dossier;
+  const weeks = d.load_shape?.weeks ?? [];
+  return {
+    ...d,
+    anchor_date: localAnchor,
+    ...(weeks.length
+      ? {
+          load_shape: {
+            ...d.load_shape,
+            weeks: weeks.map((w, i) => ({
+              ...w,
+              end: addDaysStr(localAnchor!, -7 * i),
+              start: addDaysStr(localAnchor!, -7 * i - 6),
+            })),
+          },
+        }
+      : {}),
+  };
+}
 
 /** get_training_plan：当前结构化训练计划（计划答疑/执行对比/重生成前的查阅入口） */
 const toolGetTrainingPlan: ToolImpl = async (_args, ctx, io) => {

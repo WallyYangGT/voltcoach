@@ -29,7 +29,7 @@ import {
   type StoredPlan,
 } from '@/db';
 import { cancelChatGeneration, isChatGenerating, runChatGeneration, submitChatMessage, createReportDraft, generateReport } from '@/services/aiGenerate';
-import { localDay } from '@/core/local-day';
+import { localDay, localDayFromUtc } from '@/core/local-day';
 import { formatDuration } from '@/core/metrics';
 import type { SimRiskFlag } from '@/planning/planning';
 import {
@@ -421,7 +421,8 @@ export default function PlanScreen() {
           <View style={[styles.banner, styles.viewingBar]}>
             <Text style={styles.bannerText}>
               {t('plan.history.viewing', {
-                date: history[viewing].created_at.slice(0, 10),
+                // created_at 是 SQLite UTC 时刻文本 → 本地日历日（双口径统一）
+                date: localDayFromUtc(history[viewing].created_at) ?? history[viewing].created_at.slice(0, 10),
               })}
             </Text>
             <Pressable hitSlop={6} onPress={() => setViewing(null)}>
@@ -524,7 +525,7 @@ export default function PlanScreen() {
                     <Text style={styles.historyOrigin}>
                       {t(`plan.history.origin.${h.origin}` as never)}
                     </Text>
-                    <Text style={styles.historyDate}>{h.created_at.slice(0, 10)}</Text>
+                    <Text style={styles.historyDate}>{localDayFromUtc(h.created_at) ?? h.created_at.slice(0, 10)}</Text>
                   </View>
                   <Text style={styles.historyNote} numberOfLines={2}>
                     {h.change_note ?? h.plan.goal}

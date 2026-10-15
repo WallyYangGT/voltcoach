@@ -34,12 +34,17 @@ function fakeIo(overrides = {}) {
       const stride = Math.max(1, Math.ceil(points.length / opts.maxPoints));
       return { points: points.filter((_, i) => i % stride === 0), total_seconds: points.length, stride };
     },
+    // 默认无首帧 → 日期保持 UTC 原值；覆写以验证本地日历日换算（双口径统一）
+    readRecordStart: async () => null,
     recentFormDaily: async (days) => [{ date: '2026-03-25', tss: 100, ctl: 50, atl: 45, tsb: 5, _days: days }],
     monthlySummary: async (months) => [{ month: '2026-03', tss: 900, _months: months }],
     getAthleteState: async () => ({ athlete: { ftp_watts: 210, max_hr: 190, weight_kg: 65 }, configured: true }),
     getProfile: async () => ({ identity: '上班族骑手', goal: '200km 骑游' }),
     cyclingSummariesSince: async () => [],
-    computeForm: async () => ({ ctl: 55, atl: 48 }),
+    computeForm: async (date) => {
+      io._formDate = date; // 供断言缺省起点用的「今天」口径
+      return { ctl: 55, atl: 48 };
+    },
     saveMemory: async (input, lang) => {
       if (!String(input.content ?? '').trim()) throw new Error('记忆内容不能为空');
       io._savedMemory = input; // 供断言 source 标记
@@ -121,6 +126,17 @@ test('list_activities：日期范围/运动/分类过滤 + limit 截断 + 非法
   assert.equal(limited.count, 3); // 夹到库里只有 3 条
   const bad = JSON.parse(await exec('list_activities', { start_date: '20260320' }));
   assert.match(bad.error, /start_date 需为 YYYY-MM-DD/);
+
+  // 双口径统一：返回行的 date 换算为本地日历日（有首帧的行），无首帧保持 UTC 原值。
+  // 时区无关断言：预期值用 Date 本地分量现算（20:00Z 在 +8 已是次日，CI=UTC 仍是同日）
+  const expectDay = (utcText) => {
+    const d = new Date(Date.parse(utcText));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const ioTz = fakeIo({ readRecordStart: async (name) => (name === 'a.fit' ? '2026-03-25T20:00:00Z' : null) });
+  const localized = JSON.parse(await createExecuteTool(ioTz, { lang: 'zh' })('list_activities', {}));
+  assert.equal(localized.activities.find((a) => a.file_name === 'a.fit').date, expectDay('2026-03-25T20:00:00Z'));
+  assert.equal(localized.activities.find((a) => a.file_name === 'b.fit').date, '2026-03-20');
 });
 
 test('get_activity_summary：压缩后返回；不存在与路径穿越报错', async () => {
@@ -131,6 +147,15 @@ test('get_activity_summary：压缩后返回；不存在与路径穿越报错', 
   assert.match(missing.error, /训练库中找不到: x\.fit/);
   const evil = JSON.parse(await exec('get_activity_summary', { file_name: '../../etc/passwd' }));
   assert.ok(evil.error); // safeName basename 校验拒绝
+
+  // 双口径统一：activity.date 按首帧时刻换算为本地日历日（时区无关断言同 list_activities）
+  const expectDay = (utcText) => {
+    const d = new Date(Date.parse(utcText));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const ioTz = fakeIo({ readRecordStart: async () => '2026-03-25T20:00:00Z' });
+  const okTz = JSON.parse(await createExecuteTool(ioTz, { lang: 'zh' })('get_activity_summary', { file_name: 'a.fit' }));
+  assert.equal(okTz.activity.date, expectDay('2026-03-25T20:00:00Z'));
 });
 
 test('get_activity_records：抽稀 + 时间窗 + 时间戳本地化；不存在报错', async () => {
@@ -233,6 +258,55 @@ test('get_dossier：档案透传；空库返回 dossier_empty 错误', async () 
   const empty = createExecuteTool(fakeIo(), { lang: 'zh' });
   const err = JSON.parse(await empty('get_dossier', {}));
   assert.match(err.error, /暂无骑行数据/);
+});
+
+test('本地日口径（双口径统一）：save_memory 返回 date、simulate_form 缺省起点、get_dossier 锚日与周界', async () => {
+  const { localDay } = await import('../src/core/local-day.ts');
+  const { addDaysStr } = await import('../src/core/dossier.ts');
+  // save_memory 返回 date 为本地日历日（清晨写入不再向模型报告「昨天」）
+  const saved = JSON.parse(
+    await createExecuteTool(fakeIo(), { lang: 'zh' })('save_memory', { content: '目标环千岛湖' }),
+  );
+  assert.equal(saved.date, localDay());
+  // simulate_form 缺省起点读的是本地「今天」的库内快照
+  const ioForm = fakeIo();
+  await createExecuteTool(ioForm, { lang: 'zh' })('simulate_form', { plan: [{ date: '2026-04-01', tss: 60 }] });
+  assert.equal(ioForm._formDate, localDay());
+
+  // get_dossier：锚日与 8 周周界按锚骑行首帧换算为本地日历日（周界结构保持连续、锚日收尾）
+  const expectDay = (utcText) => {
+    const d = new Date(Date.parse(utcText));
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  const anchor = '2026-03-25';
+  const ioDos = fakeIo({
+    getDossier: async () => ({
+      anchor_date: anchor,
+      load_shape: {
+        weeks: Array.from({ length: 3 }, (_, i) => ({
+          start: addDaysStr(anchor, -7 * i - 6),
+          end: addDaysStr(anchor, -7 * i),
+          tss: 100,
+          duration_sec: 3600,
+          rides: 2,
+        })),
+      },
+    }),
+    readRecordStart: async () => '2026-03-25T20:00:00Z',
+  });
+  const out = JSON.parse(await createExecuteTool(ioDos, { lang: 'zh' })('get_dossier', {}));
+  const localAnchor = expectDay('2026-03-25T20:00:00Z');
+  assert.equal(out.anchor_date, localAnchor);
+  assert.equal(out.load_shape.weeks[0].end, localAnchor);
+  assert.equal(out.load_shape.weeks[0].start, addDaysStr(localAnchor, -6));
+  assert.equal(out.load_shape.weeks[2].end, addDaysStr(localAnchor, -14));
+  // 无首帧（readRecordStart 缺省 null）：锚日与周界保持 UTC 原值
+  const ioPlain = fakeIo({
+    getDossier: async () => ({ anchor_date: anchor, load_shape: { weeks: [{ start: addDaysStr(anchor, -6), end: anchor }] } }),
+  });
+  const plain = JSON.parse(await createExecuteTool(ioPlain, { lang: 'zh' })('get_dossier', {}));
+  assert.equal(plain.anchor_date, anchor);
+  assert.equal(plain.load_shape.weeks[0].end, anchor);
 });
 
 test('set_power_flag：布尔校验、reason 截断透传；file_name 穿越拒绝', async () => {

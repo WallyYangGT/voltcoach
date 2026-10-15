@@ -24,6 +24,7 @@ import 'dayjs/locale/zh-cn.js'; // ESM/Metro 双兼容需带 .js 后缀（旧版
 import { ATHLETE, HR_ZONES, POWER_ZONES, type AthleteParams } from '../core/settings.ts';
 import { PEAK_WINDOWS, type AthleteDossier } from '../core/dossier.ts';
 import type { Lang } from '../core/i18n.ts';
+import { localDayFromUtc } from '../core/local-day.ts';
 
 /** 提示词语言缺省值 */
 type PromptLang = Lang;
@@ -56,7 +57,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
 
     'sec.now': `## 当前时间`,
     'sec.now.line': `今天是 {date}（{weekday}），当前时刻 {time}（UTC{offset}）。`,
-    'sec.now.utc_note': `训练数据中的日期时间已按本地时区（UTC{offset}）标注，请直接按本地时间解读（如 19:51 即傍晚），不要再做时区换算；仅纯日期字段（activity.date 与训练库日期）为 UTC 口径，清晨训练可能显示为前一天。涉及「今天/本周/下周」等表述时，以本段日期为准。`,
+    'sec.now.note': `训练数据中的日期与时间均为本地时区口径，直接按本地日历解读，不要再做时区换算；涉及「今天/本周/下周」等表述时，以本段日期为准。`,
 
     'agentic.head': `## 数据查询与计算工具`,
     'agentic.rules_head': `使用规则：`,
@@ -155,8 +156,8 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'review.q.5': `如 anomalies / data_quality 有异常标注：先按 timer_pause 的 at 时间戳对照时间线定位暂停发生的环节（如热身、通勤、间歇之间、放松），再说明可能原因及对数据可信度与相关段落解读的影响；红绿灯、会合等造成的暂停是真实骑行的正常现象，不要解读为对应环节「没有出力」，也不要凭推测把暂停安放到某个发力段；无法确定位置时如实说明。`,
     'review.q.6': `给出 2-3 条下次同类训练的改进建议。`,
 
-    'sec.plan.monthly': `## 逐月训练汇总`,
-    'sec.plan.form': `## 近期 CTL/ATL/TSB 走势（逐周取样，每天 0 点值）`,
+    'sec.plan.monthly': `## 逐月训练汇总（按 UTC 日历日切分月份，清晨骑行计入前一日）`,
+    'sec.plan.form': `## 近期 CTL/ATL/TSB 走势（逐周取样，每天 0 点值；日期为 UTC 日历日，清晨骑行计入前一日）`,
     'sec.plan.recent': `## 近期训练清单`,
     'sec.plan.existing': `## 既有计划处理
 
@@ -184,7 +185,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'sec.taper.race': `## 比赛信息`,
     'sec.taper.race_line': `比赛日期：{date}（距今 {days} 天）`,
     'sec.taper.form': `## 当前状态（今日 CTL/ATL/TSB）`,
-    'sec.taper.trend': `## 近期 CTL/ATL/TSB 走势（逐周取样）`,
+    'sec.taper.trend': `## 近期 CTL/ATL/TSB 走势（逐周取样；日期为 UTC 日历日，清晨骑行计入前一日）`,
     'sec.taper.recent': `## 近期训练清单`,
     'taper.q.0': `以比赛日 TSB 达到 +5 ~ +15（新鲜但不掉体能）为目标，当前 TSB 与目标差距多大？`,
     'taper.q.1': `给出从今天到比赛日的逐日减量计划：每天训练类型、时长、强度（%FTP），说明减量幅度与依据。`,
@@ -227,7 +228,7 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
 
     'sec.now': `## Current Date & Time`,
     'sec.now.line': `Today is {weekday}, {date}; local time {time} (UTC{offset}).`,
-    'sec.now.utc_note': `Date-times in the training data are already labelled in local time (UTC{offset}) — read them as local wall-clock (e.g. 19:51 is evening) and do not shift them again. Only plain date fields (activity.date and training-library dates) stay UTC-based, so early-morning sessions may show the previous day. Treat the date above as the baseline for "today / this week / next week".`,
+    'sec.now.note': `Dates and times in the training data are local-time based — read them as local calendar dates and do not shift them again. Treat the date above as the baseline for "today / this week / next week".`,
 
     'agentic.head': `## Data Query & Computation Tools`,
     'agentic.rules_head': `Rules:`,
@@ -323,8 +324,8 @@ The user has categorized this record as **{cat}**. Interpret it accordingly; if 
     'review.q.5': `If anomalies / data_quality flags exist: first locate where each timer_pause happened by matching its at timestamp against the timeline (e.g. warm-up, commuting, between intervals, cool-down), then explain likely causes and the impact on data reliability and on reading the affected segments; pauses at traffic lights or regrouping are normal in real riding — do not read them as "no effort" where they occur, and do not place a pause into a hard segment by guesswork; say so plainly when the location cannot be determined.`,
     'review.q.6': `Give 2-3 improvement suggestions for the next similar workout.`,
 
-    'sec.plan.monthly': `## Monthly Training Summary`,
-    'sec.plan.form': `## Recent CTL/ATL/TSB Trend (weekly sampling, 00:00 values)`,
+    'sec.plan.monthly': `## Monthly Training Summary (months split by UTC calendar day; early-morning sessions count toward the previous day)`,
+    'sec.plan.form': `## Recent CTL/ATL/TSB Trend (weekly sampling, 00:00 values; dates are UTC calendar days, early-morning sessions count toward the previous day)`,
     'sec.plan.recent': `## Recent Activity List`,
     'sec.plan.existing': `## Handling an Existing Plan
 
@@ -352,7 +353,7 @@ Besides the narrative analysis, you MUST end your answer with a \`\`\`plan-json 
     'sec.taper.race': `## Race Info`,
     'sec.taper.race_line': `Race date: {date} ({days} days away)`,
     'sec.taper.form': `## Current Status (today's CTL/ATL/TSB)`,
-    'sec.taper.trend': `## Recent CTL/ATL/TSB Trend (weekly sampling)`,
+    'sec.taper.trend': `## Recent CTL/ATL/TSB Trend (weekly sampling; dates are UTC calendar days, early-morning sessions count toward the previous day)`,
     'sec.taper.recent': `## Recent Activity List`,
     'taper.q.0': `The goal is a race-day TSB of +5 to +15 (fresh but fit). How far is current TSB from the target?`,
     'taper.q.1': `Give a day-by-day taper plan from today to race day: type, duration, intensity (%FTP) per day, with the reduction rationale.`,
@@ -445,7 +446,9 @@ export const ROLE_EN = TEXT.en.role;
  * 用于周计划节奏、「今天还练不练」、赛前倒计时等时间判断。
  * 日期按设备本地时区渲染（App 即用户时区，与旧版"服务器本地时区"等价），
  * 星期名经 dayjs locale 随语言切换（zh-cn → 星期四 / en → Thursday）；
- * 训练库日期为 UTC 口径，段内文案已注明差异。now 非法时返回 null（不产生该段）。
+ * 段内备注说明训练数据整体为本地时区口径（纯日期字段由编排层经
+ * withLocalActivityDate(s) 换算；聚合序列残存的 UTC 标注在其段落标题内注明）。
+ * now 非法时返回 null（不产生该段）。
  */
 export function buildDateSection(now: Date | string | number | null, lang: PromptLang = 'zh'): string | null {
   if (now == null) return null;
@@ -461,7 +464,7 @@ export function buildDateSection(now: Date | string | number | null, lang: Promp
       time: d.format('HH:mm'),
       offset,
     }),
-    TT(lang, 'sec.now.utc_note', { offset }),
+    TT(lang, 'sec.now.note'),
   ].join('\n');
 }
 
@@ -535,6 +538,16 @@ export function buildChatInstruction(
  * 仅 AI 调用时注入（复制提示词兜底不注入——复制出去的提示词无法回调本机）。
  * memories 为 listMemories() 返回（id DESC），此处反转为时间正序展示。
  */
+/**
+ * 记忆时间戳 → 展示日：created_at 是 SQLite datetime('now') 的 UTC 文本（完整时刻），
+ * 双口径统一后换算为本地日历日（与「当前时间」段同日历，清晨写入的记忆不再标成
+ * 「昨天」）；解析失败回退 UTC 前 10 位原样展示。
+ */
+function memDay(createdAt: unknown): string {
+  const raw = String(createdAt ?? '');
+  return localDayFromUtc(raw) ?? raw.slice(0, 10);
+}
+
 export function buildMemorySection(memories: PromptMemory[] | null, lang: PromptLang = 'zh'): string {
   const catLabel = (c: string | null | undefined) =>
     TT(lang, `mem.cat.${c}`) || c || TT(lang, 'mem.cat.general');
@@ -544,12 +557,12 @@ export function buildMemorySection(memories: PromptMemory[] | null, lang: Prompt
 
   const strategyBlock = strategies.length
     ? `${TT(lang, 'strat.head')}\n\n${strategies
-        .map((m) => `- [${String(m.created_at ?? '').slice(0, 10)}] (#${m.id}) ${m.content}`)
+        .map((m) => `- [${memDay(m.created_at)}] (#${m.id}) ${m.content}`)
         .join('\n')}\n\n${TT(lang, 'strat.rules')}`
     : null;
 
   const lines = rest.map((m) => {
-    const date = String(m.created_at ?? '').slice(0, 10);
+    const date = memDay(m.created_at);
     const cat = catLabel(m.category);
     const scopeTag = m.scope === 'short' ? `, ${TT(lang, 'mem.tag.short')}` : '';
     return `- [${date}] (#${m.id}, ${cat}${scopeTag}) ${m.content}`;
@@ -743,9 +756,9 @@ const USER_TEXT_KEYS = new Set(['note', 'identity', 'goal', 'content', 'title'])
  * 在数据里是 11:51Z，AI 会理解成上午。改写后（2026-03-25T11:51:24.000Z →
  * 2026-03-25T19:51:24+08:00）时刻不变、语言中立，AI 无需自行逐条换算，
  * 也不会在跨日时算错。偏移取该时刻实际生效的本地偏移（夏令时按时刻判定）。
- * 纯日期字段（activity.date、训练库日期）保持 UTC 口径不动——它们与界面显示、
- * 训练库查询一致，单独换算会与之矛盾；用户自填内容（备注/身份/目标）不改写。
- * 返回新对象，入参不被修改（与 compactSummaryForPrompt 同一约定）。
+ * 纯日期字段（activity.date 等）不含时刻、本函数无法换算——由编排层在取数处经
+ * withLocalActivityDate(s) 注入首帧时刻后换算为本地日历日；用户自填内容
+ * （备注/身份/目标）不改写。返回新对象，入参不被修改（与 compactSummaryForPrompt 同一约定）。
  */
 export function localizeTimestamps(value: unknown, key = ''): unknown {
   if (typeof value === 'string') {
@@ -762,6 +775,37 @@ export function localizeTimestamps(value: unknown, key = ''): unknown {
     return out;
   }
   return value;
+}
+
+/**
+ * 把 summary 的 activity.date 改写为本地日历日（startAt = 该骑行的 records 首帧
+ * UTC ISO）。双口径统一的 AI 数据面整形（2026-10，decisions 同日条目）：「当前时间」
+ * 段与计划日期是本地日历日，喂模型的活动日期必须同日历，否则 UTC+8 清晨模型被迫
+ * 自行脑内换算，调和失败即日期/星期漂移一天。存储列与黄金基准的 UTC 日口径不动，
+ * 只在喂模型前换算；startAt 缺失或解析失败时保持原值（宁可保留 UTC 日也不猜）。
+ * 返回新对象，入参不被修改。
+ */
+export function withLocalActivityDate<T extends object>(summary: T, startAt: string | null | undefined): T {
+  const local = localDayFromUtc(startAt ?? null);
+  const act = (summary as LooseSummary).activity;
+  const date = act?.date;
+  if (!local || typeof date !== 'string' || local === date) return summary;
+  return { ...(summary as LooseSummary), activity: { ...act, date: local } } as T;
+}
+
+/**
+ * 活动行清单（list_activities 工具与报告 recentActivities 数据段共用）的 date
+ * 统一改写为本地日历日。starts 为 file_name → records 首帧 UTC ISO/null 映射，
+ * 缺首帧的行保持原值。返回新数组，入参不被修改。口径同 withLocalActivityDate。
+ */
+export function withLocalActivityDates<T extends { file_name: string; date: string }>(
+  rows: T[],
+  starts: Map<string, string | null>,
+): T[] {
+  return rows.map((r) => {
+    const local = localDayFromUtc(starts.get(r.file_name) ?? null);
+    return local && local !== r.date ? { ...r, date: local } : r;
+  });
 }
 
 /** 原始 anomalies 条数超过该值时聚合为 anomalies_summary */
