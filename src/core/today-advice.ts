@@ -9,9 +9,12 @@
  * ① 状态判定——TSB 三档「能练 / 轻松练 / 建议休息」+「今天已练」免扰优先；
  * ② 计划课型交叉——生效计划的质量课遇 TSB 深负提示降级或顺延；计划休息日/无课
  *    不出课表；无生效计划降级为纯状态建议（生成计划引导在组件层）；
- * ③ 双出口的判定半边——workoutTarget 供 generateWorkout 本地秒出课表（easy 档给
- *    recovery：该档在 generateWorkout 的 tsb_recovery 降级线之下时，generateWorkout
- *    以 key !== 'recovery' 守卫不再二次降级，两层口径不打架）；深聊出口的预填文案
+ * ③ 课表出口的判定半边——三分支（2026-10-15 真机反馈拍板）：今天有课 → 按课出表
+ *    （质量课映射课型 / easy 档给 recovery：该档在 generateWorkout 的 tsb_recovery
+ *    降级线之下时，generateWorkout 以 key !== 'recovery' 守卫不再二次降级，两层口径
+ *    不打架）；无课但计划有未来课（生效中整日无课 / 未开始）→ 不出表，组件转
+ *    「看下一节课」出口（带日期，免得兜底课表被误读成计划课）；真无课表（无计划 /
+ *    已过期）→ 兜底建议课表（train=endurance / easy=recovery）。深聊出口的预填文案
  *    在组件层按本结构拼。
  *
  * 不返回文案（展示与 i18n 在组件层走词典）；tsb 由调用方传 recentFormDaily 末端
@@ -54,7 +57,7 @@ export interface TodayAdvice {
   deepFatigue: boolean;
   /** 展示用 TSB（四舍五入取整，与 hero 大数字同观感） */
   tsb: number;
-  /** 「看今日课表」出口的 generateWorkout target；done/rest（建议休息）与计划休息日为 null */
+  /** 课表出口的 generateWorkout target；done/rest（建议休息）与「无课但计划有未来课」为 null（后者组件走「下一节课」出口） */
   workoutTarget: WorkoutTarget | null;
 }
 
@@ -62,11 +65,14 @@ export function computeTodayAdvice({
   tsb,
   trainedToday,
   session,
+  nextSession = null,
   planState,
 }: {
   tsb: number;
   trainedToday: boolean;
   session: { type: PlanSessionType } | null;
+  /** 计划内今天之后的下一节非 rest 课（组件从 plan 过滤传入）；null=前面没有课可指（含无计划/已过期/空窗） */
+  nextSession?: { type: PlanSessionType } | null;
   planState: 'upcoming' | 'valid' | 'expired' | null;
 }): TodayAdvice {
   const tsbRound = Math.round(tsb);
@@ -93,14 +99,16 @@ export function computeTodayAdvice({
   // 计划交叉：质量课 + 非能练档 → 提示降级/顺延（rest 档即深度疲劳，更是别按计划硬扛）
   const downgrade = isQuality && level !== 'train' && level !== 'done';
 
-  // 课表出口：已练与「建议休息」不出；计划休息日不出；easy 档统一轻松骑
+  // 课表出口三分支：planAhead=计划在今天或前面还有课——有课按课出表，无课但有未来课
+  // 不出表（组件转「下一节课」出口），真无课表才走兜底（upcoming 误落兜底是真机 bug 根因）
+  const planAhead = planned || nextSession != null;
   let workoutTarget: WorkoutTarget | null = null;
   if (level === 'easy') {
-    workoutTarget = 'recovery';
+    workoutTarget = planned || !planAhead ? 'recovery' : null;
   } else if (level === 'train') {
     // 与 planned 同一门控收口（code-review P3-3）：session 只在 hasPlan 时有意义
     if (planned && session) workoutTarget = TYPE_TO_TARGET[session.type];
-    else if (!hasPlan) workoutTarget = 'endurance'; // 无计划：纯状态建议仍可本地出自由骑车表
+    else if (!planAhead) workoutTarget = 'endurance'; // 兜底建议课表（无计划/已过期）
   }
 
   return {

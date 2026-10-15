@@ -16,6 +16,7 @@
  * 「和教练聊聊」= 深链新对话并预填上下文（session 页 draft 参数，AP1 聚焦链路照旧）。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
+import dayjs from 'dayjs';
 import React, { useCallback, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { getCurrentPlan, listAiReports, type StoredPlan } from '@/db';
@@ -54,6 +55,7 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
   const [stored, setStored] = useState<StoredPlan | null>(null);
   const [hasPlanReport, setHasPlanReport] = useState(false);
   const [workout, setWorkout] = useState<WorkoutResult | null>(null);
+  const [nextOpen, setNextOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -77,7 +79,19 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
   const today = localDay();
   const validity = stored ? planValidity(stored.plan, today) : null;
   const session = stored?.plan.sessions.find((s) => s.date === today) ?? null;
-  const advice = computeTodayAdvice({ tsb: last.tsb, trainedToday, session, planState: validity?.state ?? null });
+  // 下一节课：今天之后第一堂非 rest 课（§19 计划日期即本地日口径，ISO 串直接比序；
+  // 无计划/已过期的窗内不会有未来课，自然为 null）
+  const nextSession =
+    stored?.plan.sessions
+      .filter((s) => s.date > today && s.type !== 'rest')
+      .sort((a, b) => (a.date < b.date ? -1 : 1))[0] ?? null;
+  const advice = computeTodayAdvice({
+    tsb: last.tsb,
+    trainedToday,
+    session,
+    nextSession,
+    planState: validity?.state ?? null,
+  });
 
   const typeLabel = advice.planType ? t(`plan.type.${advice.planType}` as never) : null;
   const tsbStr = advice.tsb > 0 ? `+${advice.tsb}` : String(advice.tsb);
@@ -117,6 +131,7 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
 
   const onWorkout = () => {
     if (!advice.workoutTarget) return;
+    setNextOpen(false); // 两个展开互斥
     if (workout) {
       setWorkout(null); // 再点收起
       return;
@@ -131,6 +146,12 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
     );
   };
 
+  // 下一节课出口（无课日替代兜底课表，2026-10-15 真机反馈）：读计划不 token，展开带日期
+  const onNext = () => {
+    setWorkout(null);
+    setNextOpen((v) => !v);
+  };
+
   // 深聊出口：预填上下文进新对话（会话页 draft 参数 + 进入即聚焦）
   const onChat = () => {
     const plan = advice.hasPlan
@@ -143,6 +164,14 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
       params: { id: 'chat-new', draft: t('dash.today.draft', { tsb: tsbStr, plan }) },
     });
   };
+
+  // 下一节课日期标签（计划日期是本地日口径纯日期串，直接格式化）
+  const nextDate = nextSession ? dayjs(nextSession.date) : null;
+  const nextDateLabel = nextDate
+    ? lang === 'zh'
+      ? `${nextDate.format('M月D日')}（周${'日一二三四五六'[nextDate.day()]}）`
+      : `${nextDate.format('MMM D')} (${nextDate.format('ddd')})`
+    : '';
 
   // 一键生成（原 WeeklyPlanCard 链路）：draft → 跳报告页（三态/保活/轮询都在那边）→ fire
   // （普通函数而非 useCallback——组件在无训练数据时提前 return null，其后不能再调 Hook）
@@ -229,14 +258,24 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
       <Text style={styles.headline}>{head}</Text>
       <Text style={styles.basis}>{basis}</Text>
 
-      {/* 出口（done 免扰档不出；生成引导在概要行） */}
+      {/* 出口（done 免扰档不出；生成引导在概要行）。课表按钮双文案：计划课=看今日课表，
+          兜底=看建议课表（不暗示计划内容——真机误读根因之一） */}
       {advice.level !== 'done' && (
         <View style={styles.actions}>
           {advice.workoutTarget != null && (
             <Pressable hitSlop={8} onPress={onWorkout}>
               <Text style={styles.cta}>
-                {workout ? t('dash.today.workout_hide') : t('dash.today.workout_btn')}
+                {workout
+                  ? t('dash.today.workout_hide')
+                  : advice.planned
+                    ? t('dash.today.workout_btn')
+                    : t('dash.today.workout_suggest')}
               </Text>
+            </Pressable>
+          )}
+          {nextSession && !(session && session.type !== 'rest') && (
+            <Pressable hitSlop={8} onPress={onNext}>
+              <Text style={styles.cta}>{nextOpen ? t('dash.today.next_hide') : t('dash.today.next_btn')}</Text>
             </Pressable>
           )}
           <Pressable hitSlop={8} onPress={onChat}>
@@ -297,6 +336,19 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
               ))}
             </>
           )}
+        </View>
+      )}
+      {/* 下一节课（计划直读，带日期——无课日替代兜底课表的出口） */}
+      {nextOpen && nextSession && (
+        <View style={styles.workout}>
+          <Text style={styles.wHead}>
+            {t('dash.today.next_line', {
+              date: nextDateLabel,
+              type: t(`plan.type.${nextSession.type}` as never),
+              min: nextSession.duration_min != null ? formatDuration(nextSession.duration_min * 60) : '—',
+              tss: nextSession.tss != null ? String(Math.round(nextSession.tss)) : '—',
+            })}
+          </Text>
         </View>
       )}
     </View>

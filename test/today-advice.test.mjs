@@ -3,7 +3,8 @@
  *
  * 覆盖：TSB 三档分档（阈值取 FORM_SIMULATION 出厂值 -20/-30 的边界两侧）、
  * 「今天已练」免扰档优先级、计划课型交叉（质量课深负 → downgrade、计划休息日/
- * 无课不出课表、无计划降级纯状态建议但保留自由骑车表出口）、课型 → target 映射
+ * 无课不出课表）、课表出口三分支（今天有课按课出表 / 无课但有未来课不出兜底——
+ * 组件转「下一节课」出口 / 真无课表兜底 endurance·recovery）、课型 → target 映射
  * （long 按 endurance 口径）、TSB 取整与正负号展示值。
  * 阈值断言全部相对 FORM_SIMULATION 现算（时区无关，CI=UTC 与本机=UTC+8 都绿）。
  * 运行：npm test
@@ -80,12 +81,12 @@ test('计划休息日 / 整日无课：rest 档但不出课表', () => {
   assert.equal(emptyDay.workoutTarget, null);
 });
 
-test('无生效计划：降级纯状态建议，能练档仍保留自由骑车表出口', () => {
-  for (const planState of [null, 'upcoming', 'expired']) {
+test('真无课表（无计划/已过期）：降级纯状态建议，保留兜底课表出口', () => {
+  for (const planState of [null, 'expired']) {
     const ok = advise({ tsb: 10, planState });
     assert.equal(ok.hasPlan, false);
     assert.equal(ok.level, 'train');
-    assert.equal(ok.workoutTarget, 'endurance'); // 自由骑
+    assert.equal(ok.workoutTarget, 'endurance'); // 兜底建议课表
     assert.equal(ok.downgrade, false);
 
     const tired = advise({ tsb: REC - 5, planState });
@@ -97,6 +98,28 @@ test('无生效计划：降级纯状态建议，能练档仍保留自由骑车�
     assert.equal(deep.level, 'rest');
     assert.equal(deep.workoutTarget, null);
   }
+});
+
+test('未开始（upcoming）+ 计划有未来课：不出兜底课表（组件转「下一节课」出口，真机反馈回归）', () => {
+  const next = { type: 'endurance' };
+  const ok = advise({ tsb: 10, planState: 'upcoming', nextSession: next });
+  assert.equal(ok.hasPlan, false);
+  assert.equal(ok.level, 'train');
+  assert.equal(ok.workoutTarget, null); // 兜底 endurance 会与首课形似且无日期，误读为计划课
+
+  const tired = advise({ tsb: REC - 5, planState: 'upcoming', nextSession: next });
+  assert.equal(tired.level, 'easy');
+  assert.equal(tired.workoutTarget, null);
+
+  // upcoming 但空窗（前面没有任何课）：兜底无从避免——「下一节课」出口没有内容可展示
+  assert.equal(advise({ tsb: 10, planState: 'upcoming' }).workoutTarget, 'endurance');
+});
+
+test('生效中整日无课 + 计划有未来课：rest 档本就不出课表；下一节课出口由组件层承接', () => {
+  const r = advise({ tsb: 10, session: null, planState: 'valid', nextSession: { type: 'threshold' } });
+  assert.equal(r.level, 'rest');
+  assert.equal(r.restDay, true);
+  assert.equal(r.workoutTarget, null);
 });
 
 test('深度疲劳 + 计划质量课：rest 档仍给降级提示且不出课表', () => {
