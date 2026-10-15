@@ -26,6 +26,9 @@
  *   ```plan-json 块（3 周基础期，过 App 侧确定性校验），用于「周期规划 → 计划落库」冒烟。
  *   MOCK_TOOL_SCRIPT=plan_adjust —— 计划会话调整剧本：get_training_plan →
  *   update_training_plan 整体重发（阈值课顺延一天）→ 正文确认，用于「计划调整 → 新版本」冒烟。
+ *   MOCK_TOOL_SCRIPT=plan_ops —— 课次级局部调整剧本：get_training_plan →
+ *   adjust_plan_sessions 单课 move（阈值课 d1→d5）→ 正文确认，用于「局部调整 → 落库 →
+ *   撤销」冒烟；请求体字节数已打日志（与 plan_adjust 对比局部 vs 整发的载荷）。
  *   MOCK_TOOL_SCRIPT=memory —— 记忆回顾剧本：save_memory（scope=short 演示分层）→
  *   正文「已记录」。主生成轮与报告后记忆回顾轮各自最多触发一次记录，用于
  *   「报告后确定性记忆回顾 + 记忆页短期/长期分区」冒烟。
@@ -100,6 +103,9 @@ const PLAN_REPLY = () =>
   '```plan-json\n' + JSON.stringify(mockPlanJson(1)) + '\n```';
 const ADJUST_REPLY =
   '已把周一的阈值课顺延到周二（其余课次不变，质量课间隔仍满足 ≥48h），新版本已保存，可在计划页查看。';
+// plan_ops 剧本（课次级局部调整）：阈值课 d1→d5（d5 空闲，与 d8 甜区间隔 3 天仍合规）
+const PLAN_OPS_REPLY =
+  '已按确认把周一的阈值课顺延到周五（只动了这一课，其余课次保持不变），新版本已保存，可在计划页查看或撤销。';
 // 记忆剧本（MOCK_TOOL_SCRIPT=memory）的收尾正文（也是冒烟时的报告正文）
 const MEMORY_REPLY = '本次分析已完成；另按记忆规则补记了一条短期记忆（mock memory 剧本）。';
 let memoryWrites = 0; // memory 剧本已发放 save_memory 的次数（第 1 次=主轮、第 2 次=回顾轮，内容区分以便断言两条都落库）
@@ -155,10 +161,10 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    // 计划剧本（MOCK_TOOL_SCRIPT=plan / plan_adjust）：按历史中 role:"tool" 消息数确定轮次
+    // 计划剧本（MOCK_TOOL_SCRIPT=plan / plan_adjust / plan_ops）：按历史中 role:"tool" 消息数确定轮次
     if (
       !stream &&
-      (TOOL_SCRIPT === 'plan' || TOOL_SCRIPT === 'plan_adjust') &&
+      (TOOL_SCRIPT === 'plan' || TOOL_SCRIPT === 'plan_adjust' || TOOL_SCRIPT === 'plan_ops') &&
       Array.isArray(parsed.tools) &&
       parsed.tools.length > 0
     ) {
@@ -166,16 +172,29 @@ const server = http.createServer((req, res) => {
       const steps =
         TOOL_SCRIPT === 'plan'
           ? [{ name: 'get_training_plan', args: {} }]
-          : [
-              { name: 'get_training_plan', args: {} },
-              {
-                name: 'update_training_plan',
-                args: {
-                  plan: mockPlanJson(2), // 阈值课 d1→d2（顺延一天），其余不变
-                  change_note: '周一阈值课顺延至周二',
+          : TOOL_SCRIPT === 'plan_adjust'
+            ? [
+                { name: 'get_training_plan', args: {} },
+                {
+                  name: 'update_training_plan',
+                  args: {
+                    plan: mockPlanJson(2), // 阈值课 d1→d2（顺延一天），其余不变
+                    change_note: '周一阈值课顺延至周二',
+                  },
                 },
-              },
-            ];
+              ]
+            : [
+                { name: 'get_training_plan', args: {} },
+                {
+                  name: 'adjust_plan_sessions',
+                  args: {
+                    ops: [{ op: 'move', from: planDay(1), to: planDay(5) }], // 阈值课 d1→d5（d5 空闲）
+                    change_note: '周一阈值课顺延至周五',
+                  },
+                },
+              ];
+      // 局部 vs 整发的载荷对比（roadmap 验收记录用）：tool_args 轮的请求体字节数
+      console.log(`  -> mock script ${TOOL_SCRIPT}: request ${body.length} bytes, msgs=${parsed.messages?.length ?? 0}`);
       if (toolMsgCount < steps.length) {
         const step = steps[toolMsgCount];
         console.log(`  -> mock script ${TOOL_SCRIPT}: issue ${step.name} (round ${toolMsgCount + 1})`);
@@ -205,7 +224,8 @@ const server = http.createServer((req, res) => {
         return;
       }
       // 剧本工具用尽 → 正文回复（plan 末轮附 plan-json 块，供 App 提取落库）
-      const reply = TOOL_SCRIPT === 'plan' ? PLAN_REPLY() : ADJUST_REPLY;
+      const reply =
+        TOOL_SCRIPT === 'plan' ? PLAN_REPLY() : TOOL_SCRIPT === 'plan_ops' ? PLAN_OPS_REPLY : ADJUST_REPLY;
       console.log(`  -> mock script ${TOOL_SCRIPT}: final reply`);
       contentCalls += 1;
       res.writeHead(200, { 'Content-Type': 'application/json' });

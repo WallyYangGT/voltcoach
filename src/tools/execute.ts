@@ -32,6 +32,7 @@ import {
   type PlanIssue,
   type TrainingPlan,
 } from '../core/training-plan.ts';
+import { applyPlanSessionOps } from '../core/plan-ops.ts';
 import {
   compactSummaryForPrompt,
   localizeTimestamps,
@@ -430,6 +431,52 @@ const toolUpdateTrainingPlan: ToolImpl = async (args, ctx, io) => {
   );
 };
 
+/**
+ * adjust_plan_sessions：课次级局部调整（U1 收尾，roadmap 2026-10-15 用户需求）——
+ * ops 数组一次往返原子应用（core/plan-ops 逐操作校验 + 全计划 adjust 档复检，任一
+ * 失败整批拒），免整发重排的 token 与「无关日被顺手改动」回归面。门控与落库口径同
+ * update_training_plan（ctx.chat 放行、origin='adjust' 留档可逆）；确认落实协议
+ * （先复述获肯定答复）在工具描述与 chat.plan 指令层约束，不做系统级强制闸门（§16 D6 先例）。
+ */
+const toolAdjustPlanSessions: ToolImpl = async (args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  if (!ctx?.chat) return errResult(t(lang, 'tp.tool.report_source'));
+  const stored = await io.getTrainingPlan();
+  if (!stored) return errResult(t(lang, 'tp.tool.no_plan'));
+  const r = applyPlanSessionOps(stored.plan, args?.ops, localDay(), lang);
+  if (!r.ok || !r.plan) {
+    if (r.errors.length) return errResult(r.errors.join('；'));
+    return toResult(
+      {
+        ok: false,
+        violations: r.violations.map((i) => formatPlanIssue(i, lang)),
+        hint: t(lang, 'tp.tool.adjust_hint'),
+      },
+      lang,
+    );
+  }
+  const adjusted = r.plan;
+  const note =
+    typeof args?.change_note === 'string' ? args.change_note.trim().slice(0, 200) || null : null;
+  const versionsTotal = await io.savePlanVersion(adjusted, {
+    origin: 'adjust',
+    change_note: note,
+    warnings: [],
+  });
+  return toResult(
+    {
+      ok: true,
+      versions_total: versionsTotal,
+      applied: r.applied,
+      valid_from: adjusted.valid_from,
+      valid_to: adjusted.valid_to,
+      sessions: adjusted.sessions.length,
+      note,
+    },
+    lang,
+  );
+};
+
 /** set_power_flag：标记/取消「功率不可信」（可逆；绑定层负责档案重建） */
 const toolSetPowerFlag: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
@@ -478,6 +525,7 @@ const TOOL_IMPL: Record<string, ToolImpl> = {
   get_dossier: toolGetDossier,
   get_training_plan: toolGetTrainingPlan,
   update_training_plan: toolUpdateTrainingPlan,
+  adjust_plan_sessions: toolAdjustPlanSessions,
   set_power_flag: toolSetPowerFlag,
   recalibrate_activity_power: toolRecalibratePower,
   update_ftp: toolUpdateFtp,

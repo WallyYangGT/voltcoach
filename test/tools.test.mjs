@@ -78,11 +78,11 @@ function fakeIo(overrides = {}) {
   return io;
 }
 
-test('toolDefs：17 个工具、双语描述、schema 关键字段', () => {
+test('toolDefs：18 个工具、双语描述、schema 关键字段', () => {
   const zh = toolDefs('zh');
-  assert.equal(zh.length, 17);
+  assert.equal(zh.length, 18);
   const names = zh.map((d) => d.function.name);
-  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'get_dossier', 'get_training_plan', 'update_training_plan', 'set_power_flag', 'recalibrate_activity_power', 'update_ftp', 'reanalyze_activity']) {
+  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'get_dossier', 'get_training_plan', 'update_training_plan', 'adjust_plan_sessions', 'set_power_flag', 'recalibrate_activity_power', 'update_ftp', 'reanalyze_activity']) {
     assert.ok(names.includes(n), n);
   }
   assert.equal(zh.every((d) => d.type === 'function'), true);
@@ -106,6 +106,8 @@ test('toolDefs：17 个工具、双语描述、schema 关键字段', () => {
   assert.deepEqual(byName.set_power_flag.function.parameters.required, ['file_name', 'flagged']);
   assert.deepEqual(byName.recalibrate_activity_power.function.parameters.required, ['file_name', 'scale_factor']);
   assert.deepEqual(byName.update_training_plan.function.parameters.required, ['plan']);
+  assert.deepEqual(byName.adjust_plan_sessions.function.parameters.required, ['ops']);
+  assert.match(byName.adjust_plan_sessions.function.description, /肯定答复/); // 确认落实协议进工具描述
   assert.deepEqual(Object.keys(byName.update_ftp.function.parameters.properties), []); // 零参
   assert.deepEqual(Object.keys(byName.get_dossier.function.parameters.properties), []); // 零参
   assert.deepEqual(Object.keys(byName.get_training_plan.function.parameters.properties), []); // 零参
@@ -528,4 +530,82 @@ test('update_training_plan：合规调整落库——TSS 回填/rest 归零/chan
   assert.equal(saved.meta.origin, 'adjust');
   assert.equal(saved.plan.sessions[0].tss, 100); // 缺失回填：阈值 60min
   assert.equal(saved.plan.sessions[1].tss, 0); // rest 课负荷归零
+});
+
+// ---------------- adjust_plan_sessions：课次级局部调整（U1 收尾） ----------------
+
+test('adjust_plan_sessions：非对话拒写；无计划返回 no_plan', async () => {
+  const io = fakeIo({});
+  io.savePlanVersion = async () => {
+    throw new Error('不应落库');
+  };
+  const raw = await createExecuteTool(io, { source: 'plan', lang: 'zh' })('adjust_plan_sessions', {
+    ops: [{ op: 'remove', date: day(1) }],
+  });
+  assert.match(JSON.parse(raw).error, /只能在对话中调整/);
+
+  const noPlan = createExecuteTool(fakeIo({ getTrainingPlan: async () => null }), { source: 'plan', chat: true, lang: 'zh' });
+  assert.match(JSON.parse(await noPlan('adjust_plan_sessions', { ops: [{ op: 'remove', date: day(1) }] })).error, /没有训练计划/);
+});
+
+test('adjust_plan_sessions：操作级错误与合理性违规都整批拒、不落库', async () => {
+  const stored = { plan: planObj([pSession(day(0), 'threshold', 60), pSession(day(2), 'endurance', 90)]), created_at: 'x', origin: 'generate', source_report_id: null, change_note: null, warnings: [] };
+  const io = fakeIo({ getTrainingPlan: async () => stored });
+  io.savePlanVersion = async () => {
+    throw new Error('不应落库');
+  };
+  const exec = createExecuteTool(io, { source: 'plan', chat: true, lang: 'zh' });
+
+  const occupied = JSON.parse(
+    await exec('adjust_plan_sessions', { ops: [{ op: 'move', from: day(0), to: day(2) }] }),
+  );
+  assert.match(occupied.error, /已有课/);
+
+  // 两节质量课只隔 1 天 → violations 硬拒（锚定两课日期）附替代提示
+  const clash = JSON.parse(
+    await exec('adjust_plan_sessions', {
+      ops: [{ op: 'insert', date: day(1), type: 'threshold', duration_min: 60 }],
+    }),
+  );
+  assert.equal(clash.ok, false);
+  assert.match(clash.violations[0], /48h/);
+  assert.match(clash.hint, /替代调整方案/);
+});
+
+test('adjust_plan_sessions：合规局部调整落库 origin=adjust——applied 回传、TSS 重估、change_note 裁剪', async () => {
+  const stored = {
+    plan: planObj([
+      pSession(day(0), 'threshold', 60),
+      pSession(day(2), 'endurance', 90),
+      pSession(day(4), 'rest', null),
+    ]),
+    created_at: 'x', origin: 'generate', source_report_id: null, change_note: null, warnings: [],
+  };
+  const io = fakeIo({ getTrainingPlan: async () => stored });
+  let saved = null;
+  io.savePlanVersion = async (plan, meta) => {
+    saved = { plan, meta };
+    return 3;
+  };
+  const exec = createExecuteTool(io, { source: 'plan', chat: true, lang: 'zh' });
+  const out = JSON.parse(
+    await exec('adjust_plan_sessions', {
+      ops: [
+        { op: 'move', from: day(2), to: day(3) },
+        { op: 'set_duration', date: day(3), duration_min: 120 },
+      ],
+      change_note: 'x'.repeat(260),
+    }),
+  );
+  assert.equal(out.ok, true);
+  assert.equal(out.versions_total, 3);
+  assert.deepEqual(out.applied, [
+    { op: 'move', from: day(2), to: day(3) },
+    { op: 'set_duration', date: day(3), duration_min: 120 },
+  ]);
+  assert.equal(out.note, 'x'.repeat(200)); // 截断到 200
+  assert.equal(saved.meta.origin, 'adjust');
+  const moved = saved.plan.sessions.find((x) => x.date === day(3));
+  assert.equal(moved.duration_min, 120);
+  assert.equal(moved.tss, 92.5); // endurance 120min 重估：120×60×0.68²/36
 });
