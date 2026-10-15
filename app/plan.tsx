@@ -44,6 +44,7 @@ import {
   type TrainingPlan,
 } from '@/core/training-plan';
 import { PlanTable, type PlanTableColumn } from '@/components/PlanTable';
+import { PlanAdherenceCard } from '@/components/PlanAdherenceCard';
 import { PlanReportSection } from '@/components/PlanReportSection';
 import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { AskInput } from '@/components/AskInput';
@@ -471,6 +472,9 @@ export default function PlanScreen() {
             )}
           </View>
         )}
+
+        {/* 本周执行情况（U1 收尾②：计划 vs 实际三态对比；随周锚点切换，与周表同锚） */}
+        {tab === 'week' && plan && <PlanAdherenceCard plan={plan} weekStart={anchor} today={today} />}
 
         {tab === 'long' && plan && (
           <View style={styles.panel}>

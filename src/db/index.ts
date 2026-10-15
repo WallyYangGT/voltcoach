@@ -528,6 +528,48 @@ export async function listActivities(n: number = ACTIVITY_LIST_LIMIT): Promise<A
   }));
 }
 
+/**
+ * 按存储 UTC 日期范围取训练清单（计划执行视图 U1② 用）：fromDay/toDay 为 YYYY-MM-DD
+ * UTC 日串（闭区间）。调用方传入本地周界 ±1 天的缓冲（跨时区起骑时刻可能落在相邻
+ * UTC 日），行级本地日归并由调用方经 resolveRideDateLabels 完成。
+ */
+export async function listActivitiesInRange(fromDay: string, toDay: string): Promise<ActivityListItem[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    file_name: string;
+    date: string;
+    sport: string | null;
+    category: string | null;
+    duration_sec: number | null;
+    distance_km: number | null;
+    elevation_gain_m: number | null;
+    tss: number | null;
+    np: number | null;
+    avg_power: number | null;
+    intensity_factor: number | null;
+  }>(
+    `SELECT file_name, date, sport, category, duration_sec, distance_km, elevation_gain_m,
+            tss, np, avg_power, intensity_factor
+     FROM activities WHERE date >= ? AND date <= ? ORDER BY date DESC`,
+    fromDay,
+    toDay,
+  );
+  const r1 = (x: number | null) => (x == null ? null : Math.round(x * 10) / 10);
+  return rows.map((r) => ({
+    file_name: r.file_name,
+    date: r.date,
+    sport: r.sport ?? 'unknown',
+    category: r.category ?? 'training',
+    duration_sec: r.duration_sec,
+    distance_km: r1(r.distance_km),
+    elevation_gain_m: r.elevation_gain_m == null ? null : Math.round(r.elevation_gain_m),
+    tss: r.tss == null ? null : Math.round(r.tss),
+    np: r.np == null ? null : Math.round(r.np),
+    avg_power: r.avg_power == null ? null : Math.round(r.avg_power),
+    intensity_factor: r.intensity_factor == null ? null : r1(r.intensity_factor),
+  }));
+}
+
 /** 按文件名取单条训练的完整 summary（详情页用），并把 category 与 note 合并进 activity；不存在返回 null */
 export async function getActivitySummary(fileName: string): Promise<Summary | null> {
   const db = await getDb();
