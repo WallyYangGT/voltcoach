@@ -89,6 +89,22 @@ describe('PlanAdjustBanner', () => {
     expect(screen.queryByText('撤销调整')).toBeNull();
   });
 
+  it('props 模式（plan 页）：不自查请求，adjust 版直接显示；宿主刷新下传 generate 版即隐藏', async () => {
+    const screen = await renderWithProviders(
+      <PlanAdjustBanner stored={plan()} history={[generateOrigin()]} />,
+    );
+    await act(async () => {});
+    expect(screen.getByTestId('plan-adjust-banner')).toBeTruthy();
+    expect(screen.getByText(/周一阈值课顺延至周二/)).toBeTruthy();
+    expect(getCurrentPlan).not.toHaveBeenCalled(); // props 模式不自查（冒烟实证本页内调整的即时反映）
+
+    const regenerated = await renderWithProviders(
+      <PlanAdjustBanner stored={generateOrigin()} history={[plan()]} />,
+    );
+    await act(async () => {});
+    expect(regenerated.queryByTestId('plan-adjust-banner')).toBeNull();
+  });
+
   // ⚠️ 撤销流必须放本文件最后：其 then → load → setData 的异步链即使整链收进单个
   // act（两级宏任务落定），React 的 act 栈仍可能带伤传染给后续用例（effect 永不
   // flush）——「撤销后条目隐藏」的渲染面由首例的 origin 守卫（generate → null）覆盖，
@@ -107,21 +123,5 @@ describe('PlanAdjustBanner', () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(undoLastPlanVersion).toHaveBeenCalledTimes(1);
-  });
-
-  it('props 模式（plan 页）：不自查请求，adjust 版直接显示；宿主刷新下传 generate 版即隐藏', async () => {
-    const screen = await renderWithProviders(
-      <PlanAdjustBanner stored={plan()} history={[generateOrigin()]} />,
-    );
-    await act(async () => {});
-    expect(screen.getByTestId('plan-adjust-banner')).toBeTruthy();
-    expect(screen.getByText(/周一阈值课顺延至周二/)).toBeTruthy();
-    expect(getCurrentPlan).not.toHaveBeenCalled(); // props 模式不自查（冒烟实证本页内调整的即时反映）
-
-    const regenerated = await renderWithProviders(
-      <PlanAdjustBanner stored={generateOrigin()} history={[plan()]} />,
-    );
-    await act(async () => {});
-    expect(regenerated.queryByTestId('plan-adjust-banner')).toBeNull();
   });
 });
