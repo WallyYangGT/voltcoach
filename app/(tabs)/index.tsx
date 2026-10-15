@@ -43,7 +43,6 @@ import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
 import { PlanAdjustBanner } from '@/components/PlanAdjustBanner';
 import { TodayAdviceCard } from '@/components/TodayAdviceCard';
-import { WeeklyPlanCard } from '@/components/WeeklyPlanCard';
 import { useI18n } from '@/i18n';
 import { useRideDateLabels } from '@/services/aiTitle';
 import { palette } from '@/theme';
@@ -100,10 +99,12 @@ export default function HomeScreen() {
   // 最近训练行日期按本地日历日展示（双口径统一，与训练列表/报告标题同源同口径）
   const dateLabels = useRideDateLabels((data?.recent ?? []).map((r) => r.file_name));
   // 今天是否已练（今日建议卡免扰档输入）：最近几行里有本地日=今天的骑行即算。
-  // 行级本地日的唯一瞬间源是 records 首帧（dateLabels 正是它的换算）；仅看最近
-  // 6 条——一天多练超过 6 条的场景病态，不值得为它扩查询
+  // 行级本地日的唯一瞬间源是 records 首帧（dateLabels 正是它的换算）；标签尚未
+  // 解析完成的行回退存储 UTC 日比对（§24 展示层同款回退，消冷缓存 1–3s 的状态
+  // 翻转抖动——code-review P3-4）；仅看最近 6 条，一天多练超 6 条病态不扩查询
+  const today = localDay();
   const trainedToday = (data?.recent ?? []).some(
-    (r) => dateLabels.get(r.file_name) === localDay(),
+    (r) => (dateLabels.has(r.file_name) ? dateLabels.get(r.file_name) : r.date) === today,
   );
 
   return (
@@ -122,12 +123,9 @@ export default function HomeScreen() {
           }}
         />
       }>
-      {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏）。
-          内容流首位：今天该练什么第一眼可见 */}
-      <WeeklyPlanCard />
-
-      {/* 今日建议卡（U1 收尾①：本地零 token「今天怎么办」，与计划卡「这周怎么排」分工；
-          纯本地计算不被 LLM Key 门控，空库整卡隐藏） */}
+      {/* 今日建议卡（U1 收尾① + 2026-10-15 用户拍板合并：原「本周训练计划」卡的功能
+          ——计划四态概要/今日训练内容/一键生成/查看课表——已整卡并入，首页计划信息
+          唯一出口；纯本地计算不被 LLM Key 门控，空库整卡隐藏） */}
       <TodayAdviceCard last={last} athlete={data?.athlete ?? null} trainedToday={trainedToday} />
 
       {/* AI 调整披露条（U1 收尾④：当前版来自会话调整时显示摘要 + 撤销入口） */}
@@ -253,8 +251,8 @@ export default function HomeScreen() {
 
       {/* 「和教练讨论一下」输入卡吸底常驻（2026-10-15：全宽仿输入框样式不变，
           位置对标原 FAB 的底部区；未配置 Key 整卡隐藏与计划卡同口径）。
-          底部间距压到 6px（用户反馈贴近 tab 栏）：tab 屏里手势区已被 tab 栏消费，
-          不再加 insets.bottom（与 tab 栏双计会造成大空隙）；键盘可见时归零 */}
+          底部间距固定 6px（用户反馈贴近 tab 栏）：tab 屏里手势区已被 tab 栏消费，
+          不再加 insets.bottom（与 tab 栏双计会造成大空隙） */}
       {configured === true && (
         <View
           style={styles.inviteDock}

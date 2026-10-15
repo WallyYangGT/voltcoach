@@ -176,7 +176,9 @@ export const DICT = {
     'dash.today.basis': 'TSB {tsb} · {plan}',
     'dash.today.plan_prefix': '计划 ',
     'dash.today.basis_free': '今日无课',
-    'dash.today.basis_noplan': '无生效计划',
+    'dash.today.basis_upcoming': '计划待开始',
+    'dash.today.basis_expired': '计划已过期',
+    'dash.today.basis_noplan': '无计划',
     'dash.today.workout_btn': '看今日课表',
     'dash.today.workout_hide': '收起课表',
     'dash.today.chat_btn': '和教练聊聊',
@@ -414,8 +416,7 @@ export const DICT = {
     'dossier.load.peak_tss': '单周峰值 TSS',
     'dossier.load.avg_hours': '周均骑行时长',
     'dossier.load.drift': '心率漂移中位（样本数）',
-    // ---- v2：训练计划（首页本周计划卡 + 计划页 + 计划会话） ----
-    'plan.card.title': '本周训练计划',
+    // ---- v2：训练计划（首页今日建议卡 + 计划页 + 计划会话） ----
     'plan.card.valid': '本周 {n} 次课 · 计划 TSS {tss}',
     'plan.card.upcoming': '{date} 开始 · 共 {n} 次课',
     'plan.card.today': '今天：{text}',
@@ -811,7 +812,9 @@ export const DICT = {
     'dash.today.basis': 'TSB {tsb} · {plan}',
     'dash.today.plan_prefix': 'plan: ',
     'dash.today.basis_free': 'no session today',
-    'dash.today.basis_noplan': 'no active plan',
+    'dash.today.basis_upcoming': 'plan starting soon',
+    'dash.today.basis_expired': 'plan expired',
+    'dash.today.basis_noplan': 'no plan',
     'dash.today.workout_btn': 'Today workout',
     'dash.today.workout_hide': 'Hide workout',
     'dash.today.chat_btn': 'Ask the coach',
@@ -1184,8 +1187,7 @@ export const DICT = {
     'dossier.load.peak_tss': 'Peak week TSS',
     'dossier.load.avg_hours': 'Avg weekly hours',
     'dossier.load.drift': 'Median HR drift (samples)',
-    // ---- v2: training plan (home plan card + plan page + plan chat) ----
-    'plan.card.title': "This Week's Plan",
+    // ---- v2: training plan (home today-advice card + plan page + plan chat) ----
     'plan.card.valid': '{n} sessions this week · planned TSS {tss}',
     'plan.card.upcoming': 'Starts {date} · {n} sessions total',
     'plan.card.today': 'Today: {text}',

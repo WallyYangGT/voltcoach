@@ -1,23 +1,30 @@
 /**
  * TodayAdviceCard.tsx — 首页「今日建议」卡（U1 收尾①：教练执行闭环的零 token 半边）。
  *
- * 回答「今天怎么办」，与 WeeklyPlanCard（这周怎么排）分工：结论 + 一行依据 + 双出口。
- * 判定全部在 core/today-advice 纯函数（阈值只引 FORM_SIMULATION 单源），组件零硬编码；
+ * 2026-10-15 用户拍板：与 WeeklyPlanCard 信息重叠（都答「今天练什么」、都有计划
+ * 入口），**整卡合并**——本卡成为首页计划信息的唯一出口，WeeklyPlanCard 移除。
+ * 吸收的能力：计划四态级联概要（有效=本周摘要 / 未开始=开始日期 / 过期=置灰 /
+ * 无计划=两档引导）、今日训练内容行（课型·时长·TSS）、一键生成 CTA（report 链路）、
+ * 查看课表入口。
+ *
+ * 判定全在 core/today-advice 纯函数（阈值只引 FORM_SIMULATION 单源），组件零硬编码；
  * TSB 用首页 recentFormDaily 末端（props 传入，与 hero 同源不重算），计划读 settings
- * 当前行（自加载，OnelapSyncCard/WeeklyPlanCard 先例）。纯本地计算，不被 LLM Key
- * 门控——无 Key 用户「教练感」的主来源；空库（last=null）整卡隐藏。
+ * 当前行（自加载）。纯本地计算，不被 LLM Key 门控——无 Key 用户「教练感」的主来源；
+ * 空库（last=null）整卡隐藏（无 Key 时生成 CTA 走到报告页会有明确的未配置错误，可接受）。
  *
  * 双出口：「看今日课表」= generateWorkout 本地秒出课表（卡内展开渲染）；
  * 「和教练聊聊」= 深链新对话并预填上下文（session 页 draft 参数，AP1 聚焦链路照旧）。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { getCurrentPlan, type StoredPlan } from '@/db';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { getCurrentPlan, listAiReports, type StoredPlan } from '@/db';
+import { createReportDraft, generateReport } from '@/services/aiGenerate';
 import type { TrendPoint } from '@/charts/TrendChart';
 import type { AthleteParams } from '@/core/settings';
 import { localDay } from '@/core/local-day';
-import { planValidity } from '@/core/training-plan';
+import { formatDuration } from '@/core/metrics';
+import { planValidity, slicePlanWeek, weekStartOf } from '@/core/training-plan';
 import { computeTodayAdvice, type TodayAdviceLevel } from '@/core/today-advice';
 import { generateWorkout, type WorkoutResult } from '@/planning/planning';
 import { useI18n } from '@/i18n';
@@ -42,14 +49,18 @@ const LEVEL_COLOR: Record<TodayAdviceLevel, string> = {
 const fmtW = ([a, b]: [number, number]) => `${a}–${b}W`;
 
 export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const router = useRouter();
   const [stored, setStored] = useState<StoredPlan | null>(null);
+  const [hasPlanReport, setHasPlanReport] = useState(false);
   const [workout, setWorkout] = useState<WorkoutResult | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      setStored(await getCurrentPlan());
+      const [plan, recent] = await Promise.all([getCurrentPlan(), listAiReports('plan', 1)]);
+      setStored(plan);
+      setHasPlanReport(recent.length > 0);
     } catch (e) {
       console.warn('今日建议卡加载失败:', e);
     }
@@ -64,9 +75,9 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
   if (!last || !athlete) return null;
 
   const today = localDay();
+  const validity = stored ? planValidity(stored.plan, today) : null;
   const session = stored?.plan.sessions.find((s) => s.date === today) ?? null;
-  const planState = stored ? planValidity(stored.plan, today).state : null;
-  const advice = computeTodayAdvice({ tsb: last.tsb, trainedToday, session, planState });
+  const advice = computeTodayAdvice({ tsb: last.tsb, trainedToday, session, planState: validity?.state ?? null });
 
   const typeLabel = advice.planType ? t(`plan.type.${advice.planType}` as never) : null;
   const tsbStr = advice.tsb > 0 ? `+${advice.tsb}` : String(advice.tsb);
@@ -91,12 +102,17 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
             ? t('dash.today.head.train_planned', { type: typeLabel })
             : t('dash.today.head.train_free');
 
-  // 一行依据：TSB + 计划交叉（roadmap 口径「建议轻松骑 · TSB -15 / 计划阈值课」，不堆原始数值）
+  // 一行依据（今天的状态侧）：计划有效给计划交叉，未开始/已过期如实标注（真机反馈：
+  // upcoming 时「无生效计划」观感是错的），无计划才说无计划
   const planPart = advice.hasPlan
     ? advice.planned && typeLabel
       ? `${t('dash.today.plan_prefix')}${typeLabel}`
       : t('dash.today.basis_free')
-    : t('dash.today.basis_noplan');
+    : validity?.state === 'upcoming'
+      ? t('dash.today.basis_upcoming')
+      : validity?.state === 'expired'
+        ? t('dash.today.basis_expired')
+        : t('dash.today.basis_noplan');
   const basis = t('dash.today.basis', { tsb: tsbStr, plan: planPart });
 
   const onWorkout = () => {
@@ -128,6 +144,79 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
     });
   };
 
+  // 一键生成（原 WeeklyPlanCard 链路）：draft → 跳报告页（三态/保活/轮询都在那边）→ fire
+  // （普通函数而非 useCallback——组件在无训练数据时提前 return null，其后不能再调 Hook）
+  const onGenerate = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const id = await createReportDraft('plan', {}, lang);
+      router.push(`/ai/session/report-${id}`);
+      void generateReport(id, lang).catch((e) => console.warn('计划生成失败:', e));
+    } catch (e) {
+      Alert.alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 计划概要行（原 WeeklyPlanCard 四态级联）：valid 摘要+查看课表 / upcoming 开始日 /
+  // expired 置灰+生成 / 无计划两档引导+生成
+  let planSummary: React.ReactNode = null;
+  if (stored && validity) {
+    const expired = validity.state === 'expired';
+    const summary =
+      expired
+        ? t('plan.card.expired')
+        : validity.state === 'upcoming'
+          ? t('plan.card.upcoming', {
+              date: stored.plan.valid_from,
+              n: stored.plan.sessions.filter((s) => s.type !== 'rest').length,
+            })
+          : t('plan.card.valid', {
+              n: slicePlanWeek(stored.plan, weekStartOf(today)).filter((s) => s.type !== 'rest').length,
+              tss: Math.round(
+                slicePlanWeek(stored.plan, weekStartOf(today)).reduce((acc, s) => acc + (s.tss ?? 0), 0),
+              ),
+            });
+    planSummary = (
+      <View style={styles.planRow}>
+        <Text style={[styles.planSummary, expired && styles.planExpired]}>{summary}</Text>
+        {!expired && (
+          <Pressable hitSlop={8} onPress={() => router.push('/plan')}>
+            <Text style={styles.planLink}>{t('plan.card.open')}</Text>
+          </Pressable>
+        )}
+      </View>
+    );
+    if (validity.state === 'valid' && session) {
+      planSummary = (
+        <View style={styles.planBlock}>
+          <View style={styles.planRow}>
+            <Text style={styles.planSummary}>{summary}</Text>
+            <Pressable hitSlop={8} onPress={() => router.push('/plan')}>
+              <Text style={styles.planLink}>{t('plan.card.open')}</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.planToday}>
+            {session.type === 'rest' || session.duration_min == null
+              ? t('plan.card.rest_today')
+              : t('plan.card.today', {
+                  text: `${typeLabel ?? ''} · ${formatDuration(session.duration_min * 60)} · TSS ${Math.round(session.tss ?? 0)}`,
+                })}
+          </Text>
+        </View>
+      );
+    }
+  } else {
+    planSummary = (
+      <View style={styles.planRow}>
+        <Text style={styles.planSummary}>{hasPlanReport ? t('plan.card.regen') : t('plan.card.none')}</Text>
+      </View>
+    );
+  }
+  const showGenerateCta = !stored || validity?.state === 'expired';
+
   return (
     <View style={styles.card} testID="today-advice-card">
       <View style={styles.head}>
@@ -136,10 +225,11 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
           {t(`dash.today.level.${advice.level}` as never)}
         </Text>
       </View>
+      {planSummary}
       <Text style={styles.headline}>{head}</Text>
       <Text style={styles.basis}>{basis}</Text>
 
-      {/* 双出口（done 免扰档不出）；无 FTP 时课表出口隐藏（瓦特区间无意义） */}
+      {/* 出口（done 免扰档不出；生成引导在概要行） */}
       {advice.level !== 'done' && (
         <View style={styles.actions}>
           {advice.workoutTarget != null && (
@@ -152,12 +242,12 @@ export function TodayAdviceCard({ last, athlete, trainedToday }: Props) {
           <Pressable hitSlop={8} onPress={onChat}>
             <Text style={styles.cta}>{t('dash.today.chat_btn')}</Text>
           </Pressable>
-          {!advice.hasPlan && (
-            <Pressable hitSlop={8} onPress={() => router.push('/plan')}>
-              <Text style={styles.cta}>{t('dash.today.plan_btn')}</Text>
-            </Pressable>
-          )}
         </View>
+      )}
+      {showGenerateCta && (
+        <Pressable disabled={busy} onPress={onGenerate}>
+          <Text style={[styles.cta, busy && { opacity: 0.5 }]}>{t('plan.card.cta')}</Text>
+        </Pressable>
       )}
 
       {/* 本地秒出课表（WorkoutResult 渲染；error 时如实展示原因） */}
@@ -225,6 +315,12 @@ const styles = StyleSheet.create({
   head: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { color: palette.text, fontSize: 14, fontWeight: '700' },
   badge: { fontSize: 12, fontWeight: '700' },
+  planBlock: { gap: 4 },
+  planRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
+  planSummary: { color: palette.muted, fontSize: 12, fontVariant: ['tabular-nums'], flexShrink: 1 },
+  planExpired: { color: palette.faint },
+  planLink: { color: palette.volt, fontSize: 12, fontWeight: '600' },
+  planToday: { color: palette.text, fontSize: 12, fontVariant: ['tabular-nums'] },
   headline: { color: palette.text, fontSize: 15, fontWeight: '600' },
   basis: { color: palette.muted, fontSize: 12, fontVariant: ['tabular-nums'] },
   actions: { flexDirection: 'row', gap: 18, flexWrap: 'wrap' },
