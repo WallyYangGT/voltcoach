@@ -178,6 +178,13 @@ export const PLAN_VALIDATION = {
   history_keep: 10, // 计划版本历史上限（db 层 training_plan_history 裁剪）
 };
 
+// ============ 计划执行情况视图（U1 收尾②：本地 adherence，src/core/plan-adherence） ============
+// 三态口径与 src/prompts/skills/07-training-plan 技能「完成 / 降强度完成 / 未做」配套
+// （技能为知识层定性描述，本处是本地确定性判定的量化单源）
+export const PLAN_ADHERENCE = {
+  done_ratio: 0.8, // 实际 TSS ≥ 计划 TSS × 该系数 → 完成；>0 但不足 → 降强完成；=0（已过期）→ 未做
+};
+
 // ============ 单次课表模板（M3 src/planning generateWorkout 使用） ============
 // 功率按 FTP 百分比；时长单位分钟；TSS 估算按各段 时长秒 × IF² / 36 逐段求和
 export interface WorkoutTemplate {

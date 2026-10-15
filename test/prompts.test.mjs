@@ -388,14 +388,16 @@ test('复盘提示词注入档案段（新末参，缺省不影响旧调用）',
   assert.ok(withDossier.indexOf('个人训练档案') < withDossier.indexOf('## 训练数据'));
 });
 
-test('agentic 工具指引段：16 个工具与 6 条规则（含 FTP 更新/重新分析/训练计划）', () => {
+test('agentic 工具指引段：17 个工具与 6 条规则（含 FTP 更新/重新分析/训练计划双工具）', () => {
   const s = buildAgenticSection('zh');
-  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'get_training_plan', 'update_training_plan', 'set_power_flag', 'recalibrate_activity_power']) {
+  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'get_training_plan', 'update_training_plan', 'adjust_plan_sessions', 'set_power_flag', 'recalibrate_activity_power']) {
     assert.ok(s.includes(`- ${name}：`), name);
   }
   // update_training_plan 的「整体重发」约束须在指引段硬性出现（follow_up 不注 skills，
-  // 工具清单是该场景唯一的约束来源——code-review P2-1）
+  // 工具清单是该场景唯一的约束来源——code-review P2-1）；adjust_plan_sessions 的
+  // 确认落实协议（先复述获肯定答复）同为硬性出现（U1 收尾：局部调整不抢跑）
   assert.match(s, /必须整体重发全部课次/);
+  assert.match(s, /获得用户肯定答复后方可调用/);
   assert.match(s, /1\. 只在上方预装数据不足以回答时才调用工具/);
   assert.match(s, /4\. 需要先调用工具时，中间轮只写简短过渡语/);
   // 新增规则：主动更新须在回答中指出旧值→新值；重新分析后说明指标变化
@@ -408,6 +410,7 @@ test('agentic 工具指引段：16 个工具与 6 条规则（含 FTP 更新/重
   assert.match(en, /"FTP has been updated from X to Y"/);
   assert.match(en, /6\. Re-analysis/);
   assert.match(en, /ALWAYS resend every session/);
+  assert.match(en, /confirmation protocol/);
 });
 
 test('对话指令与当前时间段：双语切换', () => {
@@ -415,6 +418,9 @@ test('对话指令与当前时间段：双语切换', () => {
   assert.match(buildChatInstruction('chat', 'zh'), /你是用户的随身 AI 训练顾问/);
   assert.match(buildChatInstruction('plan', 'zh'), /训练计划」对话中/);
   assert.match(buildChatInstruction('plan', 'zh'), /update_training_plan/);
+  assert.match(buildChatInstruction('plan', 'zh'), /adjust_plan_sessions/); // 双工具分工
+  assert.match(buildChatInstruction('plan', 'zh'), /肯定答复/); // 确认落实协议
+  assert.match(buildChatInstruction('plan', 'en'), /adjust_plan_sessions/);
   assert.match(buildChatInstruction('follow_up', 'en'), /within 200 characters/);
   assert.match(buildDateSection(new Date('2026-03-26T10:00:00'), 'zh'), /今天是 2026-03-26/);
   assert.match(buildDateSection(new Date('2026-03-26T10:00:00'), 'en'), /2026-03-26/);

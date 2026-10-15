@@ -16,6 +16,15 @@ import { renderWithProviders } from './helpers/render';
 // 取消确认框（Alert.alert）mock：断言弹窗文案并手动触发破坏性按钮的 onPress
 jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 
+// completed 态顶部挂 PlanLinkChip（U1③ 报告↔计划关联）——db 设备侧整体 mock，
+// 缺省无关联（chip 隐藏），关联行为在 plan-link-chip.test.tsx 专测
+jest.mock('@/db', () => ({
+  getPlanReportLink: jest.fn().mockResolvedValue(null),
+  getCurrentPlan: jest.fn().mockResolvedValue(null),
+  getPlanHistory: jest.fn().mockResolvedValue([]),
+  setLang: jest.fn(),
+}));
+
 beforeEach(() => {
   (Alert.alert as jest.Mock).mockClear();
 });
@@ -141,7 +150,7 @@ describe('AiReportBody', () => {
 
   it('pending 态：取消按钮先弹二次确认，确认后才回调 onCancel（token 防误触）', async () => {
     const onCancel = jest.fn();
-    const { getByText } = await renderWithProviders(
+    const { getByText, getByTestId } = await renderWithProviders(
       <AiReportBody
         report={reportOf({ status: 'pending' })}
         progress={null}
@@ -151,6 +160,8 @@ describe('AiReportBody', () => {
         onCancel={onCancel}
       />,
     );
+    // 2026-10-15 视觉强化：按钮改 outlined+图标，testID 钉住取消按钮存在性
+    expect(getByTestId('cancel-generate')).toBeTruthy();
     fireEvent.press(getByText('取消生成'));
     expect(onCancel).not.toHaveBeenCalled(); // 确认框阶段不触发
     expect(Alert.alert).toHaveBeenCalledWith(

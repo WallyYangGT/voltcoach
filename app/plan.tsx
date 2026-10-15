@@ -9,7 +9,7 @@
  * 进页补跑不在进程内跑的占位消息，轮询收尾静默重载计划（调整可能已落新版本）。
  * 未配置 LLM Key 显示去配置引导（本页正常只从首页计划卡进入，防御可达路径）。
  */
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button, SegmentedButtons } from 'react-native-paper';
@@ -44,6 +44,8 @@ import {
   type TrainingPlan,
 } from '@/core/training-plan';
 import { PlanTable, type PlanTableColumn } from '@/components/PlanTable';
+import { PlanAdherenceCard } from '@/components/PlanAdherenceCard';
+import { PlanAdjustBanner } from '@/components/PlanAdjustBanner';
 import { PlanReportSection } from '@/components/PlanReportSection';
 import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { AskInput } from '@/components/AskInput';
@@ -70,11 +72,21 @@ export default function PlanScreen() {
   const insets = useSafeAreaInsets();
   const kbVisible = useKeyboardState((s) => s.isVisible);
   const scrollRef = useRef<ScrollView>(null);
+  // 深链 version 参数（U1③：报告 chip「关联计划 · 第 N 版」→ 定位历史版本）
+  const params = useLocalSearchParams<{ version?: string | string[] }>();
+  const rawVersion = Array.isArray(params.version) ? params.version[0] : params.version;
+  const pendingVersionRef = useRef<number | null>(
+    rawVersion != null && /^\d+$/.test(rawVersion) ? Number(rawVersion) : null,
+  );
 
   const [cfg, setCfg] = useState<boolean | null>(null);
   const [stored, setStored] = useState<StoredPlan | null>(null);
   const [history, setHistory] = useState<StoredPlan[]>([]);
-  const [viewing, setViewing] = useState<number | null>(null); // 历史版本下标；null=当前版
+  // 历史版本查看锚（StoredPlan.created_at，位置无关）；null=当前版。
+  // 用锚不用下标：新版本落库会把旧当前版挪进历史头部、历史整体后移一位，
+  // 下标会让「正在读的版本」静默换成另一版（code-review P2-3）
+  const [viewingAt, setViewingAt] = useState<string | null>(null);
+  const viewingIdx = viewingAt != null ? history.findIndex((h) => h.created_at === viewingAt) : -1;
   const [tab, setTab] = useState<'week' | 'long' | 'history'>('week');
   const [week, setWeek] = useState<string | null>(null); // 周视图锚点（ISO 周一）；null=默认夹今天
   const [risk, setRisk] = useState<SimRiskFlag[]>([]);
@@ -98,7 +110,6 @@ export default function PlanScreen() {
       setCfg(cfgRes.configured);
       setStored(plan);
       setHistory(hist);
-      setViewing((v) => (v != null && v < hist.length ? v : null));
       if (cid != null) {
         const c = await getAiChat(cid);
         setChatId(c?.id ?? null);
@@ -125,6 +136,21 @@ export default function PlanScreen() {
       void load();
     }, [load]),
   );
+
+  // 深链版本定位（U1③）：历史加载后把 version 序号换算为 history 下标消费一次，
+  // 越界/已被 history_keep 裁剪 → 静默停在当前版；历史条目点击同款（setViewing + 长期视图）
+  useEffect(() => {
+    if (cfg == null || pendingVersionRef.current == null) return; // 未加载完不消费
+    const n = pendingVersionRef.current;
+    pendingVersionRef.current = null;
+    const idx = history.length - n;
+    if (idx >= 0 && idx < history.length) {
+      setViewingAt(history[idx].created_at);
+      setTab('long');
+    }
+    // n === history.length + 1（指向当前版的 chip）落在 idx = -1 分支被静默忽略——
+    // 内容正确（本就在当前版），无「已定位」反馈属可接受取舍
+  }, [cfg, history]);
 
   // 会话：残留补跑 + pending 轮询（口径同 ai/session/[id]），收尾静默重载计划
   useEffect(() => {
@@ -158,7 +184,7 @@ export default function PlanScreen() {
   // 只读快照；无来源（adjust 版）、未生成或被 trimAiReports 清出时为 null 整段隐藏。
   // setState 全部在异步回调里（react-hooks/set-state-in-effect 禁同步触发级联渲染）
   useEffect(() => {
-    const sid = (viewing != null ? (history[viewing] ?? null) : stored)?.source_report_id ?? null;
+    const sid = (viewingAt != null ? (history[viewingIdx] ?? null) : stored)?.source_report_id ?? null;
     let alive = true;
     void (async () => {
       const r = sid == null ? null : await getAiReport(sid).catch((e) => {
@@ -170,7 +196,7 @@ export default function PlanScreen() {
     return () => {
       alive = false;
     };
-  }, [stored, history, viewing]);
+  }, [stored, history, viewingAt, viewingIdx]);
 
   // 键盘弹起滚到底（口径同会话详情页，延时等 KeyboardAvoidingView 落位）。
   // AP3 起进页不再自动滚——此前 messages.length 驱动的 scrollToEnd 会把进页视口
@@ -280,9 +306,9 @@ export default function PlanScreen() {
     );
   }
 
-  const shown = viewing != null ? (history[viewing] ?? null) : stored;
+  const shown = viewingAt != null ? (history[viewingIdx] ?? null) : stored;
   const plan = shown?.plan ?? null;
-  const versionNo = shown ? (viewing != null ? history.length - viewing : history.length + 1) : 0;
+  const versionNo = shown ? (viewingIdx >= 0 ? history.length - viewingIdx : history.length + 1) : 0;
   const validity = plan ? planValidity(plan, localDay()) : null;
   const today = localDay();
 
@@ -400,7 +426,7 @@ export default function PlanScreen() {
                   <Text style={styles.link}>{t('plan.view_report')}</Text>
                 </Pressable>
               )}
-              {viewing == null && (
+              {viewingAt == null && (
                 <Pressable hitSlop={6} disabled={generating} onPress={onGenerate}>
                   <Text style={[styles.link, generating && { opacity: 0.5 }]}>{t('plan.generate')}</Text>
                 </Pressable>
@@ -416,16 +442,24 @@ export default function PlanScreen() {
           </View>
         )}
 
+        {/* AI 调整披露条（U1 收尾④）：props 驱动——页面轮询收尾 load() 刷新 stored/
+            history，本页内完成的调整立即反映（§22 P1-3「banner 不可达」同款教训） */}
+        <PlanAdjustBanner
+          stored={stored}
+          history={history}
+          onChanged={load}
+        />
+
         {/* 历史版本查看条 */}
-        {viewing != null && history[viewing] && (
+        {viewingAt != null && shown && (
           <View style={[styles.banner, styles.viewingBar]}>
             <Text style={styles.bannerText}>
               {t('plan.history.viewing', {
                 // created_at 是 SQLite UTC 时刻文本 → 本地日历日（双口径统一）
-                date: localDayFromUtc(history[viewing].created_at) ?? history[viewing].created_at.slice(0, 10),
+                date: localDayFromUtc(shown.created_at) ?? shown.created_at.slice(0, 10),
               })}
             </Text>
-            <Pressable hitSlop={6} onPress={() => setViewing(null)}>
+            <Pressable hitSlop={6} onPress={() => setViewingAt(null)}>
               <Text style={styles.link}>{t('plan.history.back')}</Text>
             </Pressable>
           </View>
@@ -472,6 +506,9 @@ export default function PlanScreen() {
           </View>
         )}
 
+        {/* 本周执行情况（U1 收尾②：计划 vs 实际三态对比；随周锚点切换，与周表同锚） */}
+        {tab === 'week' && plan && <PlanAdherenceCard plan={plan} weekStart={anchor} today={today} />}
+
         {tab === 'long' && plan && (
           <View style={styles.panel}>
             <Text style={styles.sectionTitle}>
@@ -515,7 +552,7 @@ export default function PlanScreen() {
                   key={i}
                   style={styles.historyRow}
                   onPress={() => {
-                    setViewing(i);
+                    setViewingAt(h.created_at);
                     setTab('long');
                   }}>
                   <View style={styles.historyTop}>
@@ -544,7 +581,7 @@ export default function PlanScreen() {
         <PlanReportSection
           report={planReport}
           onViewReport={() => {
-            const sid = (viewing != null ? (history[viewing] ?? null) : stored)?.source_report_id;
+            const sid = (viewingAt != null ? (history[viewingIdx] ?? null) : stored)?.source_report_id;
             if (sid != null) router.push(`/ai/session/report-${sid}`);
           }}
         />

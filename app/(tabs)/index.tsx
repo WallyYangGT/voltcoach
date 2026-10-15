@@ -1,7 +1,8 @@
 /**
- * 首页仪表盘（M2）：「和教练讨论一下」输入卡片（首屏最顶——AI 体验整合批 AP1，
- * 替代原右下角对话 FAB）+ 本周训练计划卡 + 负荷仪表盘标题组 +
- * CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练。
+ * 首页仪表盘（M2）：今日建议卡（原本周训练计划卡 2026-10-15 并入）+ 负荷仪表盘标题组 +
+ * CTL/ATL/TSB/FTP 大数字瓦片 + 负荷趋势图 + 月度汇总 + 最近训练；
+ * 「和教练讨论一下」输入卡片吸底常驻（2026-10-15 用户需求：位置迁移非推翻 AP1——
+ * 入口从「首屏顶部一处」变「常驻可见」，会话页转场/聚焦链路不动）。
  * 移植自 Web 版 views/dashboard.js：hero 瓦片/趋势/月度/最近训练同在首页（Web 版即此
  * 信息架构），App 侧空库引导语按移动端信息架构改指「记录」tab。数据一次并行取齐：
  * recentFormDaily(90)（趋势图与 hero 大数字同源，序列末端已延伸到今天）/ monthlySummary(6) /
@@ -22,6 +23,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { TrendChart, type TrendPoint } from '@/charts/TrendChart';
 import { formNote } from '@/core/i18n';
+import { localDay } from '@/core/local-day';
 import { formatDuration } from '@/core/metrics';
 import type { MonthlyItem } from '@/core/monthly';
 import { ATHLETE, type AthleteParams } from '@/core/settings';
@@ -39,7 +41,8 @@ import { ChatInviteCard } from '@/components/ChatInviteCard';
 import { AiFtpUpdateBanner } from '@/components/AiFtpUpdateBanner';
 import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
-import { WeeklyPlanCard } from '@/components/WeeklyPlanCard';
+import { PlanAdjustBanner } from '@/components/PlanAdjustBanner';
+import { TodayAdviceCard } from '@/components/TodayAdviceCard';
 import { useI18n } from '@/i18n';
 import { useRideDateLabels } from '@/services/aiTitle';
 import { palette } from '@/theme';
@@ -62,8 +65,10 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [ftpOpen, setFtpOpen] = useState(false); // FTP 科学估算面板展开态（dash.ftp_btn）
   const [glossOpen, setGlossOpen] = useState(false); // 指标说明弹窗（标题旁「?」）
-  // LLM Key 已配置（训练计划卡自加载，此处只喂对话 FAB；null=加载中不渲染防闪）
+  // LLM Key 已配置（训练计划卡自加载，此处只喂吸底对话卡；null=加载中不渲染防闪）
   const [configured, setConfigured] = useState<boolean | null>(null);
+  // 吸底卡实测高度（onLayout）：ScrollView 内容末端补等高 padding，防最后一张卡被遮
+  const [dockH, setDockH] = useState(0);
 
   const load = useCallback(async () => {
     try {
@@ -93,12 +98,20 @@ export default function HomeScreen() {
   const last = data && data.daily.length ? data.daily[data.daily.length - 1] : null;
   // 最近训练行日期按本地日历日展示（双口径统一，与训练列表/报告标题同源同口径）
   const dateLabels = useRideDateLabels((data?.recent ?? []).map((r) => r.file_name));
+  // 今天是否已练（今日建议卡免扰档输入）：最近几行里有本地日=今天的骑行即算。
+  // 行级本地日的唯一瞬间源是 records 首帧（dateLabels 正是它的换算）；标签尚未
+  // 解析完成的行回退存储 UTC 日比对（§24 展示层同款回退，消冷缓存 1–3s 的状态
+  // 翻转抖动——code-review P3-4）；仅看最近 6 条，一天多练超 6 条病态不扩查询
+  const today = localDay();
+  const trainedToday = (data?.recent ?? []).some(
+    (r) => (dateLabels.has(r.file_name) ? dateLabels.get(r.file_name) : r.date) === today,
+  );
 
   return (
     <View style={styles.root}>
       <ScrollView
         style={styles.page}
-        contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 96, gap: 12 }}
+        contentContainerStyle={{ paddingTop: insets.top + 12, paddingBottom: 96 + dockH, gap: 12 }}
         refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -110,15 +123,13 @@ export default function HomeScreen() {
           }}
         />
       }>
-      {/* 「和教练讨论一下」输入卡片（AP1 首屏最顶；未配置 Key 整卡隐藏，
-          与计划卡/FAB 同口径）——点击直达新对话页并自动聚焦输入框 */}
-      {configured === true && (
-        <ChatInviteCard onPress={() => router.push('/ai/session/chat-new')} />
-      )}
+      {/* 今日建议卡（U1 收尾① + 2026-10-15 用户拍板合并：原「本周训练计划」卡的功能
+          ——计划四态概要/今日训练内容/一键生成/查看课表——已整卡并入，首页计划信息
+          唯一出口；纯本地计算不被 LLM Key 门控，空库整卡隐藏） */}
+      <TodayAdviceCard last={last} athlete={data?.athlete ?? null} trainedToday={trainedToday} />
 
-      {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏）。
-          顶卡之下第二位：今天该练什么第一眼可见 */}
-      <WeeklyPlanCard />
+      {/* AI 调整披露条（U1 收尾④：当前版来自会话调整时显示摘要 + 撤销入口） */}
+      <PlanAdjustBanner />
 
       <View style={styles.titleRow}>
         <Text style={styles.title}>{t('dash.title')}</Text>
@@ -237,6 +248,18 @@ export default function HomeScreen() {
       {/* 指标说明弹窗（Web 版 glossaryHtml 同源词条） */}
       <GlossaryModal visible={glossOpen} onClose={() => setGlossOpen(false)} />
       </ScrollView>
+
+      {/* 「和教练讨论一下」输入卡吸底常驻（2026-10-15：全宽仿输入框样式不变，
+          位置对标原 FAB 的底部区；未配置 Key 整卡隐藏与计划卡同口径）。
+          底部间距固定 6px（用户反馈贴近 tab 栏）：tab 屏里手势区已被 tab 栏消费，
+          不再加 insets.bottom（与 tab 栏双计会造成大空隙） */}
+      {configured === true && (
+        <View
+          style={styles.inviteDock}
+          onLayout={(e) => setDockH(e.nativeEvent.layout.height)}>
+          <ChatInviteCard onPress={() => router.push('/ai/session/chat-new')} />
+        </View>
+      )}
     </View>
   );
 }
@@ -305,6 +328,9 @@ function Metric({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: palette.bg },
   page: { flex: 1, backgroundColor: palette.bg, paddingHorizontal: 16 },
+  // 吸底对话卡容器：横向 padding 与内容流对齐，底部 6px 贴近 tab 栏；高度经
+  // onLayout 实测后补进 ScrollView 内容末端 padding（96 为底部 tab 预留基线）
+  inviteDock: { paddingHorizontal: 16, paddingBottom: 6 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { color: palette.text, fontSize: 22, fontWeight: '700' },
   glossBtn: {

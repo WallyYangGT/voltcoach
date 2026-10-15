@@ -528,6 +528,48 @@ export async function listActivities(n: number = ACTIVITY_LIST_LIMIT): Promise<A
   }));
 }
 
+/**
+ * 按存储 UTC 日期范围取训练清单（计划执行视图 U1② 用）：fromDay/toDay 为 YYYY-MM-DD
+ * UTC 日串（闭区间）。调用方传入本地周界 ±1 天的缓冲（跨时区起骑时刻可能落在相邻
+ * UTC 日），行级本地日归并由调用方经 resolveRideDateLabels 完成。
+ */
+export async function listActivitiesInRange(fromDay: string, toDay: string): Promise<ActivityListItem[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{
+    file_name: string;
+    date: string;
+    sport: string | null;
+    category: string | null;
+    duration_sec: number | null;
+    distance_km: number | null;
+    elevation_gain_m: number | null;
+    tss: number | null;
+    np: number | null;
+    avg_power: number | null;
+    intensity_factor: number | null;
+  }>(
+    `SELECT file_name, date, sport, category, duration_sec, distance_km, elevation_gain_m,
+            tss, np, avg_power, intensity_factor
+     FROM activities WHERE date >= ? AND date <= ? ORDER BY date DESC`,
+    fromDay,
+    toDay,
+  );
+  const r1 = (x: number | null) => (x == null ? null : Math.round(x * 10) / 10);
+  return rows.map((r) => ({
+    file_name: r.file_name,
+    date: r.date,
+    sport: r.sport ?? 'unknown',
+    category: r.category ?? 'training',
+    duration_sec: r.duration_sec,
+    distance_km: r1(r.distance_km),
+    elevation_gain_m: r.elevation_gain_m == null ? null : Math.round(r.elevation_gain_m),
+    tss: r.tss == null ? null : Math.round(r.tss),
+    np: r.np == null ? null : Math.round(r.np),
+    avg_power: r.avg_power == null ? null : Math.round(r.avg_power),
+    intensity_factor: r.intensity_factor == null ? null : r1(r.intensity_factor),
+  }));
+}
+
 /** 按文件名取单条训练的完整 summary（详情页用），并把 category 与 note 合并进 activity；不存在返回 null */
 export async function getActivitySummary(fileName: string): Promise<Summary | null> {
   const db = await getDb();
@@ -1845,4 +1887,92 @@ export async function savePlanVersion(
     versionsTotal = 1 + versions.length;
   });
   return versionsTotal;
+}
+
+// ---------------- 报告 ↔ 计划结构化关联（U1 收尾③，settings 松散引用行） ----------------
+// 拍板（2026-10-15）：不加列、不动 SCHEMA_VERSION 与备份包闸门——沿 ai_ftp_update 快照
+// 先例走 settings JSON 行。锚 = StoredPlan.created_at（位置无关，版本被替换/挪历史后
+// 仍可定位）；版本号展示按位置推导（locatePlanVersion）。上限条数防 reports 滚动保留
+// 期间链接行无界增长（ai_reports 每 mode 留 30，四 mode 最多 ~120 行链接）。
+
+const PLAN_LINKS_KEY = 'plan_report_links';
+const PLAN_LINKS_CAP = 200;
+
+/** 报告关联的计划锚（该报告生成完成时锚定的 StoredPlan.created_at；无关联返回 null） */
+export async function getPlanReportLink(reportId: number): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`,
+    PLAN_LINKS_KEY,
+  );
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.value) as Record<string, string>;
+    const anchor = parsed[String(reportId)];
+    return typeof anchor === 'string' ? anchor : null;
+  } catch {
+    return null; // 行损坏按无关联处理
+  }
+}
+
+/** 记一条报告→计划锚（generateReport 收尾调用；超上限剪最旧）。读改写包事务：
+ *  resumeInterruptedGenerations 会并行 fire 多条 generateReport，两条报告毫秒级窗口内
+ *  先后完成时非事务的读改写会丢一次更新（code-review P2-1，照 savePlanVersion 先例） */
+export async function recordPlanReportLink(reportId: number, planCreatedAt: string): Promise<void> {
+  const db = await getDb();
+  await db.withTransactionAsync(async () => {
+    const row = await db.getFirstAsync<{ value: string }>(
+      `SELECT value FROM settings WHERE key = ?`,
+      PLAN_LINKS_KEY,
+    );
+    let links: Record<string, string> = {};
+    if (row) {
+      try {
+        const parsed = JSON.parse(row.value);
+        if (parsed && typeof parsed === 'object') links = parsed;
+      } catch {
+        links = {}; // 行损坏重开
+      }
+    }
+    links[String(reportId)] = planCreatedAt;
+    const keys = Object.keys(links);
+    for (const k of keys.slice(0, Math.max(0, keys.length - PLAN_LINKS_CAP))) delete links[k];
+    await db.runAsync(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      PLAN_LINKS_KEY,
+      JSON.stringify(links),
+    );
+  });
+}
+
+/**
+ * 撤销最近一次计划版本替换（U1 收尾④「披露与可逆」的撤销半边）：事务内
+ * current ↔ history[0] 交换——被撤销的版本进历史头部（再点一次撤销可换回，
+ * 无数据丢失）；history_keep 裁剪口径不变。无历史版本或状态异常返回 false。
+ */
+export async function undoLastPlanVersion(): Promise<boolean> {
+  const db = await getDb();
+  let undone = false;
+  await db.withTransactionAsync(async () => {
+    const [current, history] = await Promise.all([getCurrentPlan(), getPlanHistory()]);
+    // 只有历史而没有当前版属异常状态（savePlanVersion 先有当前版才有历史），不动
+    if (!current || history.length === 0) return;
+    const restored = history[0];
+    const versions = [current, ...history.slice(1)].slice(0, PLAN_VALIDATION.history_keep);
+    await db.runAsync(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      PLAN_HISTORY_KEY,
+      JSON.stringify({ shape: PLAN_STORE_SHAPE, versions } satisfies PlanHistoryEntry),
+    );
+    await db.runAsync(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      PLAN_CURRENT_KEY,
+      JSON.stringify({ shape: PLAN_STORE_SHAPE, current: restored } satisfies PlanCurrentEntry),
+    );
+    undone = true;
+  });
+  return undone;
 }

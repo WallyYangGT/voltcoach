@@ -121,7 +121,7 @@ describe('ChatBubbles', () => {
       activity: '正在调用 get_form_series…',
     });
     const onCancelMessage = jest.fn();
-    const { getByText } = await renderWithProviders(
+    const { getByText, getByTestId } = await renderWithProviders(
       <ChatBubbles
         chatId={CHAT_ID}
         messages={[msg({ id: 3, role: 'assistant', status: 'pending', content: '已生成的开头…' })]}
@@ -131,13 +131,15 @@ describe('ChatBubbles', () => {
     );
     expect(getByText('正在调用 get_form_series…')).toBeTruthy();
     expect(getByText('已生成的开头…')).toBeTruthy();
+    // 2026-10-15 视觉强化：按钮改 outlined+图标，testID 钉住取消按钮存在性
+    expect(getByTestId('cancel-generate')).toBeTruthy();
     fireEvent.press(getByText('取消生成'));
     expect(onCancelMessage).toHaveBeenCalledTimes(1);
     expect(onCancelMessage).toHaveBeenCalledWith(3);
   });
 
   it('pending 气泡：onCancelMessage 缺省时不显示停止按钮', async () => {
-    const { queryByText } = await renderWithProviders(
+    const { queryByText, queryByTestId } = await renderWithProviders(
       <ChatBubbles
         chatId={CHAT_ID}
         messages={[msg({ id: 3, role: 'assistant', status: 'pending' })]}
@@ -145,11 +147,12 @@ describe('ChatBubbles', () => {
       />,
     );
     expect(queryByText('取消生成')).toBeNull();
+    expect(queryByTestId('cancel-generate')).toBeNull();
   });
 
   it('cancelled 气泡：已取消标签 + 部分正文 + 重试回调该条 messageId', async () => {
     const onRetry = jest.fn();
-    const { getByText } = await renderWithProviders(
+    const { getByText, queryByTestId } = await renderWithProviders(
       <ChatBubbles
         chatId={CHAT_ID}
         messages={[msg({ id: 9, role: 'assistant', status: 'cancelled', content: '被取消前写的一半。' })]}
@@ -158,6 +161,7 @@ describe('ChatBubbles', () => {
     );
     expect(getByText('已取消')).toBeTruthy();
     expect(getByText('被取消前写的一半。')).toBeTruthy();
+    expect(queryByTestId('cancel-generate')).toBeNull(); // 静止态无停止按钮
     fireEvent.press(getByText('重试'));
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(onRetry).toHaveBeenCalledWith(9);

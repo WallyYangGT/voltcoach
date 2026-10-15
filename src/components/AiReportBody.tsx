@@ -18,6 +18,7 @@ import type { GenProgress } from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiMarkdown } from './AiMarkdown';
+import { PlanLinkChip } from './PlanLinkChip';
 
 /** 已等待时长：秒 → "m:ss"（超过 1 小时只显示到分） */
 function fmtElapsed(sec: number): string {
@@ -50,8 +51,18 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
       { text: t('ai.cancelGenerate'), style: 'destructive', onPress: onCancel },
     ]);
   };
+  // 停止按钮视觉口径（2026-10-15，同 ChatBubbles）：描边 + stop 图标 + 右对齐 +
+  // orange——「停止」是主动控制不是错误恢复，红色系留给 failed 盒；Alert 二次确认
+  // 逻辑不动（token 已在消耗，防误触）
   const cancelButton = generating && !!onCancel && (
-    <Button compact mode="text" textColor={palette.red} onPress={confirmCancel}>
+    <Button
+      compact
+      mode="outlined"
+      icon="stop"
+      textColor={palette.orange}
+      style={styles.cancelBtn}
+      testID="cancel-generate"
+      onPress={confirmCancel}>
       {t('ai.cancelGenerate')}
     </Button>
   );
@@ -133,11 +144,22 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
     );
   }
 
+  // 报告↔计划结构化关联（U1③）：completed 态顶部条件小链接（无关联的存量报告整段隐藏）
+  if (report.status === 'completed') {
+    return (
+      <View style={styles.completedWrap}>
+        <PlanLinkChip reportId={report.id} />
+        <AiMarkdown markdown={report.markdown} />
+      </View>
+    );
+  }
+
   return <AiMarkdown markdown={report.markdown} />;
 }
 
 const styles = StyleSheet.create({
   block: { gap: 4, paddingVertical: 6 },
+  completedWrap: { gap: 6, paddingVertical: 6 },
   pending: { color: palette.text, fontSize: 13, lineHeight: 20 },
   hint: { color: palette.faint, fontSize: 11.5, lineHeight: 17 },
   activity: { color: palette.orange, fontSize: 11.5, lineHeight: 17 },
@@ -146,4 +168,6 @@ const styles = StyleSheet.create({
   failedErr: { color: palette.muted, fontSize: 12 },
   cancelledBox: { borderWidth: 1, borderColor: palette.lineSoft, borderRadius: 10, gap: 6, padding: 12 },
   cancelledText: { color: palette.orange, fontSize: 13, fontWeight: '700' },
+  // 停止按钮：主题 outline 是 line 灰，需显式盖边框色（先例 ai 页 volt 描边）
+  cancelBtn: { borderColor: palette.orange, alignSelf: 'flex-end' },
 });

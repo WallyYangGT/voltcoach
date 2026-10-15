@@ -16,6 +16,7 @@ import {
   estimateSessionTss,
   extractPlanFromMarkdown,
   formatPlanIssue,
+  locatePlanVersion,
   planValidity,
   projectPlanForm,
   resolvePlanTss,
@@ -433,3 +434,36 @@ test('diffDays: 同日为 0，跨日按 UTC 日差', () => {
 function addDaysStr(dateStr, n) {
   return new Date(Date.parse(dateStr + 'T00:00:00Z') + n * 86400000).toISOString().slice(0, 10);
 }
+
+// ---------------- U1 收尾③：报告↔计划关联的版本定位 ----------------
+
+test('validateTrainingPlan ops 档：豁免 valid_from 回看墙（adjust 档仍硬拒）——局部调整链路专用', () => {
+  // valid_from = today-10：adjust 档（整发，模型给日期）报 from_past；ops 档（App 存量值）放行
+  const stale = { valid_from: '2026-10-03', valid_to: '2026-10-25', goal: 'g', sessions: [session('2026-10-13', 'endurance', 60)] };
+  const adj = validateTrainingPlan(stale, TODAY, 'adjust');
+  assert.equal(adj.ok, false);
+  assert.ok(adj.errors.some((e) => e.includes('7 天前')));
+  const ops = validateTrainingPlan(stale, TODAY, 'ops');
+  assert.equal(ops.ok, true);
+  // ops 档与 adjust 档同性质：合理性违规仍进 violations 硬拒
+  const clash = { ...stale, sessions: [session('2026-10-13', 'threshold', 60), session('2026-10-14', 'threshold', 60)] };
+  const r = validateTrainingPlan(clash, TODAY, 'ops');
+  assert.equal(r.ok, true);
+  assert.equal(r.violations.length, 1);
+});
+
+test('locatePlanVersion: 当前版/历史版/未知锚 三分支，版本号与计划页位置口径一致', () => {
+  const current = { created_at: '2026-10-15T08:00:00.000Z' };
+  const history = [
+    { created_at: '2026-10-14T08:00:00.000Z' }, // 第 2 版
+    { created_at: '2026-10-13T08:00:00.000Z' }, // 第 1 版
+  ];
+  const located = locatePlanVersion(current, history, '2026-10-14T08:00:00.000Z');
+  assert.deepEqual(located, { versionNo: 2, inHistory: true }); // history.length - idx = 2
+  assert.deepEqual(locatePlanVersion(current, history, '2026-10-15T08:00:00.000Z'), {
+    versionNo: 3, // 当前版 = history.length + 1
+    inHistory: false,
+  });
+  assert.equal(locatePlanVersion(current, history, '2026-09-01T00:00:00.000Z'), null); // 已裁出历史
+  assert.equal(locatePlanVersion(null, [], '2026-10-13T08:00:00.000Z'), null); // 无当前版
+});
