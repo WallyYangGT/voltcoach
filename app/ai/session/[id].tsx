@@ -41,7 +41,7 @@ export default function AiSessionScreen() {
   const { t, lang } = useI18n();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id?: string; autoFocus?: string | string[] }>();
+  const params = useLocalSearchParams<{ id?: string; autoFocus?: string | string[]; draft?: string | string[] }>();
   const raw = Array.isArray(params.id) ? params.id[0] : (params.id ?? '');
   // 路由参数解析：<type>-<id>（chat-new 为新建对话的特殊形态）
   const [kind, idStr] = raw.split('-');
@@ -51,6 +51,8 @@ export default function AiSessionScreen() {
   // （首页输入卡片入口直达可输入态；从会话中心浏览既有对话不聚焦）
   const rawAutoFocus = Array.isArray(params.autoFocus) ? params.autoFocus[0] : params.autoFocus;
   const wantsFocus = isNewChat || rawAutoFocus === '1';
+  // 预填草稿（2026-10-15：今日建议卡「和教练聊聊」深链带上下文；仅 chat 分支消费）
+  const rawDraft = Array.isArray(params.draft) ? params.draft[0] : params.draft;
 
   const [sending, setSending] = useState(false);
 
@@ -308,6 +310,7 @@ export default function AiSessionScreen() {
           sending={sending}
           onSend={send}
           autoFocus={kind === 'chat' && wantsFocus}
+          initialDraft={kind === 'chat' ? rawDraft : undefined}
           style={[styles.inputRow, { paddingBottom: (kbVisible ? 0 : insets.bottom) + 10 }]}
         />
       )}

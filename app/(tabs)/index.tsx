@@ -24,6 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { TrendChart, type TrendPoint } from '@/charts/TrendChart';
 import { formNote } from '@/core/i18n';
+import { localDay } from '@/core/local-day';
 import { formatDuration } from '@/core/metrics';
 import type { MonthlyItem } from '@/core/monthly';
 import { ATHLETE, type AthleteParams } from '@/core/settings';
@@ -41,6 +42,7 @@ import { ChatInviteCard } from '@/components/ChatInviteCard';
 import { AiFtpUpdateBanner } from '@/components/AiFtpUpdateBanner';
 import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
+import { TodayAdviceCard } from '@/components/TodayAdviceCard';
 import { WeeklyPlanCard } from '@/components/WeeklyPlanCard';
 import { useI18n } from '@/i18n';
 import { useRideDateLabels } from '@/services/aiTitle';
@@ -100,6 +102,12 @@ export default function HomeScreen() {
   const last = data && data.daily.length ? data.daily[data.daily.length - 1] : null;
   // 最近训练行日期按本地日历日展示（双口径统一，与训练列表/报告标题同源同口径）
   const dateLabels = useRideDateLabels((data?.recent ?? []).map((r) => r.file_name));
+  // 今天是否已练（今日建议卡免扰档输入）：最近几行里有本地日=今天的骑行即算。
+  // 行级本地日的唯一瞬间源是 records 首帧（dateLabels 正是它的换算）；仅看最近
+  // 6 条——一天多练超过 6 条的场景病态，不值得为它扩查询
+  const trainedToday = (data?.recent ?? []).some(
+    (r) => dateLabels.get(r.file_name) === localDay(),
+  );
 
   return (
     <View style={styles.root}>
@@ -120,6 +128,10 @@ export default function HomeScreen() {
       {/* 本周训练计划（v2 计划载体入口；未配置 Key 时组件内部整卡隐藏）。
           内容流首位：今天该练什么第一眼可见 */}
       <WeeklyPlanCard />
+
+      {/* 今日建议卡（U1 收尾①：本地零 token「今天怎么办」，与计划卡「这周怎么排」分工；
+          纯本地计算不被 LLM Key 门控，空库整卡隐藏） */}
+      <TodayAdviceCard last={last} athlete={data?.athlete ?? null} trainedToday={trainedToday} />
 
       <View style={styles.titleRow}>
         <Text style={styles.title}>{t('dash.title')}</Text>
