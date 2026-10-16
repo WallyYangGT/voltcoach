@@ -30,6 +30,14 @@ import { localDay } from '@/core/local-day';
 import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
 import { ATHLETE, AI_CONFIG, FTP_ESTIMATION, PLAN_VALIDATION, type AiConfig, type AthleteParams } from '@/core/settings';
 import type { PlanIssue, TrainingPlan } from '@/core/training-plan';
+import {
+  DEFAULT_SYNC_STATE,
+  normalizeSyncState,
+  type ProviderSyncState,
+  type SyncCounts,
+  type SyncProviderId,
+  type SyncState,
+} from '@/sync/state';
 import { migrationsFor, SCHEMA_VERSION } from './migrations';
 
 // 供编排层/设置页引用的配置类型（db 层是 AiConfig 的存取入口，re-export 同源导出）
@@ -881,31 +889,16 @@ export async function setLang(lang: Lang): Promise<Lang> {
   return lang;
 }
 
-// ---------------- 顽鹿同步状态（settings 表 sync 键，M4） ----------------
-// 账号密码不进库（与 AI Key 同级敏感），存 SecureStore，由服务层管理。
+// ---------------- 云同步状态（settings 表 sync 键，M4；2026-10-16 多平台化） ----------------
+// 账号密码/令牌不进库（与 AI Key 同级敏感），存 SecureStore，由服务层管理。
+// 行形状（当前生效平台 + 各平台分槽的水位线/计数）与旧行兼容归一化都在
+// src/sync/state.ts——M4 的单平台扁平行会被自动读成顽鹿的槽位，老用户水位线不丢。
 
-/** 同步配置与最近结果（单 JSON 行；auto 为前台自动同步开关） */
-export interface SyncState {
-  auto: boolean;
-  last_sync_at: string | null;
-  last_result: 'ok' | 'error' | null;
-  last_error: string | null;
-  /**
-   * 最近一轮计数。duplicates 为 M5 新增（内容指纹命中：库里已有同一趟骑行但文件名
-   * 不同）——旧版本写的状态行没有该字段，故可选，读侧按 `?? 0` 兜底。
-   */
-  last_counts: { imported: number; skipped: number; failed: number; duplicates?: number } | null;
-}
+/** 单平台同步进度 / 最近计数 / 平台标识（形状与归一化定义在 src/sync/state.ts，此处转发出口） */
+export type { ProviderSyncState, SyncCounts, SyncState, SyncProviderId };
+export { DEFAULT_SYNC_STATE };
 
-export const DEFAULT_SYNC_STATE: SyncState = {
-  auto: true,
-  last_sync_at: null,
-  last_result: null,
-  last_error: null,
-  last_counts: null,
-};
-
-/** 当前同步状态（无行/行损坏回落默认值） */
+/** 当前同步状态（无行/行损坏回落默认值；旧版扁平行自动归一化） */
 export async function getSyncState(): Promise<SyncState> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ value: string }>(
@@ -913,7 +906,7 @@ export async function getSyncState(): Promise<SyncState> {
   );
   if (!row) return { ...DEFAULT_SYNC_STATE };
   try {
-    return { ...DEFAULT_SYNC_STATE, ...(JSON.parse(row.value) as Partial<SyncState>) };
+    return normalizeSyncState(JSON.parse(row.value));
   } catch {
     return { ...DEFAULT_SYNC_STATE };
   }

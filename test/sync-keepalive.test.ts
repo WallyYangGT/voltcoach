@@ -1,23 +1,24 @@
 /**
- * sync-keepalive.test.ts — L4 服务层测试：顽鹿同步 × 保活壳接线（decisions §17）。
+ * sync-keepalive.test.ts — L4 服务层测试：云同步编排 × 保活壳接线（decisions §17）。
  *
  * 钉住的中间层语义（code-review P2-2：此前只靠一次性冒烟）：
- * 1. 未配置账号的 fast-fail 不 acquire（不闪通知）；
- * 2. pull 正常返回 / login 失败早退 / listSince 失败早退——release 恰好一次
+ * 1. 未绑定凭据的 fast-fail 不 acquire（不闪通知）；
+ * 2. 拉取正常返回 / 建会话失败早退 / 列表失败早退——release 恰好一次
  *    （finally 覆盖 pullActivities 的全部早退路径）；
- * 3. 并发 runOnelapSync 共享同一 promise → 只 acquire 一次（防双跑 × 引用计数交互）。
+ * 3. 并发 runSync 共享同一 promise → 只 acquire 一次（防双跑 × 引用计数交互）；
+ * 4. 逐活动鉴权失败终止本轮（记 auth，不再往下拉）；
+ * 5. 水位线写进**当前生效平台**的槽位（多平台后状态行按平台分槽）。
  *
- * mock 边界：'@/db'、'expo-secure-store'、'expo-crypto'、'@/ai/http'、
- * '@/ai/keepalive' 与 '@/sync/onelap' 的 client 工厂整体替换——被测对象只有
- * runSyncOnce 的编排与保活配对，client 行为由桩注入。
+ * mock 边界：'@/db'、'@/ai/keepalive' 与平台注册表（'@/services/syncProviders'）
+ * 整体替换——被测对象只有 runSyncOnce 的编排与保活配对，平台协议行为由桩 runner
+ * 注入（各平台客户端另有 L1 直测）。
  */
-import { getOnelapAccount, runOnelapSync } from '@/services/syncOnelap';
+import { runSync } from '@/services/sync';
 import { acquireGenerationKeepAlive } from '@/ai/keepalive';
 import { getSyncState, setSyncState } from '@/db';
-import * as SecureStore from 'expo-secure-store';
-import { createOnelapClient } from '@/sync/onelap';
+import { SyncError } from '@/sync/common';
+import { providerById } from '@/services/syncProviders';
 
-// 设备侧模块整体 mock（babel-plugin-jest-hoist 会把 jest.mock 提到所有 import 之前）
 jest.mock('@/ai/keepalive', () => ({
   acquireGenerationKeepAlive: jest.fn(),
 }));
@@ -29,92 +30,96 @@ jest.mock('@/db', () => ({
   listActivityFileNames: jest.fn(() => Promise.resolve([])),
 }));
 
-jest.mock('expo-secure-store', () => ({
-  getItemAsync: jest.fn(),
-  setItemAsync: jest.fn(() => Promise.resolve()),
-  deleteItemAsync: jest.fn(() => Promise.resolve()),
+jest.mock('@/services/syncProviders', () => ({
+  providerById: jest.fn(),
+  allProviders: jest.fn(() => []),
 }));
 
-jest.mock('expo-crypto', () => ({
-  digestStringAsync: jest.fn(() => Promise.resolve('md5')),
-  getRandomBytes: jest.fn(() => new Uint8Array(16)),
-}));
-
-jest.mock('@/ai/http', () => ({
-  loadDefaultFetch: jest.fn(() => Promise.resolve(jest.fn())),
-}));
-
-jest.mock('@/sync/onelap', () => ({
-  createOnelapClient: jest.fn(),
-  endpointOrigins: jest.fn(() => []),
-  extractFitFileName: jest.fn((_key: string, id: number) => `mock-ride-${id}.fit`),
-  jitterDelayMs: jest.fn(() => 0),
-  OnelapError: class extends Error {
-    code: string;
-    constructor(code: string, message: string) {
-      super(message);
-      this.code = code;
-    }
-  },
-  parseRideTime: jest.fn(() => new Date('2026-10-11T08:00:00Z')),
-  probeEndpoint: jest.fn(),
-  syncWindowStart: jest.fn(() => new Date('2026-09-01T00:00:00Z')),
-}));
-
+/** 新版状态行（按平台分槽）的空态 */
 const EMPTY_STATE = {
+  provider: 'onelap' as const,
   auto: false,
-  last_sync_at: null,
-  last_result: null,
-  last_error: null,
-  last_counts: null,
+  providers: {},
 };
 
-function stubClient(over: Partial<Record<string, unknown>> = {}) {
-  (createOnelapClient as jest.Mock).mockReturnValue({
-    login: jest.fn(() => Promise.resolve({ token: 't', uid: 'u' })),
+/** 平台适配器桩：凭据已绑定，协议行为由 runner 桩注入 */
+function stubProvider(over: Partial<Record<string, unknown>> = {}) {
+  const runner = {
+    start: jest.fn(() => Promise.resolve()),
     listSince: jest.fn(() => Promise.resolve([])),
-    getFitKey: jest.fn(() => Promise.resolve('key')),
-    downloadByKey: jest.fn(),
+    getFileRef: jest.fn(() => Promise.resolve({ key: 'geo/mock-ride-1.fit', fileName: 'mock-ride-1.fit' })),
+    download: jest.fn(() => Promise.resolve(new Uint8Array([0x0e]))),
+    recover: jest.fn(() => Promise.resolve()),
     ...over,
+  };
+  (providerById as jest.Mock).mockReturnValue({
+    id: 'onelap',
+    labelKey: 'data.sync.provider.onelap',
+    authKind: 'password',
+    loadCredentials: jest.fn(() => Promise.resolve({ kind: 'password', account: 'smoke@test.local', password: 'pw' })),
+    saveCredentials: jest.fn(),
+    clearCredentials: jest.fn(),
+    createRunner: jest.fn(() => Promise.resolve(runner)),
+    probe: jest.fn(() => Promise.resolve([])),
+    overrideBase: jest.fn(() => null),
   });
+  return runner;
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
   (acquireGenerationKeepAlive as jest.Mock).mockResolvedValue({ release: jest.fn(() => Promise.resolve()) });
-  (SecureStore.getItemAsync as jest.Mock).mockImplementation(async (key: string) =>
-    key === 'voltcoach.onelap.account' ? 'smoke@test.local' : 'smoke-pass',
-  );
   (getSyncState as jest.Mock).mockResolvedValue(EMPTY_STATE);
-  stubClient();
+  stubProvider();
 });
 
-describe('顽鹿同步 × 保活壳接线', () => {
-  it('未配置账号：fast-fail 返回 no_account 且不 acquire（不闪通知）', async () => {
-    (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(null);
-    const outcome = await runOnelapSync();
+/** 取本轮 setSyncState 写入的当前平台槽位 */
+function writtenSlot() {
+  const next = (setSyncState as jest.Mock).mock.calls[0][0] as {
+    provider: string;
+    providers: Record<string, Record<string, unknown>>;
+  };
+  return { state: next, slot: next.providers[next.provider] };
+}
+
+describe('云同步编排 × 保活壳接线', () => {
+  it('未绑定凭据：fast-fail 返回 no_account 且不 acquire（不闪通知）', async () => {
+    (providerById as jest.Mock).mockReturnValue({
+      id: 'onelap',
+      labelKey: 'data.sync.provider.onelap',
+      authKind: 'password',
+      loadCredentials: jest.fn(() => Promise.resolve(null)),
+      createRunner: jest.fn(),
+      probe: jest.fn(),
+      overrideBase: jest.fn(() => null),
+    });
+    const outcome = await runSync();
     expect(outcome.error?.code).toBe('no_account');
     expect(acquireGenerationKeepAlive).not.toHaveBeenCalled();
   });
 
   it('正常同步（空列表）：acquire 一次、release 恰好一次、水位线写 ok', async () => {
-    const outcome = await runOnelapSync();
+    const outcome = await runSync();
     expect(outcome.error).toBeNull();
     expect(acquireGenerationKeepAlive).toHaveBeenCalledTimes(1);
     expect(acquireGenerationKeepAlive).toHaveBeenCalledWith(
-      expect.objectContaining({ title: '顽鹿同步进行中', channel: '数据同步' }),
+      expect.objectContaining({ title: '云端同步进行中', channel: '数据同步' }),
     );
     const release = (acquireGenerationKeepAlive as jest.Mock).mock.results[0].value.then(
       (h: { release: jest.Mock }) => h.release,
     );
     const r = await release;
     expect(r).toHaveBeenCalledTimes(1);
-    expect(setSyncState).toHaveBeenCalledWith(expect.objectContaining({ last_result: 'ok' }));
+    // 水位线落在当前生效平台（onelap）的槽位里，不是顶层
+    const { state, slot } = writtenSlot();
+    expect(state.provider).toBe('onelap');
+    expect(slot.last_result).toBe('ok');
+    expect(typeof slot.last_sync_at).toBe('string');
   });
 
-  it('login 失败早退：release 恰好一次（finally 覆盖），水位线记 error 但不动时间戳', async () => {
-    stubClient({ login: jest.fn(() => Promise.reject(new Error('账号或密码错误'))) });
-    const outcome = await runOnelapSync();
+  it('建会话失败早退：release 恰好一次（finally 覆盖），水位线记 error 但不动时间戳', async () => {
+    stubProvider({ start: jest.fn(() => Promise.reject(new Error('账号或密码错误'))) });
+    const outcome = await runSync();
     expect(outcome.error?.code).toBe('other');
     expect(acquireGenerationKeepAlive).toHaveBeenCalledTimes(1);
     const release = await (acquireGenerationKeepAlive as jest.Mock).mock.results[0].value.then(
@@ -122,14 +127,15 @@ describe('顽鹿同步 × 保活壳接线', () => {
     );
     expect(release).toHaveBeenCalledTimes(1);
     // 出错轮：last_result=error、last_error 透出，last_sync_at 保持原值（null）
-    expect(setSyncState).toHaveBeenCalledWith(
-      expect.objectContaining({ last_result: 'error', last_error: '账号或密码错误', last_sync_at: null }),
-    );
+    const { slot } = writtenSlot();
+    expect(slot.last_result).toBe('error');
+    expect(slot.last_error).toBe('账号或密码错误');
+    expect(slot.last_sync_at).toBeNull();
   });
 
-  it('listSince 失败早退：release 恰好一次', async () => {
-    stubClient({ listSince: jest.fn(() => Promise.reject(new Error('network down'))) });
-    const outcome = await runOnelapSync();
+  it('列表失败早退：release 恰好一次', async () => {
+    stubProvider({ listSince: jest.fn(() => Promise.reject(new Error('network down'))) });
+    const outcome = await runSync();
     expect(outcome.error?.code).toBe('other');
     const release = await (acquireGenerationKeepAlive as jest.Mock).mock.results[0].value.then(
       (h: { release: jest.Mock }) => h.release,
@@ -137,11 +143,27 @@ describe('顽鹿同步 × 保活壳接线', () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it('逐活动鉴权失败：终止本轮并记 auth（不继续拉后续活动）', async () => {
+    const runner = stubProvider({
+      listSince: jest.fn(() =>
+        Promise.resolve([
+          { id: '1', startAt: new Date('2026-10-10T08:00:00Z') },
+          { id: '2', startAt: new Date('2026-10-09T08:00:00Z') },
+        ]),
+      ),
+      getFileRef: jest.fn(() => Promise.reject(new SyncError('auth', '会话过期'))),
+    });
+    const outcome = await runSync();
+    expect(outcome.error?.code).toBe('auth');
+    expect(outcome.failed).toBe(0);
+    expect(runner.getFileRef).toHaveBeenCalledTimes(1); // 首个活动即终止
+  });
+
   it('并发调用共享同一 promise：acquire 只发生一次', async () => {
     // listSince 挂起：两个调用在同一 tick 发起（第二个共享 running promise），
     // 之后才放行
     let releaseList: () => void = () => {};
-    stubClient({
+    stubProvider({
       listSince: jest.fn(
         () =>
           new Promise((resolve) => {
@@ -149,19 +171,12 @@ describe('顽鹿同步 × 保活壳接线', () => {
           }),
       ),
     });
-    const pa = runOnelapSync();
-    const pb = runOnelapSync();
+    const pa = runSync();
+    const pb = runSync();
     await new Promise((r) => setTimeout(r, 0));
     releaseList();
     const [a, b] = await Promise.all([pa, pb]);
     expect(a).toBe(b); // 同一 outcome 对象 = 共享同一 promise
     expect(acquireGenerationKeepAlive).toHaveBeenCalledTimes(1);
-  });
-
-  it('getOnelapAccount：账号与密码齐全才返回', async () => {
-    (SecureStore.getItemAsync as jest.Mock).mockImplementation(async (key: string) =>
-      key === 'voltcoach.onelap.account' ? 'u@test' : null,
-    );
-    expect(await getOnelapAccount()).toBeNull();
   });
 });

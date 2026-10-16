@@ -19,7 +19,7 @@ import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { I18nProvider } from '@/i18n';
 import { queueShareFile } from '@/services/shareQueue';
 import { resumeInterruptedGenerations } from '@/services/aiGenerate';
-import { maybeAutoSync } from '@/services/syncOnelap';
+import { maybeAutoSync } from '@/services/sync';
 import { md3Dark, palette } from '@/theme';
 
 export default function RootLayout() {
