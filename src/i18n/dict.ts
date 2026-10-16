@@ -538,7 +538,7 @@ export const DICT = {
     'about.licenseTitle': '许可与声明',
     'about.license': '以 MIT 许可证开源（© 2026 Wally Yang），第三方组件声明见仓库 THIRD_PARTY_NOTICES.md。',
     'about.thirdParty': 'Onelap 同步模块移植自 OnelapSyncStrava（MIT，© 2026 kermit-r-wood）。',
-    'about.onelapNote': '「顽鹿同步」通过社区逆向的非官方接口拉取你自己账号的运动记录，本项目与顽鹿/迈金无任何关联；该接口随时可能变更失效，请仅用于个人数据导出。',
+    'about.onelapNote': '「云同步」里的顽鹿与迹驰两路走社区逆向的非官方接口，只拉取你自己账号的运动记录，本项目与顽鹿/迈金、迹驰均无关联，接口随时可能变更失效，请仅用于个人数据导出；Wahoo 一路走官方 API（你自己在开发者门户建的 sandbox 应用授权）。凭据只存本机安全存储，不随备份包迁移。',
 
     // ---- M4：数据管理（备份导出导入 / 本地快照 / 重复记录检查）；顽鹿同步（data.sync.*）
     //      卡片 M5 收尾后挪至「我的」页 AI 服务下方（src/components/OnelapSyncCard.tsx），键名沿用此命名空间 ----
@@ -968,7 +968,7 @@ export const DICT = {
     'about.licenseTitle': 'License & notices',
     'about.license': 'Open source under the MIT License (© 2026 Wally Yang). See THIRD_PARTY_NOTICES.md in the repository for third-party components.',
     'about.thirdParty': 'The Onelap sync module is ported from OnelapSyncStrava (MIT, © 2026 kermit-r-wood).',
-    'about.onelapNote': '"Onelap sync" pulls rides from your own account via a community-reversed unofficial API. This project is not affiliated with Onelap/MAGENE; the API may change or break at any time — personal data export only.',
+    'about.onelapNote': 'In "Cloud sync", the Onelap and iGPSPORT options pull rides from your own account via community-reversed unofficial APIs. This project is not affiliated with Onelap/MAGENE or iGPSPORT; those APIs may change or break at any time — personal data export only. The Wahoo option uses the official API (authorized by a sandbox app you create in the developer portal). Credentials stay in on-device secure storage and never migrate with backups.',
 
     // ---- M4: Data management (backup export/import / local snapshot / Onelap sync) ----
     'data.title': 'Data',

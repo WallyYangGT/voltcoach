@@ -18,10 +18,12 @@ import { unzipSync } from 'fflate';
 /** 禁忌特征：模拟器/本机/LAN 的地址形态——分发包里不该出现任何一条。
  *  注意 ①：不能用 `localhost` / `http://localhost` 作禁忌词——RN 自身 bundle 里就有
  *  （实测干净生产包含 `http://localhost` 一次），只有 `127.0.0.1` 才干净。
- *  注意 ②：私网段用「前缀」匹配；`:8791` 是 mock 默认端口兜底。 */
+ *  注意 ②：私网段用「前缀」匹配；三个 mock 默认端口（顽鹿/迹驰/Wahoo）都兜底拦。 */
 const FORBIDDEN = [
   '10.0.2.2', // 模拟器回宿主（最典型，即使不以 URL 形式出现也要拦）
   ':8791', // mock-onelap 默认端口（换域名/换 IP 也拦得住）
+  ':8792', // mock-igpsport 默认端口
+  ':8793', // mock-wahoo 默认端口
   'http://127.0.0.1',
   'https://127.0.0.1',
   'http://10.',
@@ -35,12 +37,16 @@ const FORBIDDEN = [
  *  （实测干净生产包的 cleartext 主机恰好只有这三个，均为 RN 自带；新增条目时请先
  *  确认是依赖自带而非联调地址——这正是把判据从"列举已知 IP"升级为"默认拒绝"的价值） */
 const CLEARTEXT_HOST_WHITELIST = ['localhost', 'hostname', 'fb.me'];
-/** 生产端点特征（必须出现，证明用的是真实常量而非空配置） */
-const REQUIRED = ['onelap.cn'];
+/** 生产端点特征（必须出现，证明用的是真实常量而非空配置）——三个平台各取一个域名特征 */
+const REQUIRED = ['onelap.cn', 'prod.zh.igpsport.com', 'api.wahooligan.com'];
 const BUNDLE_ENTRY = 'assets/index.android.bundle';
 
-/** 联调变量仍在环境里时，期望包内出现的就是它（用于确认"我构建的是我想要的包"） */
-const devBase = process.env.EXPO_PUBLIC_ONELAP_BASE ?? null;
+/** 联调变量仍在环境里时，期望包内出现的就是它们（用于确认"我构建的是我想要的包"） */
+const devBases = [
+  process.env.EXPO_PUBLIC_ONELAP_BASE,
+  process.env.EXPO_PUBLIC_IGPSPORT_BASE,
+  process.env.EXPO_PUBLIC_WAHOO_BASE,
+].filter((v) => Boolean(v));
 
 const target = process.argv[2] ?? path.resolve('android/app/build/outputs/apk/release/app-release.apk');
 if (!fs.existsSync(target)) {
@@ -94,14 +100,15 @@ if (missing.length) {
   process.exit(1);
 }
 
-if (devBase) {
-  // 联调构建：确认包内确实指向预期的联调地址（App 数据页也会显示联调横幅）
-  console.warn(`⚠ 联调变量 EXPO_PUBLIC_ONELAP_BASE=${devBase} 生效中——这是联调构建，不可用于发版`);
-  if (!text.includes(devBase)) {
-    console.error(`✗ 但 bundle 里找不到 ${devBase}：构建可能复用了旧 bundle，请清缓存重建`);
+if (devBases.length) {
+  // 联调构建：确认包内确实指向预期的联调地址（App 里同步卡也会显示联调横幅）
+  console.warn(`⚠ 联调变量生效中（${devBases.join('、')}）——这是联调构建，不可用于发版`);
+  const notFound = devBases.filter((base) => !text.includes(base));
+  if (notFound.length) {
+    console.error(`✗ 但 bundle 里找不到 ${notFound.join('、')}：构建可能复用了旧 bundle，请清缓存重建`);
     process.exit(1);
   }
   console.log('✓ 联调构建自洽（含预期的联调地址，且无模拟器地址残留）');
 } else {
-  console.log('✓ 通过：bundle 不含模拟器地址，且含真实顽鹿端点');
+  console.log('✓ 通过：bundle 不含模拟器地址，且含三个平台的真实端点');
 }
