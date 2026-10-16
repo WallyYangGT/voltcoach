@@ -60,16 +60,20 @@ certutil -encode <密钥目录>/voltcoach.keystore keystore-b64.txt   # Windows�
 
 ## EXPO_PUBLIC_* 与 bundle 缓存陷阱
 
-用 `EXPO_PUBLIC_ONELAP_BASE` 等变量做过联调构建后，再打生产包**必须清产物缓存**，否则 Gradle 可能复用上次的产物（包里带着联调地址）：
+`EXPO_PUBLIC_*` 环境变量不在打包任务的输入清单里——换变量后任务 up-to-date 检查照常通过、产物原样复用；Metro 的 transform 缓存（babel 内联结果按文件缓存）同样不感知 env 变化。所以换任何 `EXPO_PUBLIC_*` 前后**必须走完整流程**（2026-10-16 实测口径）：
 
 ```bash
-rm -rf android/app/build/generated/assets/react/release \
-       android/app/build/intermediates/assets/release/mergeReleaseAssets/index.android.bundle \
-       "$TEMP/metro-cache"
-cd android && ./gradlew assembleRelease
+cd android && ./gradlew --stop          # 停旧 daemon（防御性，保证干净起点）
+rm -rf app/build/generated/assets/react/<variant> \
+       app/build/intermediates/assets/<variant>/merge<Variant>Assets/index.android.bundle \
+       "$TEMP/metro-cache"               # 产物 + Metro transform 缓存都要清
+VOLTCOACH_UNIVERSAL_APK=1 EXPO_PUBLIC_ONELAP_BASE=http://10.0.2.2:8791 \
+  ./gradlew assembleBeta -PreactNativeArchitectures=x86_64 --rerun-tasks
+# 若启用了 Gradle build cache（org.gradle.caching=true），还须加 --no-build-cache，
+# 否则删掉的产物会被缓存原样拉回
 ```
 
-生产构建不要带任何 `EXPO_PUBLIC_*` 联调变量（不设即用真实端点）。构建后跑 `npm run check:apk` 体检。
+验证 bundle 内容用 node latin1 检索（`scripts/check-release-bundle.mjs` 同款方法；grep 对 Hermes 字节码可能假阴性）。生产构建不要带任何 `EXPO_PUBLIC_*` 联调变量（不设即用真实端点）。构建后跑 `npm run check:apk` 体检。
 
 ## 本地打包（不用 CI 时）
 
@@ -80,9 +84,11 @@ npx expo prebuild --platform android --no-install
 #   2. 国内网络在 android/build.gradle 的 buildscript/allprojects repositories 里
 #      google()/mavenCentral() 之前补阿里云三镜像（maven.aliyun.com 的 google/public/gradle-plugin）
 node scripts/patch-release-signing.mjs   # env 驱动注入签名；未设 VOLTCOACH_KEYSTORE_* 时回退 debug 签名
-cd android && ./gradlew assembleRelease
+cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a
 cd .. && npm run check:apk
 ```
+
+⚠️ 本地 `./gradlew assembleRelease` 不带 `-PreactNativeArchitectures` 时产出的是全 ABI 通用包（abiFilters 过滤与 RN 插件的 defaultConfig 过滤是并集，限制不了本地构建）——单 ABI 包务必带参数，与 CI 同口径。
 
 产物在 `android/app/build/outputs/apk/release/app-release.apk`——**交付前把它拷出仓库目录**（Gradle 清理时会把输出目录连外来文件一起删）。
 
@@ -97,7 +103,9 @@ release 的 arm64-only 由 `scripts/patch-release-signing.mjs` 在 prebuild 后�
 
 ## 体积口径（2026-10-16 优化批后）
 
-R8 压缩（`enableMinifyInReleaseBuilds` + `enableShrinkResourcesInReleaseBuilds`）、`.so` 压缩打包（`useLegacyPackaging`）、移除未使用的 `expo-image`，均经 app.json 的 `expo-build-properties` 配置（prebuild 写入 gradle.properties，不丢）。实测 arm64 包 53.0MB → 24.1MB（−54.6%）；`useLegacyPackaging` 的代价是安装时解压 `.so` 到磁盘（多占约 16MB、安装阶段完成，运行时/启动无可感知影响——冷启动实测无回归）。反射类库若被 R8 裁剪出运行时问题，兜底口是 `expo-build-properties` 的 `extraProguardRules` 字段（追加进 `proguard-rules.pro`，带标记段自动去重重放，prebuild 不丢）。
+R8 压缩（`enableMinifyInReleaseBuilds` + `enableShrinkResourcesInReleaseBuilds`）与 `.so` 压缩打包（`useLegacyPackaging`，写在模板的 `android.packagingOptions.jniLibs`——**全局，不分变体**：debug 包同样压缩存储 .so 且清单带 `android:extractNativeLibs="true"`，只影响安装形态，功能无影响）经 app.json 的 `expo-build-properties` 配置（prebuild 写入 gradle.properties，不丢）；`expo-image` 则从 package.json 卸载（全仓零引用）。实测 arm64 包 53.0MB → 24.1MB（−54.6%），通用包 52.2MB（实测；旧口径估算约 140MB）。`useLegacyPackaging` 的代价：安装阶段解压 `.so`（arm64 约 28MB 副本，设备总占用与改前基本持平）——省的是下载/传输体积，运行时/启动无可感知影响（冷启动实测无回归）。
+
+R8 出问题时的兜底口分两类：**代码/反射裁剪**用 `expo-build-properties` 的 `extraProguardRules` 字段（追加进 `proguard-rules.pro`，带标记段自动去重重放，prebuild 不丢）；**资源误删**走 keep 列表（Expo 资源管线自动生成的 `res/raw/keep.xml` 的 `tools:keep`）或单独关掉 `enableShrinkResourcesInReleaseBuilds`。开启 R8 后 release/beta 的崩溃堆栈是混淆态，反混淆用 `android/app/build/outputs/mapping/<variant>/mapping.txt`（本地构建产物，CI 不归档——同 tag 重跑 CI 可复现同一 mapping）。
 
 ## 本地测试包（beta 变体，2026-10-14 起）
 
