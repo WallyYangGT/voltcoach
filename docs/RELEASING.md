@@ -90,10 +90,14 @@ cd .. && npm run check:apk
 
 | 变体 | 构建方式 | 差异 |
 |---|---|---|
-| arm64 包（**CI 发版默认**，2026-10-11 起） | `./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a` | 只含 arm64-v8a，约 55MB；现代安卓手机均可装 |
-| 通用包（逃生口） | `VOLTCOACH_UNIVERSAL_APK=1 ./gradlew assembleRelease` | 含全部四套 ABI，约 140MB；仅老 32 位 ARM 设备与 x86 模拟器需要。2026-10-14 起 release 构建默认经补丁脚本强制 arm64（见下），通用包须显式用本环境变量跳过 |
+| arm64 包（**CI 发版默认**，2026-10-11 起） | `./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a` | 只含 arm64-v8a，约 24MB（2026-10-16 起，体积优化批后实测）；现代安卓手机均可装 |
+| 通用包（逃生口） | `VOLTCOACH_UNIVERSAL_APK=1 ./gradlew assembleRelease` | 含全部四套 ABI，约 52MB（2026-10-16 实测）；老 32 位 ARM 设备与 x86 模拟器等特殊场景用。2026-10-14 起 release 构建默认经补丁脚本强制 arm64（见下），通用包须显式用本环境变量跳过 |
 
-release 的 arm64-only 由 `scripts/patch-release-signing.mjs` 在 prebuild 后注入（`ndk.abiFilters`），CI 的 `-PreactNativeArchitectures=arm64-v8a` 与其同口径双保险；debug 构建不受影响（模拟器 x86_64 冒烟可用）。
+release 的 arm64-only 由 `scripts/patch-release-signing.mjs` 在 prebuild 后注入（`ndk.abiFilters`），CI 的 `-PreactNativeArchitectures=arm64-v8a` 与其同口径双保险；debug 构建不受影响（模拟器 x86_64 冒烟可用）。⚠️ 注入的 `ndk.abiFilters` 与 RN 插件写进 defaultConfig 的 `reactNativeArchitectures` 过滤是**并集**语义，本地不带 `-P` 构建时仍是全 ABI（CI 不受影响）——单 ABI 包务必带 `-PreactNativeArchitectures` 参数。
+
+## 体积口径（2026-10-16 优化批后）
+
+R8 压缩（`enableMinifyInReleaseBuilds` + `enableShrinkResourcesInReleaseBuilds`）、`.so` 压缩打包（`useLegacyPackaging`）、移除未使用的 `expo-image`，均经 app.json 的 `expo-build-properties` 配置（prebuild 写入 gradle.properties，不丢）。实测 arm64 包 53.0MB → 24.1MB（−54.6%）；`useLegacyPackaging` 的代价是安装时解压 `.so` 到磁盘（多占约 16MB、安装阶段完成，运行时/启动无可感知影响——冷启动实测无回归）。反射类库若被 R8 裁剪出运行时问题，兜底口是 `expo-build-properties` 的 `extraProguardRules` 字段（追加进 `proguard-rules.pro`，带标记段自动去重重放，prebuild 不丢）。
 
 ## 本地测试包（beta 变体，2026-10-14 起）
 
