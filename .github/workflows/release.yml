@@ -95,7 +95,7 @@ jobs:
         run: node scripts/patch-release-signing.mjs
 
       # 只打 arm64-v8a（2026-10-11 起）：现代安卓手机均为 arm64，四套 ABI 的通用包
-      # ≈140MB vs 单 ABI ≈55MB——体积收益远大于老 32 位设备兼容（本地经 patch 脚本默认 arm64，通用包走 VOLTCOACH_UNIVERSAL_APK=1，
+      # ≈52MB vs 单 ABI ≈24MB（2026-10-16 体积优化批后）——体积收益远大于老 32 位设备兼容（本地经 patch 脚本默认 arm64，通用包走 VOLTCOACH_UNIVERSAL_APK=1，
       # 见 docs/RELEASING.md「产物变体」）
       - name: 打包 release APK
         working-directory: android

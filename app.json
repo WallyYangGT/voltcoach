@@ -2,7 +2,7 @@
   "expo": {
     "name": "VoltCoach",
     "slug": "voltcoach",
-    "version": "0.3.0",
+    "version": "0.3.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "voltcoach",
@@ -72,7 +72,10 @@
         "expo-build-properties",
         {
           "android": {
-            "usesCleartextTraffic": true
+            "usesCleartextTraffic": true,
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "useLegacyPackaging": true
           }
         }
       ],

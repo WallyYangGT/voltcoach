@@ -11,7 +11,7 @@
  *     用途：单机用户在正常使用正式版的同时侧载测试预发版（2026-10-14 拍板，
  *     取代「折腾 versionCode / 签名冲突」的旧思路）。构建：assembleBetaRelease。
  *   - arm64-only：release/beta 一律只打 arm64-v8a——现代安卓手机均为 arm64，四套
- *     ABI 的通用包 ≈140MB vs 单 ABI ≈55MB。debug 构建不受影响（模拟器 x86_64
+ *     ABI 的通用包 ≈52MB vs 单 ABI ≈24MB（2026-10-16 体积优化批后，开启 R8 与 .so 压缩）。debug 构建不受影响（模拟器 x86_64
  *     冒烟可用）。需要通用包时设 VOLTCOACH_UNIVERSAL_APK=1 再构建。CI 的
  *     release.yml 另有 -PreactNativeArchitectures=arm64-v8a 同口径（双保险）。
  *   - 签名：VOLTCOACH_KEYSTORE_FILE 等四个环境变量存在 → 注入 release signingConfig
