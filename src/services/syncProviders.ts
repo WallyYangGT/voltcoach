@@ -29,6 +29,13 @@ import {
 } from '@/sync/common';
 import { createIgpsportClient, IGPSPORT_REGIONS, type IgpsportRegionKey } from '@/sync/igpsport';
 import { createOnelapClient, ONELAP_LOGIN_URL, ONELAP_RIDE_RECORD_BASE } from '@/sync/onelap';
+import {
+  createWahooClient,
+  isAccessTokenExpired,
+  WAHOO_API_BASE,
+  type WahooClient,
+  type WahooTokens,
+} from '@/sync/wahoo';
 import { SYNC_PROVIDER_IDS, type SyncProviderId } from '@/sync/state';
 
 /** 账号密码型凭据（顽鹿 / 迹驰） */
@@ -46,6 +53,13 @@ export interface OAuthCredentials {
   refreshToken: string;
   /** access token 到期时刻（epoch 毫秒） */
   expiresAt: number;
+  /**
+   * PKCE code_verifier：官方要求**刷新令牌时一并带上**（PKCE 客户端没有 client_secret），
+   * 故必须与令牌一起持久化，不能授权完就丢。
+   */
+  codeVerifier: string;
+  /** 授权时用的回调地址：令牌交换要带，且必须与门户登记的完全一致 */
+  redirectUri: string;
 }
 
 export type SyncCredentials = PasswordCredentials | OAuthCredentials;
@@ -312,13 +326,170 @@ function createIgpsportProvider(region: IgpsportRegionKey): SyncProvider {
   });
 }
 
+// ---------------- OAuth 型平台：Wahoo（官方通道，BYOK client_id） ----------------
+
+/** 联调端点覆盖（EXPO_PUBLIC_WAHOO_BASE 打包期内联） */
+function wahooOverrideBase(): string | null {
+  return process.env.EXPO_PUBLIC_WAHOO_BASE || null;
+}
+
+/** 设备侧 Wahoo 客户端（fetch/PKCE 加密实现绑定；授权流与同步执行器共用） */
+export async function createDeviceWahooClient(): Promise<WahooClient> {
+  const base = wahooOverrideBase();
+  return createWahooClient({
+    fetchImpl: await loadDefaultFetch(),
+    sha256Hex: (s) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, s),
+    randomBytes: (n) => Crypto.getRandomBytes(n),
+    baseUrlOverrides: base ? { api: base } : undefined,
+  });
+}
+
+/** 凭据 JSON（OAuth 型平台的 SecureStore 内容就是它本身） */
+function isOAuthCredentials(v: unknown): v is OAuthCredentials {
+  const o = v as Partial<OAuthCredentials> | null;
+  return (
+    !!o &&
+    o.kind === 'oauth' &&
+    typeof o.clientId === 'string' &&
+    typeof o.accessToken === 'string' &&
+    typeof o.refreshToken === 'string' &&
+    typeof o.expiresAt === 'number' &&
+    typeof o.codeVerifier === 'string' &&
+    typeof o.redirectUri === 'string'
+  );
+}
+
+interface OAuthProviderSpec {
+  id: SyncProviderId;
+  labelKey: DictKey;
+  /** SecureStore 键（整块凭据 JSON） */
+  credentialKey: string;
+  createClient(): Promise<WahooClient>;
+  endpointUrls(): string[];
+  overrideBase(): string | null;
+}
+
+function createOAuthProvider(spec: OAuthProviderSpec): SyncProvider {
+  const loadCredentials = async (): Promise<OAuthCredentials | null> => {
+    const raw = await SecureStore.getItemAsync(spec.credentialKey);
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return isOAuthCredentials(parsed) ? parsed : null;
+    } catch {
+      return null; // 内容损坏按未绑定处理（重新授权即可覆盖）
+    }
+  };
+
+  return {
+    id: spec.id,
+    labelKey: spec.labelKey,
+    authKind: 'oauth',
+    loadCredentials,
+
+    async saveCredentials(creds) {
+      if (creds.kind !== 'oauth') throw new SyncError('reauth', '凭据类型不符（需要 OAuth 授权）');
+      await SecureStore.setItemAsync(spec.credentialKey, JSON.stringify(creds));
+    },
+
+    async clearCredentials() {
+      const creds = await loadCredentials();
+      await SecureStore.deleteItemAsync(spec.credentialKey);
+      // 尽力而为地撤销授权：既让用户在门户看到应用已断开，也释放「每用户 10 个未吊销
+      // token」配额。解绑必须离线也能成功，故失败只警告（令牌 60 天后自动过期）
+      if (creds) {
+        try {
+          const client = await spec.createClient();
+          await client.revoke(creds.accessToken);
+        } catch (e) {
+          console.warn(`${spec.id} 撤销授权失败（忽略，令牌会自行过期）:`, e);
+        }
+      }
+    },
+
+    async createRunner() {
+      const creds = await loadCredentials();
+      if (!creds) throw new SyncError('reauth', '未授权（请先完成授权登录）');
+      const client = await spec.createClient();
+      let tokens: WahooTokens = {
+        accessToken: creds.accessToken,
+        refreshToken: creds.refreshToken,
+        expiresAt: creds.expiresAt,
+      };
+
+      /** 令牌落盘（轮换后必须立刻写回：旧 refresh token 刷一次就废） */
+      const persist = async (next: WahooTokens): Promise<void> => {
+        tokens = next;
+        try {
+          const current = await loadCredentials();
+          if (!current) return; // 授权途中被解绑：不要把作废的令牌写回去
+          await SecureStore.setItemAsync(
+            spec.credentialKey,
+            JSON.stringify({ ...current, ...next } satisfies OAuthCredentials),
+          );
+        } catch (e) {
+          console.warn(`${spec.id} 令牌写回失败（忽略，下次同步会重新刷新）:`, e);
+        }
+      };
+
+      /** 刷新令牌；失败即「授权已失效」，只能回设置页重新授权（reauth 而非 auth） */
+      const refresh = async (): Promise<void> => {
+        try {
+          const next = await client.refreshTokens({
+            clientId: creds.clientId,
+            refreshToken: tokens.refreshToken,
+            codeVerifier: creds.codeVerifier,
+          });
+          await persist(next);
+        } catch (e) {
+          if (e instanceof SyncError && e.code === 'network') throw e; // 断网不该让用户重授权
+          throw new SyncError('reauth', `授权已失效，请重新授权：${e instanceof Error ? e.message : String(e)}`);
+        }
+      };
+
+      return {
+        async start() {
+          // 到期前 5 分钟先刷新；刷新后紧接着就要拉数据（轮换语义要求刷新即用一次）
+          if (isAccessTokenExpired(tokens, Date.now())) {
+            await refresh();
+          } else {
+            // 未过期也必须留痕：轮换语义下「只刷不用」会累积未吊销令牌（上限 10 个）
+            console.log(`${spec.id} 复用未过期的 access token（到期 ${new Date(tokens.expiresAt).toISOString()}）`);
+          }
+        },
+        listSince: (since) => client.listSince(tokens, since),
+        getFileRef: (a) => client.getFileRef(tokens, a),
+        download: (ref) => client.download(tokens, ref),
+        recover: refresh,
+      };
+    },
+
+    async probe() {
+      const [fetchImpl, origins] = await Promise.all([
+        loadDefaultFetch(),
+        Promise.resolve(endpointOrigins(spec.endpointUrls())),
+      ]);
+      return Promise.all(origins.map((origin) => probeEndpoint(origin, { fetchImpl })));
+    },
+
+    overrideBase: spec.overrideBase,
+  };
+}
+
 // ---------------- 注册表 ----------------
 
 const REGISTRY: Partial<Record<SyncProviderId, SyncProvider>> = {
   onelap: ONELAP_PROVIDER,
   'igpsport-cn': createIgpsportProvider('cn'),
   'igpsport-intl': createIgpsportProvider('intl'),
-  // Wahoo 随实现落地后接入（UI 下拉由注册表驱动，天然只列出已实现的）
+  wahoo: createOAuthProvider({
+    id: 'wahoo',
+    labelKey: 'data.sync.provider.wahoo',
+    credentialKey: 'voltcoach.wahoo.oauth',
+    createClient: createDeviceWahooClient,
+    endpointUrls: () => [wahooOverrideBase() ?? WAHOO_API_BASE],
+    overrideBase: wahooOverrideBase,
+  }),
 };
 
 /** 取平台适配器（状态行里出现未实现的 id 说明数据被改坏了——抛出而非静默） */

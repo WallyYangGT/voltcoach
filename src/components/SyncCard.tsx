@@ -23,6 +23,7 @@ import { useI18n } from '@/i18n';
 import { runSync, type SyncOutcome } from '@/services/sync';
 import { allProviders, providerById, type SyncProvider } from '@/services/syncProviders';
 import { palette } from '@/theme';
+import { WahooAuthForm } from './WahooAuthForm';
 
 export function SyncCard() {
   const { t } = useI18n();
@@ -273,7 +274,10 @@ export function SyncCard() {
           />
         </>
       )}
-      {/* oauth 型平台（Wahoo）的授权表单随该平台落地后接入此分支 */}
+      {/* OAuth 型平台（Wahoo）：BYOK client_id + 浏览器授权（带手动粘贴兜底） */}
+      {active?.authKind === 'oauth' && (
+        <WahooAuthForm provider={active} bound={hasAccount} disabled={syncing} onChanged={load} />
+      )}
       <View style={styles.row}>
         {active?.authKind === 'password' && (
           <Button

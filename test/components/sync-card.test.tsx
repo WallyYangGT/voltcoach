@@ -27,6 +27,11 @@ import {
   type SyncCredentials,
   type SyncProvider,
 } from '@/services/syncProviders';
+import {
+  exchangeWahooCode,
+  openWahooAuthorize,
+  prepareWahooAuth,
+} from '@/services/wahooAuth';
 import { renderWithProviders } from './helpers/render';
 
 jest.mock('@/db', () => ({
@@ -43,6 +48,16 @@ jest.mock('@/services/sync', () => ({
 jest.mock('@/services/syncProviders', () => ({
   allProviders: jest.fn(() => []),
   providerById: jest.fn(),
+}));
+
+// Wahoo 授权流整体 mock：卡片与 WahooAuthForm 的接线在这里验（浏览器/门户交互本身属
+// 设备侧行为，由模拟器冒烟覆盖；PKCE 与回调解析已被 L1 直测）
+jest.mock('@/services/wahooAuth', () => ({
+  wahooRedirectUri: jest.fn(() => 'voltcoach://wahoo'),
+  prepareWahooAuth: jest.fn(),
+  openWahooAuthorize: jest.fn(),
+  exchangeWahooCode: jest.fn(),
+  completeWahooAuthFromInput: jest.fn(),
 }));
 
 jest.mock('expo-router', () => {
@@ -67,12 +82,16 @@ interface ProviderStub extends SyncProvider {
   overrideBase: jest.Mock;
 }
 
-/** 平台适配器桩（密码型：顽鹿 / 迹驰国内） */
-function providerStub(id: 'onelap' | 'igpsport-cn', labelKey: SyncProvider['labelKey']): ProviderStub {
+/** 平台适配器桩（密码型：顽鹿 / 迹驰国内；oauth 型：Wahoo） */
+function providerStub(
+  id: 'onelap' | 'igpsport-cn' | 'wahoo',
+  labelKey: SyncProvider['labelKey'],
+  authKind: SyncProvider['authKind'] = 'password',
+): ProviderStub {
   return {
     id,
     labelKey,
-    authKind: 'password',
+    authKind,
     loadCredentials: jest.fn(async (): Promise<SyncCredentials | null> => null),
     saveCredentials: jest.fn(async () => {}),
     clearCredentials: jest.fn(async () => {}),
@@ -84,6 +103,7 @@ function providerStub(id: 'onelap' | 'igpsport-cn', labelKey: SyncProvider['labe
 
 let onelap: ProviderStub;
 let igpsport: ProviderStub;
+let wahoo: ProviderStub;
 
 function outcomeOf(partial: Partial<SyncOutcome> = {}): SyncOutcome {
   return { imported: 0, skipped: 0, duplicates: 0, failed: 0, error: null, failureFloor: null, ...partial };
@@ -106,11 +126,28 @@ async function openPlatformMenu(screen: Awaited<ReturnType<typeof mountCard>>) {
 beforeEach(() => {
   onelap = providerStub('onelap', 'data.sync.provider.onelap');
   igpsport = providerStub('igpsport-cn', 'data.sync.provider.igpsport_cn');
-  (allProviders as jest.Mock).mockReset().mockReturnValue([onelap, igpsport]);
-  (providerById as jest.Mock).mockReset().mockImplementation((id: string) => (id === 'igpsport-cn' ? igpsport : onelap));
+  wahoo = providerStub('wahoo', 'data.sync.provider.wahoo', 'oauth');
+  (allProviders as jest.Mock).mockReset().mockReturnValue([onelap, igpsport, wahoo]);
+  (providerById as jest.Mock)
+    .mockReset()
+    .mockImplementation((id: string) => (id === 'igpsport-cn' ? igpsport : id === 'wahoo' ? wahoo : onelap));
   (getSyncState as jest.Mock).mockReset().mockResolvedValue({ ...EMPTY_STATE });
   (setSyncState as jest.Mock).mockReset().mockResolvedValue(undefined);
   (runSync as jest.Mock).mockReset().mockResolvedValue(outcomeOf());
+  (prepareWahooAuth as jest.Mock).mockReset().mockResolvedValue({
+    pkce: { verifier: 'v'.repeat(43), challenge: 'ch', state: 'st' },
+    authorizeUrl: 'https://api.wahooligan.com/oauth/authorize?x=1',
+  });
+  (openWahooAuthorize as jest.Mock).mockReset().mockResolvedValue(null);
+  (exchangeWahooCode as jest.Mock).mockReset().mockResolvedValue({
+    kind: 'oauth',
+    clientId: 'cid',
+    accessToken: 'a',
+    refreshToken: 'r',
+    expiresAt: 1,
+    codeVerifier: 'v'.repeat(43),
+    redirectUri: 'voltcoach://wahoo',
+  });
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
 
@@ -294,6 +331,44 @@ describe('SyncCard（多平台）', () => {
       fireEvent(sw, 'valueChange', true);
     });
     expect(setSyncState).toHaveBeenCalledWith({ ...EMPTY_STATE, auto: true });
+  });
+
+  it('Wahoo（oauth 型）：显示 Client ID 表单与可复制回调地址，不出账号密码框', async () => {
+    (getSyncState as jest.Mock).mockResolvedValue({ ...EMPTY_STATE, provider: 'wahoo' });
+    const screen = await mountCard();
+    // label 文案在 Paper 的 outlined TextInput 里渲染两份（浮动标签 + 背景遮罩），用 getAll
+    expect(screen.getAllByText('Wahoo Client ID').length).toBeGreaterThan(0);
+    expect(screen.getByText('voltcoach://wahoo')).toBeTruthy(); // 门户要填的回调地址
+    expect(screen.getByText('授权登录')).toBeTruthy();
+    expect(screen.queryByText('账号')).toBeNull();
+    expect(screen.queryByText('密码')).toBeNull();
+  });
+
+  it('Wahoo 授权成功：保存凭据并回读（凭据未绑定时同步按钮仍禁用）', async () => {
+    (getSyncState as jest.Mock).mockResolvedValue({ ...EMPTY_STATE, provider: 'wahoo' });
+    const screen = await mountCard();
+    await userEvent.type(screen.getByTestId('text-input-outlined'), 'my-client-id');
+    await act(async () => {
+      fireEvent.press(screen.getByText('授权登录'));
+    });
+    expect(prepareWahooAuth).toHaveBeenCalledWith('my-client-id', 'voltcoach://wahoo');
+    expect(openWahooAuthorize).toHaveBeenCalledWith(
+      expect.objectContaining({ redirectUri: 'voltcoach://wahoo', state: 'st' }),
+    );
+    // 浏览器回跳拿到 code → 换令牌 → 存凭据
+    (openWahooAuthorize as jest.Mock).mockResolvedValue({ code: 'the-code' });
+    (getSyncState as jest.Mock).mockResolvedValue({ ...EMPTY_STATE, provider: 'wahoo' });
+    await act(async () => {
+      fireEvent.press(screen.getByText('授权登录'));
+    });
+    expect(exchangeWahooCode).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: 'my-client-id', code: 'the-code' }),
+    );
+    expect(wahoo.saveCredentials).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'oauth', clientId: 'cid' }),
+    );
+    // 授权成功后回读凭据（>=2：卡片加载 + 表单回填 clientId + 授权后重载）
+    expect(wahoo.loadCredentials.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('联调端点覆盖时显示红色自曝横幅（防把联调包当生产包）', async () => {
