@@ -27,11 +27,7 @@ import {
   type SyncCredentials,
   type SyncProvider,
 } from '@/services/syncProviders';
-import {
-  exchangeWahooCode,
-  openWahooAuthorize,
-  prepareWahooAuth,
-} from '@/services/wahooAuth';
+import { completeWahooAuth, openWahooAuthorize, prepareWahooAuth } from '@/services/wahooAuth';
 import { renderWithProviders } from './helpers/render';
 
 jest.mock('@/db', () => ({
@@ -53,11 +49,11 @@ jest.mock('@/services/syncProviders', () => ({
 // Wahoo 授权流整体 mock：卡片与 WahooAuthForm 的接线在这里验（浏览器/门户交互本身属
 // 设备侧行为，由模拟器冒烟覆盖；PKCE 与回调解析已被 L1 直测）
 jest.mock('@/services/wahooAuth', () => ({
-  wahooRedirectUri: jest.fn(() => 'voltcoach://wahoo'),
+  wahooRedirectUri: jest.fn(() => 'voltcoach:///wahoo-callback'),
   prepareWahooAuth: jest.fn(),
   openWahooAuthorize: jest.fn(),
-  exchangeWahooCode: jest.fn(),
-  completeWahooAuthFromInput: jest.fn(),
+  completeWahooAuth: jest.fn(),
+  clearPendingWahooAuth: jest.fn(),
 }));
 
 jest.mock('expo-router', () => {
@@ -139,14 +135,14 @@ beforeEach(() => {
     authorizeUrl: 'https://api.wahooligan.com/oauth/authorize?x=1',
   });
   (openWahooAuthorize as jest.Mock).mockReset().mockResolvedValue(null);
-  (exchangeWahooCode as jest.Mock).mockReset().mockResolvedValue({
+  (completeWahooAuth as jest.Mock).mockReset().mockResolvedValue({
     kind: 'oauth',
     clientId: 'cid',
     accessToken: 'a',
     refreshToken: 'r',
     expiresAt: 1,
     codeVerifier: 'v'.repeat(43),
-    redirectUri: 'voltcoach://wahoo',
+    redirectUri: 'voltcoach:///wahoo-callback',
   });
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
@@ -338,7 +334,7 @@ describe('SyncCard（多平台）', () => {
     const screen = await mountCard();
     // label 文案在 Paper 的 outlined TextInput 里渲染两份（浮动标签 + 背景遮罩），用 getAll
     expect(screen.getAllByText('Wahoo Client ID').length).toBeGreaterThan(0);
-    expect(screen.getByText('voltcoach://wahoo')).toBeTruthy(); // 门户要填的回调地址
+    expect(screen.getByText('voltcoach:///wahoo-callback')).toBeTruthy(); // 门户要填的回调地址
     expect(screen.getByText('授权登录')).toBeTruthy();
     expect(screen.queryByText('账号')).toBeNull();
     expect(screen.queryByText('密码')).toBeNull();
@@ -351,18 +347,18 @@ describe('SyncCard（多平台）', () => {
     await act(async () => {
       fireEvent.press(screen.getByText('授权登录'));
     });
-    expect(prepareWahooAuth).toHaveBeenCalledWith('my-client-id', 'voltcoach://wahoo');
+    expect(prepareWahooAuth).toHaveBeenCalledWith('my-client-id', 'voltcoach:///wahoo-callback');
     expect(openWahooAuthorize).toHaveBeenCalledWith(
-      expect.objectContaining({ redirectUri: 'voltcoach://wahoo', state: 'st' }),
+      expect.objectContaining({ redirectUri: 'voltcoach:///wahoo-callback' }),
     );
-    // 浏览器回跳拿到 code → 换令牌 → 存凭据
-    (openWahooAuthorize as jest.Mock).mockResolvedValue({ code: 'the-code' });
+    // 浏览器回跳拿到回调 URL → 换令牌 → 存凭据
+    (openWahooAuthorize as jest.Mock).mockResolvedValue('voltcoach:///wahoo-callback?code=the-code&state=st');
     (getSyncState as jest.Mock).mockResolvedValue({ ...EMPTY_STATE, provider: 'wahoo' });
     await act(async () => {
       fireEvent.press(screen.getByText('授权登录'));
     });
-    expect(exchangeWahooCode).toHaveBeenCalledWith(
-      expect.objectContaining({ clientId: 'my-client-id', code: 'the-code' }),
+    expect(completeWahooAuth).toHaveBeenCalledWith(
+      'voltcoach:///wahoo-callback?code=the-code&state=st',
     );
     expect(wahoo.saveCredentials).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'oauth', clientId: 'cid' }),

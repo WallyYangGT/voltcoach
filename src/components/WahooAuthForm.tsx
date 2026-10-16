@@ -18,8 +18,8 @@ import { Button, TextInput } from 'react-native-paper';
 import { useI18n } from '@/i18n';
 import type { SyncProvider } from '@/services/syncProviders';
 import {
-  completeWahooAuthFromInput,
-  exchangeWahooCode,
+  clearPendingWahooAuth,
+  completeWahooAuth,
   openWahooAuthorize,
   prepareWahooAuth,
   wahooRedirectUri,
@@ -45,10 +45,14 @@ export function WahooAuthForm({
   const [manualOpen, setManualOpen] = useState(false);
   const [manualInput, setManualInput] = useState('');
   const [busy, setBusy] = useState(false);
-  // 本次授权的 PKCE 材料：浏览器路径与手动粘贴路径共用（换令牌必须与授权 URL 同一份）
+  // 本次授权是否已发起（PKCE 真源在 wahooAuth 的模块级 pending：回调路由也要用它换码，
+  // 表单 state 只负责界面开关）
   const [pending, setPending] = useState<PreparedWahooAuth | null>(null);
   // 已绑定后回填 client_id（readonly 显示用）
   const [boundClientId, setBoundClientId] = useState('');
+
+  // 组件卸载（换平台/离开同步卡）时放弃未完成的授权：否则回调路由可能拿着旧 PKCE 收尾
+  React.useEffect(() => () => clearPendingWahooAuth(), []);
 
   React.useEffect(() => {
     let alive = true;
@@ -72,15 +76,11 @@ export function WahooAuthForm({
       const prepared = await prepareWahooAuth(id, redirectUri);
       setPending(prepared);
       setManualOpen(true); // 万一浏览器跳不回来，粘贴框已经就位
-      const result = await openWahooAuthorize({
-        authorizeUrl: prepared.authorizeUrl,
-        redirectUri,
-        state: prepared.pkce.state,
-      });
-      if (!result) return; // 用户取消 / 回调没跳回来：pending 仍在，交给手动粘贴兜底
-      await provider.saveCredentials(
-        await exchangeWahooCode({ clientId: id, redirectUri, pkce: prepared.pkce, code: result.code }),
-      );
+      const callbackUrl = await openWahooAuthorize({ authorizeUrl: prepared.authorizeUrl, redirectUri });
+      if (!callbackUrl) return; // 取消 / 赛跑被浏览器关闭事件赢掉：收尾交给回调路由或手动粘贴
+      const creds = await completeWahooAuth(callbackUrl);
+      if (!creds) return; // 回调路由已经完成过这次授权
+      await provider.saveCredentials(creds);
       setClientId('');
       setManualInput('');
       setManualOpen(false);
@@ -106,12 +106,8 @@ export function WahooAuthForm({
     }
     setBusy(true);
     try {
-      const creds = await completeWahooAuthFromInput({
-        clientId: id,
-        redirectUri,
-        pkce: prepared.pkce,
-        input: manualInput,
-      });
+      const creds = await completeWahooAuth(manualInput);
+      if (!creds) throw new Error(t('data.sync.wahoo.pasteHint'));
       await provider.saveCredentials(creds);
       setClientId('');
       setManualInput('');

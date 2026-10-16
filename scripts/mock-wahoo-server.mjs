@@ -121,7 +121,7 @@ export function createMockWahooServer({
   return http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
-    const port = req.socket.localPort;
+    const host = req.headers.host ?? `127.0.0.1:${req.socket.localPort}`;
     if (!process.env.NODE_TEST_CONTEXT) {
       console.log(`[mock-wahoo] ${new Date().toISOString().slice(11, 23)} ${req.method} ${path}${url.search}`);
     }
@@ -271,7 +271,8 @@ export function createMockWahooServer({
         manual: false,
         duration_total_accum: 3600,
         distance_accum: 30000,
-        file: { url: `http://127.0.0.1:${port}/cdn/wahoo-${w.id}.fit` },
+        // 直链用请求的 Host 头拼：模拟器经 10.0.2.2 访问宿主时，回 127.0.0.1 会被解析成设备自己
+        file: { url: `http://${host}/cdn/wahoo-${w.id}.fit` },
       });
     }
 

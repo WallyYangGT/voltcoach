@@ -115,13 +115,18 @@ export function createMockIgpsportServer({
       fixedFit ?? buildRideFit({ startMs: a.startMs, durationSec: 60, power: 210 + (a.id % 7) * 10, heartRate: 148 }),
     ]),
   );
-  /** 直链地址按 mock 自身端口拼（客户端拿到后裸 GET，不带鉴权头） */
-  const ossUrl = (port, act) => `http://127.0.0.1:${port}/oss/${encodeURIComponent(act.fileName)}`;
+  /**
+   * 直链地址用**请求的 Host 头**拼（客户端拿到后裸 GET，不带鉴权头）。
+   * ⚠️ 不能用 127.0.0.1+mock 端口：模拟器里客户端经 10.0.2.2 访问宿主，回给它的
+   * 127.0.0.1 会被解析成模拟器自己（2026-10-16 冒烟实测：4 个活动全报连接被拒）。
+   * node:test 直连时 Host 就是 127.0.0.1:<port>，行为不变。
+   */
+  const ossUrl = (host, act) => `http://${host}/oss/${encodeURIComponent(act.fileName)}`;
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     const path = url.pathname;
-    const port = req.socket.localPort;
+    const host = req.headers.host ?? `127.0.0.1:${req.socket.localPort}`;
     if (!process.env.NODE_TEST_CONTEXT) {
       console.log(`[mock-igpsport] ${new Date().toISOString().slice(11, 23)} ${req.method} ${path}`);
     }
@@ -196,7 +201,7 @@ export function createMockIgpsportServer({
           rideId: act.id,
           title: `骑行 ${act.id}`,
           // noFile：详情里没有 fitUrl（走下载地址端点也拿不到，见下）
-          ...(act.fileRefVia === 'detail' && !act.noFile ? { fitUrl: ossUrl(port, act) } : {}),
+          ...(act.fileRefVia === 'detail' && !act.noFile ? { fitUrl: ossUrl(host, act) } : {}),
         },
       });
     }
@@ -209,7 +214,7 @@ export function createMockIgpsportServer({
       return json(res, 200, {
         code: 0,
         message: 'success',
-        data: act.noFile || act.fileRefVia !== 'downloadUrl' ? '' : ossUrl(port, act),
+        data: act.noFile || act.fileRefVia !== 'downloadUrl' ? '' : ossUrl(host, act),
       });
     }
 

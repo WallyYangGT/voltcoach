@@ -45,9 +45,13 @@ import {
 export const WAHOO_API_BASE = 'https://api.wahooligan.com';
 /** 授权范围：user_read 必需（否则 403）；offline_data 是拿 refresh token 的前提 */
 export const WAHOO_SCOPES = 'user_read workouts_read offline_data';
-/** 默认回调地址（app.json 的 scheme 已含 voltcoach；门户是否接受自定义 scheme 需实测，
- *  被拒时用卡片里的「手动粘贴回调链接」兜底） */
-export const WAHOO_DEFAULT_REDIRECT = 'voltcoach://wahoo';
+/**
+ * 默认回调地址（门户是否接受自定义 scheme 需实测，被拒时用卡片里的「手动粘贴回调链接」兜底）。
+ * ⚠️ 三斜杠是**路径形式**（host 为空、path=/wahoo-callback）：两斜杠会被 expo-router 当成
+ * host 去匹配路由，落进 Unmatched Route 错误页（2026-10-16 模拟器冒烟实测）；路径形式能
+ * 稳定命中 app/wahoo-callback.tsx 这个收尾路由。用户登记到门户的值必须与这里逐字一致。
+ */
+export const WAHOO_DEFAULT_REDIRECT = 'voltcoach:///wahoo-callback';
 /** 到期前提前刷新的余量（access token 2 小时有效） */
 export const WAHOO_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 /** 列表每页条数（官方上限 100） */
