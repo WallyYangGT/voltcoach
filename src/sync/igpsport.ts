@@ -210,7 +210,10 @@ export function createIgpsportClient(deps: IgpsportDeps): IgpsportClient {
       throw new SyncError('network', `网络请求失败: ${String(e)}`);
     }
     try {
-      if (res.status === 401 || (res.status === 403 && opts.forbiddenAs !== 'api')) {
+      // forbiddenAs='api' 用于**与会话无关**的直链下载：401/403（缺签名/过期签名/AccessDenied）
+      // 都按接口异常处理——归 auth 会中止整轮且水位线不前进，下一轮又卡同一活动（评审 P2-2）
+      const forbidden = res.status === 401 || res.status === 403;
+      if (forbidden && opts.forbiddenAs !== 'api') {
         throw new SyncError('auth', `鉴权被拒（HTTP ${res.status}）`);
       }
       if (!res.ok) throw new SyncError('api', `接口异常（HTTP ${res.status}）: ${url}`);

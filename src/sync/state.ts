@@ -63,11 +63,12 @@ export const EMPTY_PROVIDER_STATE: ProviderSyncState = Object.freeze({
   last_counts: null,
 });
 
-export const DEFAULT_SYNC_STATE: SyncState = {
+export const DEFAULT_SYNC_STATE: SyncState = Object.freeze({
   provider: DEFAULT_SYNC_PROVIDER,
   auto: true,
-  providers: {},
-};
+  // 冻结 + 读侧一律浅拷贝：providers 是共享引用，别让某处就地写进去
+  providers: Object.freeze({}) as SyncState['providers'],
+});
 
 function isProviderId(v: unknown): v is SyncProviderId {
   return typeof v === 'string' && (SYNC_PROVIDER_IDS as readonly string[]).includes(v);

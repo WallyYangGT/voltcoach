@@ -216,6 +216,35 @@ describe('OAuth 型平台（Wahoo）的令牌与自愈', () => {
     expect(client.refreshTokens).toHaveBeenCalledTimes(1);
   });
 
+  it('刷新成功但重试仍 401：归 reauth（不再落到「账号或密码错误」文案）', async () => {
+    memory.set(WAHOO_KEY, JSON.stringify(wahooCreds()));
+    const client = stubWahoo({
+      listSince: jest.fn(async () => {
+        throw new SyncError('auth', '鉴权被拒（HTTP 401）');
+      }),
+    });
+    const runner = await providerById('wahoo').createRunner();
+    await runner.start();
+    await expect(runner.listSince(null)).rejects.toMatchObject({ code: 'reauth' });
+    expect(client.refreshTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it('getFileRef / download 同样走 401 自愈（不止列表那一条）', async () => {
+    memory.set(WAHOO_KEY, JSON.stringify(wahooCreds()));
+    const client = stubWahoo({
+      getFileRef: jest
+        .fn()
+        .mockRejectedValueOnce(new SyncError('auth', '鉴权被拒'))
+        .mockResolvedValueOnce({ key: 'k', fileName: 'wahoo-1.fit' }),
+    });
+    const runner = await providerById('wahoo').createRunner();
+    await runner.start();
+    await expect(runner.getFileRef({ id: '1', startAt: null })).resolves.toMatchObject({
+      fileName: 'wahoo-1.fit',
+    });
+    expect(client.refreshTokens).toHaveBeenCalledTimes(1);
+  });
+
   it('刷新被拒（用户已吊销授权）：归 reauth 而不是 auth', async () => {
     memory.set(WAHOO_KEY, JSON.stringify(wahooCreds({ expiresAt: Date.now() - 1 })));
     stubWahoo({
@@ -244,7 +273,11 @@ describe('OAuth 型平台（Wahoo）的令牌与自愈', () => {
   it('重新授权：旧令牌被尽力吊销（官方限「每用户 10 个未吊销 token」）', async () => {
     memory.set(WAHOO_KEY, JSON.stringify(wahooCreds()));
     const client = stubWahoo();
-    await providerById('wahoo').saveCredentials(wahooCreds({ refreshToken: 'brand-new', accessToken: 'brand-new-access' }) as never);
+    await providerById('wahoo').saveCredentials(
+      wahooCreds({ refreshToken: 'brand-new', accessToken: 'brand-new-access' }) as never,
+    );
+    // 吊销是 fire-and-forget（不阻塞授权完成路径）：等一个宏任务再看它有没有跑
+    await new Promise((r) => setTimeout(r, 0));
     expect(client.revoke).toHaveBeenCalledWith('old-access');
   });
 

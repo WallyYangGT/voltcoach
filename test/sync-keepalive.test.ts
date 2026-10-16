@@ -49,7 +49,6 @@ function stubProvider(over: Partial<Record<string, unknown>> = {}) {
     listSince: jest.fn(() => Promise.resolve([])),
     getFileRef: jest.fn(() => Promise.resolve({ key: 'geo/mock-ride-1.fit', fileName: 'mock-ride-1.fit' })),
     download: jest.fn(() => Promise.resolve(new Uint8Array([0x0e]))),
-    recover: jest.fn(() => Promise.resolve()),
     ...over,
   };
   (providerById as jest.Mock).mockReturnValue({

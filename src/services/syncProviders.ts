@@ -249,14 +249,10 @@ function createPasswordProvider<S extends object>(spec: PasswordProviderSpec<S>)
         async start() {
           await ensure();
         },
+        // 三个动作各自带一次「401 → 清缓存重登 → 重试」自愈（与 OAuth 型的 withRecover 对称）
         listSince: (since) => withAuthRetry((s) => client.listSince(s, since)),
         getFileRef: (a) => withAuthRetry((s) => client.getFileRef(s, a)),
         download: (ref) => withAuthRetry((s) => client.download(s, ref)),
-        async recover() {
-          // 编排层已判过 auth：这里同样清缓存重登；重登仍失败就把错误抛给用户
-          await clearCache();
-          session = await login();
-        },
       };
     },
 
@@ -403,12 +399,16 @@ function createOAuthProvider(spec: OAuthProviderSpec): SyncProvider {
       // 重新授权（换 clientId 或再走一遍授权页）会留下旧的未吊销令牌：官方限「每用户
       // 最多 10 个未吊销 token」，攒满后刷新会被拒——旧的那份尽力吊销，失败只警告
       if (previous && previous.refreshToken !== creds.refreshToken) {
-        try {
-          const client = await spec.createClient();
-          await client.revoke(previous.accessToken);
-        } catch (e) {
-          console.warn(`${spec.id} 旧授权吊销失败（忽略，令牌会自行过期）:`, e);
-        }
+        // 不 await：吊销在授权完成的关键路径上，坏网下会把「正在完成授权…」拖满 30s 请求超时
+        // （凭据已先落盘，失败也无副作用——旧令牌 60 天后自动过期）
+        void (async () => {
+          try {
+            const client = await spec.createClient();
+            await client.revoke(previous.accessToken);
+          } catch (e) {
+            console.warn(`${spec.id} 旧授权吊销失败（忽略，令牌会自行过期）:`, e);
+          }
+        })();
       }
     },
 
