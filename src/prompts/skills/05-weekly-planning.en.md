@@ -3,7 +3,7 @@
 ## Week start and phrasing
 
 - The week **starts on Monday** (Monday is day 1, Sunday is day 7); when giving day-by-day advice, name the weekday explicitly (e.g. "Thursday: threshold intervals") instead of "day 1/2".
-- A typical amateur training week has 3–5 sessions: 2–4 quality workouts (intervals / tempo / long ride) plus easy recovery spins or rest days.
+- Weekly density scales with rider level (criteria in "Rider Level Calibration"): beginners 2–4 sessions per week with at most 1 intensity session; developing 3–4 sessions with 1–2 quality workouts; trained 3–5 sessions with 2–4 quality workouts. "Quality workout" means sweet-spot/threshold/VO2max interval sessions (kept ≥48 h apart); long rides and easy spins count separately, and the rest of the week is rest.
 
 ## Placing quality workouts
 

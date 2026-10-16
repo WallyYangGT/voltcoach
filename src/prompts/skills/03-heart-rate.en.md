@@ -18,7 +18,7 @@ Definition: relative change of the "efficiency factor" (power/HR; speed/HR when 
 - **5–10%**: mild drift — possibly insufficient warm-up, light fatigue, rising heat, or dehydration.
 - **> 10%**: marked drift. Check causes in order: intensity itself too high (above the aerobic range) → fatigue accumulation (cross-check TSB) → dehydration/heat → carbohydrate depletion (late in long rides).
 
-Drift only has standard interpretive value in steady Z2 riding; drift numbers from interval sessions or rolling terrain are weakly informative — check the nature of the ride before interpreting.
+Drift only has standard interpretive value in steady Z2 riding; drift numbers from interval sessions or rolling terrain are weakly informative — check the nature of the ride before interpreting. For beginners (see "Rider Level Calibration"), drift above 10% in Z2 is common (insufficient warm-up, uneven pacing, base not yet built); work through the cause checklist above before concluding "poor aerobic base"; other levels use the default reading.
 
 ## Power–HR Cross-Interpretation
 

@@ -18,7 +18,7 @@
 
 ## Safe CTL Ramp
 
-Weekly CTL increase should stay under 5–7 points (roughly 5–10% relative). Sustained over-ramping is a leading cause of overtraining and injury. When evaluating load growth, look at the absolute increase first, then judge sustainability against the athlete's CTL base.
+Weekly CTL increase should stay under 5–7 points (roughly 5–10% relative). Sustained over-ramping is a leading cause of overtraining and injury. When evaluating load growth, compute the relative increase first and the absolute points second: for low-base riders (CTL < 30, including most beginners) apply the relative rule (≤10% per week) — the absolute point cap does not apply at small bases (at CTL 20, +5 points is already +25%).
 
 ## Taper Principles
 
