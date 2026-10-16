@@ -27,6 +27,7 @@ import {
   type RemoteActivity,
   type SyncClient,
 } from '@/sync/common';
+import { createIgpsportClient, IGPSPORT_REGIONS, type IgpsportRegionKey } from '@/sync/igpsport';
 import { createOnelapClient, ONELAP_LOGIN_URL, ONELAP_RIDE_RECORD_BASE } from '@/sync/onelap';
 import { SYNC_PROVIDER_IDS, type SyncProviderId } from '@/sync/state';
 
@@ -279,11 +280,45 @@ export const ONELAP_PROVIDER: SyncProvider = createPasswordProvider({
   overrideBase: () => process.env.EXPO_PUBLIC_ONELAP_BASE || null, // 空串按无覆盖（falsy 判定）
 });
 
+// ---------------- 迹驰 iGPSPORT（国内 / 国际是两个独立账号体系，各占一个下拉项） ----------------
+
+/** 联调端点覆盖（EXPO_PUBLIC_IGPSPORT_BASE 打包期内联；两区共用同一变量指向 mock） */
+function igpsportOverrideBase(): string | null {
+  return process.env.EXPO_PUBLIC_IGPSPORT_BASE || null;
+}
+
+function createIgpsportProvider(region: IgpsportRegionKey): SyncProvider {
+  const config = IGPSPORT_REGIONS[region];
+  return createPasswordProvider({
+    id: config.id,
+    labelKey: region === 'cn' ? 'data.sync.provider.igpsport_cn' : 'data.sync.provider.igpsport_intl',
+    keys: {
+      account: `voltcoach.${config.id}.account`,
+      password: `voltcoach.${config.id}.password`,
+      session: `voltcoach.${config.id}.session`,
+    },
+    async createClient() {
+      const base = igpsportOverrideBase();
+      return createIgpsportClient({
+        region,
+        fetchImpl: await loadDefaultFetch(),
+        baseUrlOverrides: base ? { api: base } : undefined,
+      });
+    },
+    endpointUrls() {
+      return [igpsportOverrideBase() ?? config.apiBase];
+    },
+    overrideBase: igpsportOverrideBase,
+  });
+}
+
 // ---------------- 注册表 ----------------
 
 const REGISTRY: Partial<Record<SyncProviderId, SyncProvider>> = {
   onelap: ONELAP_PROVIDER,
-  // 迹驰国内/国际、Wahoo 随各自实现落地后接入（UI 下拉由注册表驱动，天然只列出已实现的）
+  'igpsport-cn': createIgpsportProvider('cn'),
+  'igpsport-intl': createIgpsportProvider('intl'),
+  // Wahoo 随实现落地后接入（UI 下拉由注册表驱动，天然只列出已实现的）
 };
 
 /** 取平台适配器（状态行里出现未实现的 id 说明数据被改坏了——抛出而非静默） */
