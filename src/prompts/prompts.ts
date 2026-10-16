@@ -178,7 +178,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'sec.plan.output_schema': `\`\`\`plan-json
 {"valid_from":"2026-10-19","valid_to":"2026-11-15","goal":"基础期：有氧量与踏频稳定性","sessions":[{"date":"2026-10-19","type":"rest","duration_min":null,"intensity":null,"tss":0,"note":"休息日"},{"date":"2026-10-21","type":"threshold","duration_min":75,"intensity":"95–105% FTP","tss":85,"note":"3×12min 阈值，组间 5min"}]}
 \`\`\``,
-    'plan.q.0': `评价最近的 CTL 走势：体能是在增长、停滞还是下滑？增速是否安全（一般认为每周 CTL 增幅不宜超过 5-7 点）？`,
+    'plan.q.0': `评价最近的 CTL 走势：体能是在增长、停滞还是下滑？增速是否安全（每周 CTL 增幅不宜超过 5–7 点，约 5–10%；低基数骑手按相对口径执行）？`,
     'plan.q.1': `当前 TSB 与疲劳状态如何？近期是否需要安排减量恢复？`,
     'plan.q.2': `从月汇总的强度分布类型（polarized / pyramidal / sweet_spot）看，目前的强度结构是否合理？`,
     'plan.q.3': `下一周应安排什么强度结构？请给出逐日训练建议（类型、时长、目标功率区间或 %FTP）。`,
@@ -348,7 +348,7 @@ Besides the narrative analysis, you MUST end your answer with a \`\`\`plan-json 
     'sec.plan.output_schema': `\`\`\`plan-json
 {"valid_from":"2026-10-19","valid_to":"2026-11-15","goal":"Base phase: aerobic volume and cadence stability","sessions":[{"date":"2026-10-19","type":"rest","duration_min":null,"intensity":null,"tss":0,"note":"Rest day"},{"date":"2026-10-21","type":"threshold","duration_min":75,"intensity":"95–105% FTP","tss":85,"note":"3×12min threshold, 5min recovery"}]}
 \`\`\``,
-    'plan.q.0': `Assess the recent CTL trend: is fitness growing, plateauing, or declining? Is the rate safe (weekly CTL increase should generally stay under 5-7 points)?`,
+    'plan.q.0': `Assess the recent CTL trend: is fitness growing, plateauing, or declining? Is the rate safe (weekly CTL increase should stay under 5–7 points, roughly 5–10%; low-base riders follow the relative rule)?`,
     'plan.q.1': `What is the current TSB and fatigue state? Is a deload/recovery block needed soon?`,
     'plan.q.2': `Looking at the monthly intensity distribution type (polarized / pyramidal / sweet_spot), is the current intensity structure reasonable?`,
     'plan.q.3': `What intensity structure should next week have? Give day-by-day training suggestions (type, duration, target power zone or %FTP).`,
