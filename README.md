@@ -10,7 +10,7 @@
 - **指标体系**：NP/IF/TSS/VI、Coggan 功率 7 区与心率 5 区、峰功率曲线、心率漂移、爬坡段/间歇识别、FTP 自动估算与历史估算（口径详见 [docs/METRICS.md](./docs/METRICS.md)）
 - **长期负荷**：CTL/ATL/TSB 体系、月度汇总与强度分布、未来负荷推演与课表生成
 - **AI 教练**（BYOK）：自带 OpenAI 兼容 Key（DeepSeek/Kimi/GLM/OpenAI 预设或自定义端点），训练复盘/规划/减量/对比报告与自由对话，agentic 工具本地查数，训练科学知识库注入
-- **数据自主**：SQLCipher 加密训练库、`.fitbackup` 全量备份/迁移（格式见 [docs/BACKUP_FORMAT.md](./docs/BACKUP_FORMAT.md)）、顽鹿云自动同步（见下）
+- **数据自主**：SQLCipher 加密训练库、`.fitbackup` 全量备份/迁移（格式见 [docs/BACKUP_FORMAT.md](./docs/BACKUP_FORMAT.md)）、多平台云自动同步（顽鹿 / 迹驰 iGPSPORT / Wahoo，见下）
 - **双语界面**：中文/English
 
 > **状态**：可用（Android）；iOS 未冒烟验证。<!-- TODO: 补真机截图 -->
@@ -23,7 +23,7 @@
 
 | 权限 | 用途 |
 |---|---|
-| `INTERNET` | 连接你自配的 AI 端点（BYOK）与顽鹿云同步；无任何自建服务器 |
+| `INTERNET` | 连接你自配的 AI 端点（BYOK）与云同步平台（顽鹿/迹驰/Wahoo）；无任何自建服务器 |
 | `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` | AI 生成期间的**后台保活前台服务**（仅生成期间存在，结束即停）——退后台/锁屏不断流 |
 | `WAKE_LOCK` | 生成期间保持 CPU 唤醒，防止熄屏后 SSE 流断续（15 分钟硬上限） |
 | `POST_NOTIFICATIONS` | 显示「AI 生成进行中」常驻通知；**拒绝不影响后台保活**，只是看不到通知 |
@@ -44,9 +44,19 @@ npx expo start --android  # Metro 开发服务 + 模拟器/真机
 
 打 tag 即自动打包并挂到 GitHub Release（`git tag v0.2.0 && git push origin v0.2.0`）。签名 Secrets 配置、发版 checklist、发版包体检与本地打包见 **[docs/RELEASING.md](./docs/RELEASING.md)**。
 
-## 顽鹿云同步说明
+## 云同步说明（顽鹿 / 迹驰 iGPSPORT / Wahoo）
 
-「顽鹿同步」通过社区逆向的非官方接口拉取**你自己账号**的运动记录（登录 / 列表 / 下载 FIT 三组动作），实现码表 → 顽鹿 → 本 App 的全自动数据流。本项目与顽鹿/迈金无任何关联；该接口随时可能变更失效（失效时退回手动导入或分享导入，训练数据不受影响）。请仅用于个人数据导出，登录凭据只存手机本机（Android Keystore），不随备份包迁移。如官方对该能力有异议，请通过仓库 Issues 联系，会及时处理（调整或移除同步模块）。
+在「我的 → 云端同步」里选一个平台并绑定账号，App 打开时会自动拉取**你自己账号**的运动记录（登录 / 列表 / 下载原始 FIT），实现码表 → 云平台 → 本 App 的数据流，只回溯最近 3 个月。**同一时间只有一个生效平台**（单账户互斥），切换平台时各平台的账号与同步进度都会保留。
+
+| 平台 | 接入方式 | 需要的凭据 |
+|---|---|---|
+| 顽鹿（Onelap） | 社区逆向的非官方接口 | 账号 + 密码 |
+| 迹驰 iGPSPORT（国内 / 国际） | 社区逆向的非官方接口（两区账号体系独立，国内手机号 / 国际邮箱） | 账号 + 密码 |
+| Wahoo | **官方 API**（OAuth2 + PKCE） | 你自己在 [Wahoo 开发者门户](https://developers.wahooligan.com) 建一个 **Sandbox** 应用（免费、即时可用、只对你自己的账号有效），把它的 Client ID 与卡片里显示的回调地址填进门户，再回 App 点「授权登录」 |
+
+**声明**：顽鹿与迹驰两路走的是社区逆向的非官方接口，本项目与顽鹿/迈金、迹驰均无任何关联；这类接口随时可能变更失效，失效时退回手动导入或分享导入，训练数据不受影响。请仅用于个人数据导出。Wahoo 走官方通道，受其 API 配额约束（沙盒 250 次/天，FIT 文件下载不计入）。
+
+凭据（账号密码 / OAuth 令牌）只存手机本机（Android Keystore），**不随备份包迁移**；解绑即清除，Wahoo 解绑时还会调用官方接口撤销授权。如官方对上述能力有异议，请通过仓库 Issues 联系，会及时处理（调整或移除同步模块）。
 
 ## 文档地图
 
@@ -75,4 +85,4 @@ npx expo start --android  # Metro 开发服务 + 模拟器/真机
 
 本项目以 [MIT](./LICENSE) 许可证开源。
 
-第三方声明：`src/sync/onelap.ts` 顽鹿云同步模块移植自 [OnelapSyncStrava](https://github.com/kermit-r-wood/OnelapSyncStrava)（MIT，Copyright (c) 2026 kermit-r-wood）——依其许可证要求在此保留上述版权声明；其余依赖由 npm 管理，各自的许可证见对应包内声明。
+第三方声明：`src/sync/onelap.ts` 顽鹿云同步模块移植自 [OnelapSyncStrava](https://github.com/kermit-r-wood/OnelapSyncStrava)（MIT，Copyright (c) 2026 kermit-r-wood）；`src/sync/igpsport.ts` 的接口口径参考多个社区项目（intervalssync / igpsport-mcp / iGPSPORT2Garmin / FitSync 等，均为各自作者所有，仅作协议对照、未移植其代码）；依其许可证要求在此保留上述版权声明；其余依赖由 npm 管理，各自的许可证见对应包内声明。

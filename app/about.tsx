@@ -1,7 +1,8 @@
 /**
  * about.tsx — 关于页（开源维护期新增，自「我的」入口进入）：品牌头（图标/名称/
  * 版本/slogan）、项目简介、仓库与联系入口（GitHub / Issues / 邮箱）、许可与声明
- * （MIT、顽鹿非官方接口）。素材口径与 README 一致；链接经 Linking 打开。
+ * （MIT、云同步的平台口径说明：顽鹿/迹驰为社区逆向的非官方接口、Wahoo 为官方 API）。
+ * 素材口径与 README 一致；链接经 Linking 打开。
  */
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';

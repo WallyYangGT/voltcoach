@@ -124,9 +124,10 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'ai.keepalive_title': 'AI 生成进行中',
     'ai.keepalive_body': '切到后台也会继续生成，完成后回 App 查看',
     'ai.keepalive_channel': 'AI 生成',
-    // 同步保活（顽鹿同步复用同一保活壳，decisions §15）：首次 90 天全量是分钟级任务，
-    // 同步期间退后台不被冻结；渠道 ID 固定为原生侧 generation_keepalive，此处仅显示名
-    'sync.keepalive_title': '顽鹿同步进行中',
+    // 同步保活（云同步复用同一保活壳，decisions §15）：首次 90 天全量是分钟级任务，
+    // 同步期间退后台不被冻结；渠道 ID 固定为原生侧 generation_keepalive，此处仅显示名。
+    // 文案不点平台名（多平台后同一句话覆盖顽鹿/迹驰/Wahoo，平台名在卡片的生效平台行里）
+    'sync.keepalive_title': '云端同步进行中',
     'sync.keepalive_body': '正在从云端拉取训练数据，可切后台等待',
     'sync.keepalive_channel': '数据同步',
     // ---- 编排层消息（src/services/aiGenerate，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
@@ -317,7 +318,7 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'ai.keepalive_title': 'AI generation in progress',
     'ai.keepalive_body': 'Generation continues in the background — come back for the result',
     'ai.keepalive_channel': 'AI generation',
-    'sync.keepalive_title': 'Onelap sync in progress',
+    'sync.keepalive_title': 'Cloud sync in progress',
     'sync.keepalive_body': 'Pulling training data from the cloud — you can leave the app',
     'sync.keepalive_channel': 'Data sync',
     'srv.ai_key_missing': 'No AI key configured (Settings page) — chat unavailable',
