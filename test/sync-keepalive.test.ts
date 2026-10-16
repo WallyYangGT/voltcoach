@@ -159,6 +159,30 @@ describe('云同步编排 × 保活壳接线', () => {
     expect(runner.getFileRef).toHaveBeenCalledTimes(1); // 首个活动即终止
   });
 
+  it('同步途中用户改状态行（切平台/关开关）：收尾按最新行合并，只写目标平台槽位', async () => {
+    // 开头读到的状态：生效平台 onelap、自动同步开
+    (getSyncState as jest.Mock).mockResolvedValue({ provider: 'onelap', auto: true, providers: {} });
+    // 收尾前的重读：用户已把生效平台切成 wahoo、关掉自动同步（首次全量是分钟级，转得完）
+    (getSyncState as jest.Mock).mockResolvedValueOnce({ provider: 'onelap', auto: true, providers: {} });
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'wahoo',
+      auto: false,
+      providers: { wahoo: { last_sync_at: null, last_result: null, last_error: null, last_counts: null } },
+    });
+    await runSync();
+    const written = (setSyncState as jest.Mock).mock.calls[0][0] as {
+      provider: string;
+      auto: boolean;
+      providers: Record<string, { last_result: string | null }>;
+    };
+    // 用户的选择不被同步收尾覆盖回去
+    expect(written.provider).toBe('wahoo');
+    expect(written.auto).toBe(false);
+    expect(written.providers.wahoo).toBeTruthy();
+    // 本轮跑的是 onelap，成果写进它的槽位
+    expect(written.providers.onelap?.last_result).toBe('ok');
+  });
+
   it('并发调用共享同一 promise：acquire 只发生一次', async () => {
     // listSince 挂起：两个调用在同一 tick 发起（第二个共享 running promise），
     // 之后才放行

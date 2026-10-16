@@ -255,6 +255,14 @@ export function base64UrlEncode(bytes: Uint8Array): string {
   return base64Encode(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/**
+ * FIT 魔数校验（字节 8–11 == ".FIT"）：云端直链下载到的往往是错误页/占位内容/HTML，
+ * 先校验能给一句能看懂的话，别把垃圾字节丢给解析器。各平台的直链下载共用。
+ */
+export function isFitBytes(bytes: Uint8Array): boolean {
+  return bytes.length >= 12 && String.fromCharCode(...bytes.slice(8, 12)) === '.FIT';
+}
+
 /** 十六进制串 → 字节（expo-crypto 的 digest 返回 hex，PKCE 需要原始字节做 base64url） */
 export function hexToBytes(hex: string): Uint8Array {
   const out = new Uint8Array(Math.floor(hex.length / 2));

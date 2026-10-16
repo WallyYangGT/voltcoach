@@ -50,8 +50,11 @@ function sleep(ms: number): Promise<void> {
 /** 前台自动同步的最小间隔（手动「立即同步」不受限） */
 const AUTO_THROTTLE_MS = 60 * 60 * 1000;
 
-/** 单轮同步结果（UI 展示 imported/skipped/duplicates/failed 四计数；error 按稳定码映射 i18n） */
-export type SyncErrorCode = 'no_account' | 'auth' | 'reauth' | 'other';
+/**
+ * 单轮同步的**对外**错误码（UI 按它映射 i18n；与 common.ts 的 SyncErrorCode 五值（网络/鉴权/
+ * 需重授权/接口/无文件）不同层——那个是客户端抛错用的，这个只分「用户的处置方式」）。
+ */
+export type SyncOutcomeCode = 'no_account' | 'auth' | 'reauth' | 'other';
 
 export interface SyncOutcome {
   imported: number;
@@ -61,7 +64,7 @@ export interface SyncOutcome {
   duplicates: number;
   failed: number;
   /** null = 正常跑完；code 供 UI 双语化，message 为原始技术信息（存库并透出） */
-  error: { code: SyncErrorCode; message: string } | null;
+  error: { code: SyncOutcomeCode; message: string } | null;
   /**
    * 最旧一条失败活动的起骑时间（ISO）。水位线推进锚点：failed>0 时推进到此时间
    * （而非当前时刻）——下次窗口仍覆盖失败活动重试，成功项按文件名幂等跳过；
@@ -71,7 +74,7 @@ export interface SyncOutcome {
 }
 
 /** SyncError → 稳定码（auth/reauth 单列供双语化，其余归 other 透出原始信息） */
-function toError(e: unknown): { code: SyncErrorCode; message: string } {
+function toError(e: unknown): { code: SyncOutcomeCode; message: string } {
   if (e instanceof SyncError) {
     if (e.code === 'auth') return { code: 'auth', message: e.message };
     if (e.code === 'reauth') return { code: 'reauth', message: e.message };
@@ -134,8 +137,12 @@ async function runSyncOnce(): Promise<SyncOutcome> {
     // 水位线推进锚点：正常→当前时刻；有失败活动→最旧失败活动时间（下次窗口重试，
     // 成功项按文件名幂等跳过）；本轮出错（未拉到列表）→不动
     const nextSyncAt = err ? prev.last_sync_at : outcome.failureFloor ?? new Date().toISOString();
+    // ⚠️ 收尾必须**重读状态行再只写目标平台槽位**：首次 90 天全量是分钟级，用户在同步
+    // 途中切平台/关自动开关都会被开头那份快照整行覆盖写回（界面随后 load() 又把用户
+    // 改动读回来，看起来像「切了没生效」）——provider/auto 以库内现值为准（评审 P2-1）
+    const latest = await getSyncState();
     await setSyncState(
-      withProviderState(state, state.provider, {
+      withProviderState(latest, state.provider, {
         last_sync_at: nextSyncAt,
         last_result: err ? 'error' : 'ok',
         last_error: err?.message || null,

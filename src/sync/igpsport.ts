@@ -32,6 +32,7 @@ import { safeName } from '../core/records.ts';
 import {
   DOWNLOAD_TIMEOUT_MS,
   fetchWithTimeout,
+  isFitBytes,
   REQUEST_TIMEOUT_MS,
   SyncError,
   type FetchLike,
@@ -190,35 +191,45 @@ export function createIgpsportClient(deps: IgpsportDeps): IgpsportClient {
     };
   }
 
-  /** 统一请求出口（将来若需接 x-signature，只改这里） */
+  /**
+   * 统一请求出口（将来若需接 x-signature，只改这里）。**返回 done()，调用方读完 body
+   * 才清超时计时器**——服务端「发头即挂住 body」时 body 读取同样要能被超时打断，
+   * 否则本轮同步永不落定、模块级 running promise 挂死后续所有同步（评审 P1-2）。
+   */
   async function request(
     url: string,
     init: RequestInit,
-    timeoutMs = requestTimeoutMs,
-  ): Promise<Response> {
+    opts: { timeoutMs?: number; forbiddenAs?: 'auth' | 'api' } = {},
+  ): Promise<{ res: Response; done: () => void }> {
     let res: Response;
     let done: () => void;
     try {
-      ({ res, done } = await fetchWithTimeout(doFetch, url, init, timeoutMs));
+      ({ res, done } = await fetchWithTimeout(doFetch, url, init, opts.timeoutMs ?? requestTimeoutMs));
     } catch (e) {
       if (e instanceof SyncError) throw e;
       throw new SyncError('network', `网络请求失败: ${String(e)}`);
     }
     try {
-      if (res.status === 401 || res.status === 403) throw new SyncError('auth', `鉴权被拒（HTTP ${res.status}）`);
+      if (res.status === 401 || (res.status === 403 && opts.forbiddenAs !== 'api')) {
+        throw new SyncError('auth', `鉴权被拒（HTTP ${res.status}）`);
+      }
       if (!res.ok) throw new SyncError('api', `接口异常（HTTP ${res.status}）: ${url}`);
-      return res;
-    } finally {
+      return { res, done };
+    } catch (e) {
       done();
+      throw e;
     }
   }
 
   async function getJson(url: string, token?: string): Promise<unknown> {
-    const res = await request(url, { method: 'GET', headers: headers(token) });
+    const { res, done } = await request(url, { method: 'GET', headers: headers(token) });
     try {
       return await res.json();
     } catch (e) {
+      if (e instanceof SyncError) throw e;
       throw new SyncError('api', `响应非 JSON: ${String(e)}`);
+    } finally {
+      done();
     }
   }
 
@@ -245,7 +256,7 @@ export function createIgpsportClient(deps: IgpsportDeps): IgpsportClient {
   return {
     async login(account, password) {
       const json = await (async () => {
-        const res = await request(`${apiBase}${PATH_LOGIN}`, {
+        const { res, done } = await request(`${apiBase}${PATH_LOGIN}`, {
           method: 'POST',
           headers: { ...headers(), 'Content-Type': 'application/json;charset=utf-8' },
           body: JSON.stringify({ appId: 'igpsport-web', username: account, password }),
@@ -253,11 +264,16 @@ export function createIgpsportClient(deps: IgpsportDeps): IgpsportClient {
         try {
           return await res.json();
         } catch (e) {
+          if (e instanceof SyncError) throw e;
           throw new SyncError('api', `登录响应非 JSON: ${String(e)}`);
+        } finally {
+          done();
         }
       })();
       let payload: unknown;
       try {
+        // 注：会话过期若被网关表达为 HTTP 200 + 业务码（社区实现不统一），这里不会触发
+        // 重登自愈——真遇到再按错误码补映射（当前实证均为 HTTP 401/403）
         payload = unwrapPayload(json, '登录');
       } catch (e) {
         // 登录端点的业务码失败（错密码/账号异常）归 auth：给用户的处置是「核对账号密码」，
@@ -306,20 +322,27 @@ export function createIgpsportClient(deps: IgpsportDeps): IgpsportClient {
     },
 
     async download(_session, ref: FileRef) {
-      // OSS 直链裸 GET（不带鉴权头，见文件头）；body 读取同样在超时信号保护内
-      const res = await request(ref.key, { method: 'GET', headers: { 'User-Agent': DESKTOP_UA } }, downloadTimeoutMs);
+      // OSS 直链裸 GET（不带鉴权头，见文件头）。⚠️ 直链与「会话」无关，403/401（签名过期、
+      // AccessDenied）按接口异常处理而非 auth：归 auth 会中止整轮同步且水位线不前进，
+      // 下一轮又卡在同一活动（评审 P2-2）
+      const { res, done } = await request(
+        ref.key,
+        { method: 'GET', headers: { 'User-Agent': DESKTOP_UA } },
+        { timeoutMs: downloadTimeoutMs, forbiddenAs: 'api' },
+      );
       let bytes: ArrayBuffer;
       try {
         bytes = await res.arrayBuffer();
       } catch (e) {
+        if (e instanceof SyncError) throw e;
         throw new SyncError('network', `FIT 下载失败: ${String(e)}`);
+      } finally {
+        done();
       }
       const buf = new Uint8Array(bytes);
-      // FIT 魔数（字节 8–11 == ".FIT"）：下载到错误页/空文件时给一句能看懂的话，
+      // FIT 魔数校验（isFitBytes）：下载到错误页/空文件时给一句能看懂的话，
       // 而不是把垃圾字节丢给解析器报一句看不懂的错
-      if (buf.length < 12 || String.fromCharCode(...buf.slice(8, 12)) !== '.FIT') {
-        throw new SyncError('api', '下载内容不是 FIT 文件（接口可能返回了错误页或占位内容）');
-      }
+      if (!isFitBytes(buf)) throw new SyncError('api', '下载内容不是 FIT 文件（接口可能返回了错误页或占位内容）');
       return buf;
     },
   };

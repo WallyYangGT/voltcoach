@@ -65,8 +65,13 @@ export interface OAuthCredentials {
 export type SyncCredentials = PasswordCredentials | OAuthCredentials;
 
 /**
- * 平台执行器：编排层只看到这五个动作。会话（token）封在闭包里，
+ * 平台执行器：编排层只看到这四个动作。会话（token）封在闭包里，
  * 因此编排层不需要知道各平台的会话形状差异。
+ *
+ * **会话自愈在 runner 内部**（密码型 401 → 清缓存重登一次；OAuth 401 → 刷新令牌后重试
+ * 一次），编排层不感知——早期设计把 recover() 放在接口上让编排层驱动，结果编排层从未
+ * 调用它，OAuth 的 401 失去自愈（评审 P1-3 揪出）。自愈失败时抛 SyncError('reauth')
+ * 表示「需要用户回设置页重新授权」。
  */
 export interface SyncRunner {
   /** 建立/恢复会话（读缓存或登录/刷新）；失败抛 SyncError */
@@ -75,11 +80,6 @@ export interface SyncRunner {
   /** 活动 → 文件引用；null = 云端无原始文件（按跳过处理） */
   getFileRef(a: RemoteActivity): Promise<FileRef | null>;
   download(ref: FileRef): Promise<Uint8Array>;
-  /**
-   * 会话失效自愈：清缓存重登（密码型）/ 刷新令牌（OAuth）。
-   * 无法自愈时抛 SyncError('reauth')——那需要用户回到设置页重新授权。
-   */
-  recover(): Promise<void>;
 }
 
 export interface SyncProvider {
@@ -138,16 +138,25 @@ function createPasswordProvider<S extends object>(spec: PasswordProviderSpec<S>)
     return account && password ? { kind: 'password', account, password } : null;
   };
 
-  /** 读缓存会话；无缓存/内容损坏/形状不符返回 null（调用方转为密码登录） */
+  /**
+   * 读缓存会话；无缓存/内容损坏/形状不符返回 null（调用方转为密码登录）。
+   * 兼容 M4 的**扁平旧形状** `{account, token, uid}`（多平台化前没有 session 包裹层）：
+   * 缺 session 键时把 account 之外的字段整体当作会话——否则老用户升级后要多做一次
+   * 带密码的登录（无害但没必要）。
+   */
   const readCache = async (): Promise<CachedSessionPayload<S> | null> => {
     const raw = await SecureStore.getItemAsync(sessionKey);
     if (!raw) return null;
     try {
-      const parsed = JSON.parse(raw) as Partial<CachedSessionPayload<S>>;
-      if (typeof parsed?.account !== 'string' || !parsed.session || typeof parsed.session !== 'object') {
-        return null;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof parsed?.account !== 'string') return null;
+      if ('session' in parsed) {
+        const session = parsed.session;
+        if (!session || typeof session !== 'object') return null;
+        return { account: parsed.account, session: session as S };
       }
-      return { account: parsed.account, session: parsed.session };
+      const { account: _account, ...rest } = parsed;
+      return Object.keys(rest).length > 0 ? { account: parsed.account, session: rest as S } : null;
     } catch {
       return null; // 行内容损坏按无缓存处理
     }
@@ -389,7 +398,18 @@ function createOAuthProvider(spec: OAuthProviderSpec): SyncProvider {
 
     async saveCredentials(creds) {
       if (creds.kind !== 'oauth') throw new SyncError('reauth', '凭据类型不符（需要 OAuth 授权）');
+      const previous = await loadCredentials();
       await SecureStore.setItemAsync(spec.credentialKey, JSON.stringify(creds));
+      // 重新授权（换 clientId 或再走一遍授权页）会留下旧的未吊销令牌：官方限「每用户
+      // 最多 10 个未吊销 token」，攒满后刷新会被拒——旧的那份尽力吊销，失败只警告
+      if (previous && previous.refreshToken !== creds.refreshToken) {
+        try {
+          const client = await spec.createClient();
+          await client.revoke(previous.accessToken);
+        } catch (e) {
+          console.warn(`${spec.id} 旧授权吊销失败（忽略，令牌会自行过期）:`, e);
+        }
+      }
     },
 
     async clearCredentials() {
@@ -447,6 +467,29 @@ function createOAuthProvider(spec: OAuthProviderSpec): SyncProvider {
         }
       };
 
+      /**
+       * 带一次刷新重试的调用（与密码型的 withAuthRetry 对称）：命中 401 先刷新令牌再重试
+       * 原请求一次；刷新本身失败或重试仍 401 ⇒ 授权失效（reauth，提示重新授权）。
+       * 令牌被提前吊销（用户在官网断开应用）与跨过 2 小时 TTL 的轮次都靠它兜住。
+       */
+      const withRecover = async <T>(fn: (t: WahooTokens) => Promise<T>): Promise<T> => {
+        try {
+          return await fn(tokens);
+        } catch (e) {
+          if (!(e instanceof SyncError) || e.code !== 'auth') throw e;
+          console.warn(`${spec.id} 会话失效（401），刷新令牌后重试一次`);
+          await refresh();
+          try {
+            return await fn(tokens);
+          } catch (e2) {
+            if (e2 instanceof SyncError && e2.code === 'auth') {
+              throw new SyncError('reauth', '授权已失效，请重新授权');
+            }
+            throw e2;
+          }
+        }
+      };
+
       return {
         async start() {
           // 到期前 5 分钟先刷新；刷新后紧接着就要拉数据（轮换语义要求刷新即用一次）
@@ -457,10 +500,9 @@ function createOAuthProvider(spec: OAuthProviderSpec): SyncProvider {
             console.log(`${spec.id} 复用未过期的 access token（到期 ${new Date(tokens.expiresAt).toISOString()}）`);
           }
         },
-        listSince: (since) => client.listSince(tokens, since),
-        getFileRef: (a) => client.getFileRef(tokens, a),
-        download: (ref) => client.download(tokens, ref),
-        recover: refresh,
+        listSince: (since) => withRecover((t) => client.listSince(t, since)),
+        getFileRef: (a) => withRecover((t) => client.getFileRef(t, a)),
+        download: (ref) => withRecover((t) => client.download(t, ref)),
       };
     },
 

@@ -38,7 +38,7 @@ const FORBIDDEN = [
  *  确认是依赖自带而非联调地址——这正是把判据从"列举已知 IP"升级为"默认拒绝"的价值） */
 const CLEARTEXT_HOST_WHITELIST = ['localhost', 'hostname', 'fb.me'];
 /** 生产端点特征（必须出现，证明用的是真实常量而非空配置）——三个平台各取一个域名特征 */
-const REQUIRED = ['onelap.cn', 'prod.zh.igpsport.com', 'api.wahooligan.com'];
+const REQUIRED = ['onelap.cn', 'prod.zh.igpsport.com', 'prod.en.igpsport.com', 'api.wahooligan.com'];
 const BUNDLE_ENTRY = 'assets/index.android.bundle';
 
 /** 联调变量仍在环境里时，期望包内出现的就是它们（用于确认"我构建的是我想要的包"） */

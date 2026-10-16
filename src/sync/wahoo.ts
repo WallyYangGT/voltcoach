@@ -34,6 +34,7 @@ import {
   DOWNLOAD_TIMEOUT_MS,
   fetchWithTimeout,
   hexToBytes,
+  isFitBytes,
   REQUEST_TIMEOUT_MS,
   SyncError,
   type FetchLike,
@@ -211,11 +212,6 @@ export function buildWahooFileName(workoutId: string): string {
   return `wahoo-${workoutId}.fit`;
 }
 
-/** FIT 魔数校验（字节 8–11 == ".FIT"），与迹驰同口径 */
-export function isFitBytes(bytes: Uint8Array): boolean {
-  return bytes.length >= 12 && String.fromCharCode(...bytes.slice(8, 12)) === '.FIT';
-}
-
 // ---------------- 客户端 ----------------
 
 export function createWahooClient(deps: WahooDeps = {}): WahooClient {
@@ -227,12 +223,16 @@ export function createWahooClient(deps: WahooDeps = {}): WahooClient {
   const requestTimeoutMs = deps.timeouts?.requestMs ?? REQUEST_TIMEOUT_MS;
   const downloadTimeoutMs = deps.timeouts?.downloadMs ?? DOWNLOAD_TIMEOUT_MS;
 
-  /** 统一请求出口：超时、鉴权头、状态码归一 */
+  /**
+   * 统一请求出口：超时、鉴权头、状态码归一。**返回 done()，调用方读完 body 才清计时器**
+   * （与 common.fetchWithTimeout 的契约一致）——服务端「发头即挂住 body」时读取同样要
+   * 能被超时打断，否则本轮同步永不落定、挂死后续所有同步（评审 P1-2）。
+   */
   async function call(
     url: string,
     init: RequestInit,
     opts: { token?: string; timeoutMs?: number; allowStatuses?: number[] } = {},
-  ): Promise<Response> {
+  ): Promise<{ res: Response; done: () => void }> {
     let res: Response;
     let done: () => void;
     try {
@@ -258,16 +258,17 @@ export function createWahooClient(deps: WahooDeps = {}): WahooClient {
       if (!res.ok && !(opts.allowStatuses ?? []).includes(res.status)) {
         throw new SyncError('api', `接口异常（HTTP ${res.status}）: ${url}`);
       }
-      return res;
-    } finally {
+      return { res, done };
+    } catch (e) {
       done();
+      throw e;
     }
   }
 
   async function postToken(body: Record<string, string>): Promise<WahooTokens> {
     // 400 交给 parseTokenResponse 读 error_description：令牌端点的失败原因是给用户看的
     // 关键信息（invalid_grant 分「授权码过期」与「PKCE 不匹配」两种），不能吞成 HTTP 码
-    const res = await call(
+    const { res, done } = await call(
       `${apiBase}/oauth/token`,
       {
         method: 'POST',
@@ -280,19 +281,29 @@ export function createWahooClient(deps: WahooDeps = {}): WahooClient {
     try {
       json = await res.json();
     } catch (e) {
+      if (e instanceof SyncError) throw e;
       throw new SyncError('api', `令牌响应非 JSON: ${String(e)}`);
+    } finally {
+      done();
     }
     return parseTokenResponse(json, nowMs());
   }
 
   /** 拉某页活动（含 starts 解析与未来活动过滤） */
   async function listPage(token: string, page: number): Promise<{ items: RemoteActivity[]; exhausted: boolean }> {
-    const res = await call(`${apiBase}/v1/workouts?page=${page}&per_page=${WORKOUTS_PER_PAGE}`, { method: 'GET' }, { token });
+    const { res, done } = await call(
+      `${apiBase}/v1/workouts?page=${page}&per_page=${WORKOUTS_PER_PAGE}`,
+      { method: 'GET' },
+      { token },
+    );
     let json: { workouts?: unknown; total?: unknown };
     try {
       json = (await res.json()) as typeof json;
     } catch (e) {
+      if (e instanceof SyncError) throw e;
       throw new SyncError('api', `活动列表响应非 JSON: ${String(e)}`);
+    } finally {
+      done();
     }
     const raw = Array.isArray(json?.workouts) ? json.workouts : [];
     const items: RemoteActivity[] = [];
@@ -353,7 +364,8 @@ export function createWahooClient(deps: WahooDeps = {}): WahooClient {
     },
 
     async revoke(accessToken) {
-      await call(`${apiBase}/v1/permissions`, { method: 'DELETE' }, { token: accessToken });
+      const { done } = await call(`${apiBase}/v1/permissions`, { method: 'DELETE' }, { token: accessToken });
+      done();
     },
 
     async listSince(session, since, maxPages = 10) {
@@ -373,12 +385,13 @@ export function createWahooClient(deps: WahooDeps = {}): WahooClient {
     },
 
     async getFileRef(session, activity) {
-      const res = await call(
+      const { res, done } = await call(
         `${apiBase}/v1/workouts/${encodeURIComponent(activity.id)}/workout_summary`,
         { method: 'GET' },
         { token: session.accessToken, allowStatuses: [403, 404] },
       );
       if (res.status === 403 || res.status === 404) {
+        done();
         // 手动录入 / 第三方 App 来源的骑行拿不到 summary；个别 workout 也会对某些令牌
         // 直接拒绝。这些都是「这个活动没有文件」，不是本轮同步失败——计跳过。
         // 注：若真是 mid-sync 令牌过期（2 小时 TTL 且开跑前刚校验过），列表请求会先暴露，
@@ -390,7 +403,10 @@ export function createWahooClient(deps: WahooDeps = {}): WahooClient {
       try {
         json = await res.json();
       } catch (e) {
+        if (e instanceof SyncError) throw e;
         throw new SyncError('api', `活动详情响应非 JSON: ${String(e)}`);
+      } finally {
+        done();
       }
       const url = extractWorkoutFileUrl(json);
       if (!url) return null; // manual: true 等：没有 FIT 文件
@@ -399,20 +415,23 @@ export function createWahooClient(deps: WahooDeps = {}): WahooClient {
 
     async download(_session, ref: FileRef) {
       // pre-signed 直链：不带鉴权头、不计限流、小时级过期；拿到即下载（不缓存 URL）
-      const res = await call(
+      const { res, done } = await call(
         ref.key,
         { method: 'GET', headers: { Accept: 'application/octet-stream' } },
         { timeoutMs: downloadTimeoutMs, allowStatuses: [403] },
       );
-      if (res.status === 403) {
-        // pre-signed 地址签名过期（有效期小时级）：下次同步会重新取地址，不是数据问题
-        throw new SyncError('api', 'FIT 直链已过期（签名有效期小时级），下次同步会自动重新取地址');
-      }
       let bytes: ArrayBuffer;
       try {
+        if (res.status === 403) {
+          // pre-signed 地址签名过期（有效期小时级）：下次同步会重新取地址，不是数据问题
+          throw new SyncError('api', 'FIT 直链已过期（签名有效期小时级），下次同步会自动重新取地址');
+        }
         bytes = await res.arrayBuffer();
       } catch (e) {
+        if (e instanceof SyncError) throw e;
         throw new SyncError('network', `FIT 下载失败: ${String(e)}`);
+      } finally {
+        done();
       }
       const buf = new Uint8Array(bytes);
       if (!isFitBytes(buf)) throw new SyncError('api', '下载内容不是 FIT 文件（可能收到错误页）');

@@ -14,6 +14,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { createMockWahooServer } from '../scripts/mock-wahoo-server.mjs';
+import { isFitBytes } from '../src/sync/common.ts';
 import { analyzeFile } from '../src/core/analyze.ts';
 import { findDuplicateGroups } from '../src/core/dedupe.ts';
 import {
@@ -23,7 +24,6 @@ import {
   extractWorkoutFileUrl,
   formEncode,
   isAccessTokenExpired,
-  isFitBytes,
   parseTokenResponse,
   parseWahooCallback,
   parseWorkoutStarts,

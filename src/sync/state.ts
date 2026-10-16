@@ -55,12 +55,13 @@ export interface SyncState {
   providers: Partial<Record<SyncProviderId, ProviderSyncState>>;
 }
 
-export const EMPTY_PROVIDER_STATE: ProviderSyncState = {
+/** 共享空态（冻结：读侧会直接把它当返回值发出去，别让某处手滑就地改到） */
+export const EMPTY_PROVIDER_STATE: ProviderSyncState = Object.freeze({
   last_sync_at: null,
   last_result: null,
   last_error: null,
   last_counts: null,
-};
+});
 
 export const DEFAULT_SYNC_STATE: SyncState = {
   provider: DEFAULT_SYNC_PROVIDER,

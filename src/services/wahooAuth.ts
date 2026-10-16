@@ -39,11 +39,6 @@ interface PendingWahooAuth {
 
 let pendingAuth: PendingWahooAuth | null = null;
 
-/** 是否有进行中的授权（回调路由据此判断要不要收尾） */
-export function hasPendingWahooAuth(): boolean {
-  return pendingAuth !== null;
-}
-
 /** 放弃进行中的授权（用户取消/换平台时清理） */
 export function clearPendingWahooAuth(): void {
   pendingAuth = null;
@@ -91,29 +86,41 @@ export async function openWahooAuthorize(p: {
 export async function completeWahooAuth(input: string): Promise<OAuthCredentials | null> {
   const pending = pendingAuth;
   if (!pending) return null;
-  const { code } = parseWahooCallback(input, pending.pkce.state);
-  const client = await createDeviceWahooClient();
-  const tokens = await client.exchangeCode({
-    clientId: pending.clientId,
-    code,
-    codeVerifier: pending.pkce.verifier,
-    redirectUri: pending.redirectUri,
-  });
-  // 换码成功才清 pending（换失败时保留，用户还能再贴一次同一个链接）
+  // ⚠️ 先「抢占」再干活：表单快路径（openAuthSessionAsync 赛跑赢了）与回调路由几乎同时
+  // 触发时，两者都会在 await 之前读到同一个 pending——不抢占就会**重复换码**，第二次
+  // 必被服务端以 invalid_grant 拒掉（授权码一次性），用户看到一次假报错（2026-10-16
+  // 模拟器实测：两个 POST /oauth/token 相隔 7ms）。抢占与恢复都在同步段内完成，
+  // await 之后不再有第二个入口能进来。
   pendingAuth = null;
-  return {
-    kind: 'oauth',
-    clientId: pending.clientId,
-    redirectUri: pending.redirectUri,
-    codeVerifier: pending.pkce.verifier,
-    ...tokens,
-  };
+  try {
+    const { code } = parseWahooCallback(input, pending.pkce.state);
+    const client = await createDeviceWahooClient();
+    const tokens = await client.exchangeCode({
+      clientId: pending.clientId,
+      code,
+      codeVerifier: pending.pkce.verifier,
+      redirectUri: pending.redirectUri,
+    });
+    return {
+      kind: 'oauth',
+      clientId: pending.clientId,
+      redirectUri: pending.redirectUri,
+      codeVerifier: pending.pkce.verifier,
+      ...tokens,
+    };
+  } catch (e) {
+    // 换码失败把 pending 放回：用户还能再贴一次同一个回调链接（幂等重试）
+    pendingAuth = pending;
+    throw e;
+  }
 }
 
 /**
- * 回调路由用：取当前把 App 唤起的深链（无则 null）。用 Linking.useURL 而非路由参数——
- * 回调 URL 的 query 已经过 URL 规范化，直接交给 parseWahooCallback 最不容易出错。
+ * 回调路由用：取当前把 App 唤起的深链（无则 null）。
+ * ⚠️ 必须用 `useLinkingURL`（它拿 `getLinkingURL()` 的**同步初值**，冷/热启动都能在首帧
+ * 拿到）；`useURL` 的初值恒为 null（异步 getInitialURL 才填），回调路由会因此在首帧
+ * 就断定「没有 URL」而收尾失败（评审 P1-1）。
  */
 export function useWahooCallbackUrl(): string | null {
-  return Linking.useURL();
+  return Linking.useLinkingURL();
 }

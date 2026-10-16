@@ -162,6 +162,22 @@ test('e2e: 登录 → 分页列表（含时间格式双形态）→ 两条取地
   });
 });
 
+test('e2e: 多页翻页（服务端 20 条硬截断）——45 条夹具翻 3 页拿全，不丢不重', async () => {
+  // 评审补的覆盖：分页收敛此前只靠 5 条（一页拿完）的 e2e，翻页分支无人拦
+  await withMock({ activityCount: 45, oldActivityCount: 3 }, async (env) => {
+    const client = createIgpsportClient({ region: 'cn', fetchImpl: fetch, baseUrlOverrides: env.baseUrlOverrides });
+    const session = await client.login('rider@example.com', 'any');
+
+    const all = await client.listSince(session, null);
+    assert.equal(all.length, 48, '全部活动都应拿到（含窗口外的老活动：listSince 不做窗口过滤）');
+    assert.equal(new Set(all.map((a) => a.id)).size, 48, '翻页之间不得重复或漏项');
+
+    // 窗口过滤后只剩近 3 天（夹具按天递减）
+    const recent = await client.listSince(session, new Date(Date.now() - 2.5 * 24 * 3600 * 1000));
+    assert.ok(recent.length >= 2 && recent.length <= 3, `窗口内应只剩近几天：${recent.length}`);
+  });
+});
+
 test('e2e: 国际区客户端同样跑通（域名不同，行为一致）', async () => {
   await withMock({ activityCount: 2 }, async (env) => {
     const client = createIgpsportClient({ region: 'intl', fetchImpl: fetch, baseUrlOverrides: env.baseUrlOverrides });

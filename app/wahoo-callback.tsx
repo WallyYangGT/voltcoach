@@ -14,8 +14,8 @@
  * 打日志后回同步卡，卡片里还有「手动粘贴」路径可以兜底。
  */
 import { useRouter } from 'expo-router';
-import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useRef } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useI18n } from '@/i18n';
 import { providerById } from '@/services/syncProviders';
@@ -29,25 +29,39 @@ export default function WahooCallbackScreen() {
   const url = useWahooCallbackUrl();
   const started = useRef(false);
 
+  const finish = useCallback(() => {
+    router.replace('/(tabs)/me');
+  }, [router]);
+
+  // ⚠️ url 为 null 时**不能**置 started：useLinkingURL 虽给同步初值，热启动路径仍可能晚一拍
+  // 到达；早退会让收尾彻底失效（评审 P1-1）。等到 url 到达再收尾。
   useEffect(() => {
-    // 深链参数可能分两次到达（先 URL 后 params），但 useEffect 的依赖重跑会重复收尾，
-    // 故只跑一次：拿到的 url 为空时也直接回同步卡（pending 还在，用户可手动粘贴）
-    if (started.current) return;
+    if (started.current || !url) return;
     started.current = true;
     void (async () => {
       try {
-        if (url) {
-          const creds = await completeWahooAuth(url);
-          if (creds) await providerById('wahoo').saveCredentials(creds);
-        }
+        const creds = await completeWahooAuth(url);
+        if (creds) await providerById('wahoo').saveCredentials(creds);
       } catch (e) {
-        // 授权失败不在这里打扰用户：回到同步卡看状态，或用手动粘贴 / 重新授权
+        // 收尾失败要露一次面：否则用户回到卡片只看到「未绑定」，不知道发生了什么
         console.warn('Wahoo 授权回调收尾失败:', e);
+        Alert.alert(t('data.sync.wahoo.failed'), e instanceof Error ? e.message : String(e));
       } finally {
-        router.replace('/(tabs)/me');
+        finish();
       }
     })();
-  }, [router, url]);
+  }, [finish, t, url]);
+
+  // 兜底：没等到 url（用户手动打开该路径/深链被吞）也别把人卡在过渡页
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!started.current) {
+        started.current = true;
+        finish();
+      }
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [finish]);
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
