@@ -28,6 +28,7 @@ import {
   type PlanIssue,
   type PlanSession,
   type PlanSessionType,
+  type PlanValidationOptions,
   type TrainingPlan,
 } from './training-plan.ts';
 
@@ -66,6 +67,8 @@ export interface PlanOpsResult {
   errors: string[];
   /** 全计划合理性复检违规（adjust 档；渲染侧经 formatPlanIssue 拼文案） */
   violations: PlanIssue[];
+  /** 业余模式软约束提示（只提示不拦截；随版本存档展示） */
+  warnings: PlanIssue[];
   /** 实际应用的操作清单（成功时返回，供模型向用户复述「动了哪些课」） */
   applied: PlanSessionOp[];
 }
@@ -75,6 +78,7 @@ const fail = (errors: string[], violations: PlanIssue[] = []): PlanOpsResult => 
   plan: null,
   errors,
   violations,
+  warnings: [],
   applied: [],
 });
 
@@ -89,6 +93,7 @@ export function applyPlanSessionOps(
   ops: unknown,
   today: string,
   lang: Lang = 'zh',
+  options: PlanValidationOptions = {},
 ): PlanOpsResult {
   if (!Array.isArray(ops) || ops.length === 0) return fail([t(lang, 'tp.op.empty')]);
   if (ops.length > PLAN_OPS_MAX) return fail([t(lang, 'tp.op.too_many', { n: PLAN_OPS_MAX })]);
@@ -297,8 +302,8 @@ export function applyPlanSessionOps(
     goal: plan.goal,
     sessions: resolvePlanTss(working),
   };
-  const v = validateTrainingPlan(merged, today, 'ops', lang);
+  const v = validateTrainingPlan(merged, today, 'ops', lang, options);
   if (!v.ok) return fail(v.errors);
   if (v.violations.length) return fail([], v.violations);
-  return { ok: true, plan: v.plan, errors: [], violations: [], applied };
+  return { ok: true, plan: v.plan, errors: [], violations: [], warnings: v.warnings, applied };
 }

@@ -176,6 +176,14 @@ export const FORM_SIMULATION = {
   tsb_recovery: -20, // generateWorkout 中 TSB 低于该值自动降级为恢复课
 };
 
+// 业余模式的推演阈值：低负荷骑手的 TSB 基数更浅，按训练者标尺会把正常波动标成
+// 风险；放宽深度疲劳线与 CTL 增幅线（只影响展示推演旗标，不改 CTL/ATL 递推数值）。
+export const AMATEUR_FORM_SIMULATION = {
+  ...FORM_SIMULATION,
+  tsb_low: -40,
+  ctl_ramp_pct: 12,
+};
+
 // ============ 结构化训练计划校验（v2 训练计划载体，src/core/training-plan） ============
 // 阈值口径与 src/prompts/skills/05-weekly-planning 技能一致（代码单源，技能为知识层文本，
 // 改阈值须两处同步评审）；history_keep 供 db 层版本历史裁剪。
@@ -188,6 +196,13 @@ export const PLAN_VALIDATION = {
   recovery_window_weeks: 4, // 减量节奏：任 N 连周须含一个减量周（05 技能：每 3–4 周）
   week_min_covered_days: 5, // 自然周「须含休息日」检查的最小窗内覆盖天数（窗边残周不查）
   history_keep: 10, // 计划版本历史上限（db 层 training_plan_history 裁剪）
+};
+
+// 业余模式计划约束（2026-10-17，decisions §30）：**只提示不拦截**——用户可能真的
+// 没空，不逼用户放弃爱好；既有结构规则（质量课间隔/休息日/减量周）不放松。
+export const PLAN_AMATEUR_LIMITS = {
+  weekly_quality_max: 2, // 每周质量课建议上限
+  weekly_sessions_max: 6, // 每周非休息课次软上限
 };
 
 // ============ 计划执行情况视图（U1 收尾②：本地 adherence，src/core/plan-adherence） ============
@@ -244,5 +259,38 @@ export const WORKOUT_TEMPLATES: Record<
     reps: [4, 6],
     rest_min: null, // null = 组间休息与单组等时
     cooldown_min: 10,
+  },
+};
+
+// 短课版模板（业余模式：30–45 分钟也能上一次质量课；2026-10-17 decisions §30）。
+// 标准模板的甜区最短约 50 分钟（热身 15 + 2×10 + 组间 5 + 冷身 10），对时间受限
+// 骑手直接判「装不下」；短课版压缩热身/冷身与最少组数，保证 20 分钟也能成课。
+// 只在标准模板装不下时回退使用（generateWorkout），不改变标准模板行为。
+export const WORKOUT_TEMPLATES_SHORT: Partial<
+  Record<'recovery' | 'endurance' | 'sweet_spot' | 'threshold' | 'vo2max', WorkoutTemplate>
+> = {
+  sweet_spot: {
+    label: '甜区（短课）',
+    warmup_min: 8,
+    set: { pct: [0.88, 0.94], if: 0.91, min_min: 6, max_min: 12 },
+    reps: [1, 2],
+    rest_min: 3,
+    cooldown_min: 5,
+  },
+  threshold: {
+    label: '阈值（短课）',
+    warmup_min: 8,
+    set: { pct: [0.95, 1.05], if: 1.0, min_min: 6, max_min: 10 },
+    reps: [1, 2],
+    rest_min: 3,
+    cooldown_min: 5,
+  },
+  vo2max: {
+    label: 'VO2max（短课）',
+    warmup_min: 8,
+    set: { pct: [1.06, 1.2], if: 1.13, min_min: 2, max_min: 4 },
+    reps: [3, 4],
+    rest_min: null,
+    cooldown_min: 5,
   },
 };

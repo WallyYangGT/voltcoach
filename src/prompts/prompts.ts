@@ -130,6 +130,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'dossier.climb': `- 爬坡画像（{n} 段中位）：坡度 {g}%、强度 {p}%FTP、心率 {h} bpm`,
     'dossier.cadence': `- 踏频风格（{m} 次骑行占比）：低踏频 {low}%、正常 {normal}%、高踏频 {high}%`,
     'dossier.zones': `- 90 天强度结构（按时长加权）：Z1–Z2 {low}%、Z3–Z4 {mid}%、Z5–Z7 {high}%`,
+    'dossier.zones.hr': `- 90 天心率强度结构（功率不可用骑行，按时长加权）：Z1–Z2 {low}%、Z3–Z4 {mid}%、Z5 {high}%（心率五区，单锚点分析用）`,
     'dossier.types': `- 月度强度类型：{v}`,
     'dossier.load': `- 近 8 周负荷：周均 TSS {avg}（峰值 {peak}），周均骑行 {hours} 小时`,
     'dossier.drift': `- 心率漂移中位 {v}%（{n} 次样本，有氧耐力参考）`,
@@ -324,6 +325,7 @@ You are in the "training plan" conversation, answering questions about and adjus
     'dossier.climb': `- Climb profile (median of {n} segments): grade {g}%, intensity {p}%FTP, HR {h} bpm`,
     'dossier.cadence': `- Cadence style ({m} rides): low-cadence {low}%, normal {normal}%, high-cadence {high}%`,
     'dossier.zones': `- 90-day intensity structure (time-weighted): Z1–Z2 {low}%, Z3–Z4 {mid}%, Z5–Z7 {high}%`,
+    'dossier.zones.hr': `- 90-day HR intensity structure (rides without usable power, time-weighted): Z1–Z2 {low}%, Z3–Z4 {mid}%, Z5 {high}% (5 HR zones; for single-anchor analysis)`,
     'dossier.types': `- Monthly intensity types: {v}`,
     'dossier.load': `- Last 8 weeks: avg {avg} TSS/week (peak {peak}), avg {hours} h riding/week`,
     'dossier.drift': `- Median HR drift {v}% ({n} samples, aerobic-endurance reference)`,
@@ -712,6 +714,18 @@ export function buildDossierSection(dossier: AthleteDossier | null, lang: Prompt
         low: r1((zp.Z1 ?? 0) + (zp.Z2 ?? 0)),
         mid: r1((zp.Z3 ?? 0) + (zp.Z4 ?? 0)),
         high: r1((zp.Z5 ?? 0) + (zp.Z6 ?? 0) + (zp.Z7 ?? 0)),
+      }),
+    );
+  }
+  // 单锚点降级基线：功率不可用骑行的心率分区结构（无功率骑手的主要强度依据）
+  const hzp = dossier.intensity_structure.hr_zone_pct;
+  if (hzp) {
+    const r1 = (x: number) => Math.round(x * 10) / 10;
+    lines.push(
+      TT(lang, 'dossier.zones.hr', {
+        low: r1((hzp.Z1 ?? 0) + (hzp.Z2 ?? 0)),
+        mid: r1((hzp.Z3 ?? 0) + (hzp.Z4 ?? 0)),
+        high: r1(hzp.Z5 ?? 0),
       }),
     );
   }

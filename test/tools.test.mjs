@@ -631,6 +631,43 @@ test('update_training_plan：合规调整落库——TSS 回填/rest 归零/chan
   assert.equal(saved.plan.sessions[1].tss, 0); // rest 课负荷归零
 });
 
+test('update_training_plan：业余模式软约束只回传 warnings，不硬拒（超出只提示）', async () => {
+  const io = fakeIo({
+    getProfile: async () => ({
+      identity: '',
+      goal: '保持健康',
+      coach_mode: 'amateur',
+      weekly_hours: '3to5',
+      available_days: [],
+      session_max_min: 60,
+    }),
+  });
+  let saved = null;
+  io.savePlanVersion = async (plan, meta) => {
+    saved = { plan, meta };
+    return 2;
+  };
+  const exec = createExecuteTool(io, { source: 'plan', chat: true, lang: 'zh' });
+  // 三节质量课放进同一个自然周（下周一/三/五），保证周质量课上限提示稳定出现
+  const dow = new Date(localDay() + 'T00:00:00Z').getUTCDay(); // 0=周日
+  const nextMon = ((1 - dow + 7) % 7) || 7;
+  const out = JSON.parse(
+    await exec('update_training_plan', {
+      plan: planObj([
+        pSession(day(nextMon), 'threshold', 90),
+        pSession(day(nextMon + 2), 'sweet_spot', 90),
+        pSession(day(nextMon + 4), 'threshold', 90),
+      ]),
+      change_note: '业余三节质量课',
+    }),
+  );
+  assert.equal(out.ok, true); // 软约束不阻断
+  assert.equal(out.violations, undefined);
+  // 1 条周质量课上限 + 3 条单课超时
+  assert.equal(out.warnings.length, 4);
+  assert.equal(saved.meta.warnings.length, 4);
+});
+
 // ---------------- adjust_plan_sessions：课次级局部调整（U1 收尾） ----------------
 
 test('adjust_plan_sessions：非对话拒写；无计划返回 no_plan', async () => {

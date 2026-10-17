@@ -23,6 +23,7 @@ import {
   getAiReport,
   getCurrentPlan,
   getPlanHistory,
+  getProfile,
   recentFormDaily,
   type AiChatMessageRow,
   type AiReportRow,
@@ -101,11 +102,12 @@ export default function PlanScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [cfgRes, plan, hist, cid] = await Promise.all([
+      const [cfgRes, plan, hist, cid, prof] = await Promise.all([
         getAiConfig(),
         getCurrentPlan(),
         getPlanHistory(),
         findPlanChat(),
+        getProfile(),
       ]);
       setCfg(cfgRes.configured);
       setStored(plan);
@@ -122,7 +124,13 @@ export default function PlanScreen() {
       if (plan) {
         const daily = await recentFormDaily(1);
         const last = daily[daily.length - 1];
-        setRisk(last ? projectPlanForm(plan.plan, last.ctl, last.atl, lang).risk_flags : []);
+        setRisk(
+          last
+            ? projectPlanForm(plan.plan, last.ctl, last.atl, lang, {
+                amateur: prof.coach_mode === 'amateur',
+              }).risk_flags
+            : [],
+        );
       } else {
         setRisk([]);
       }

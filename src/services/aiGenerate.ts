@@ -518,7 +518,12 @@ async function extractAndStorePlanFromReport(
   try {
     const { plan, error } = extractPlanFromMarkdown(markdown, lang);
     if (!plan) throw new Error(error ?? t(lang, 'tp.no_block'));
-    const v = validateTrainingPlan(plan, localDay(), 'create', lang);
+    // 业余模式软约束（周质量课/周课次/单课超时）只进 warnings，不拒收（decisions §30）
+    const profile = await getProfile();
+    const v = validateTrainingPlan(plan, localDay(), 'create', lang, {
+      coachMode: profile.coach_mode,
+      sessionMaxMin: profile.session_max_min,
+    });
     if (!v.ok || !v.plan) throw new Error(v.errors.join('；'));
     await savePlanVersion(v.plan, {
       origin: 'generate',

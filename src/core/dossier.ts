@@ -78,6 +78,12 @@ export interface AthleteDossier {
   intensity_structure: {
     /** 90 天窗内按骑行时长加权聚合的功率分区占比（%） */
     zone_pct: Record<string, number> | null;
+    /**
+     * 90 天窗内**功率不可用骑行**（无功率或功率被标记不可信）的心率分区占比（%，
+     * 5 区，按骑行时长加权）——单锚点分析（无功率骑手）的确定性强度结构基线。
+     * 功率可用骑行不进此口径（已计入 zone_pct，避免双计）。
+     */
+    hr_zone_pct: Record<string, number> | null;
     /** 近几月强度类型（自月度汇总透传，null 项剔除） */
     intensity_types: { month: string; type: string }[];
   };
@@ -226,6 +232,28 @@ export function buildDossier(
         )
       : null;
 
+  // ---- 心率强度结构（单锚点降级：功率不可用骑行按心率五区聚合，时长加权） ----
+  // 功率可用骑行不进此口径（已计入 zone_pct）；功率被标记不可信的骑行功率作废、
+  // 心率仍可信，因此进入 HR 口径。无心率分布数据的骑行跳过。
+  const hrZoneSec: Record<string, number> = {};
+  let hrZoneWeightSec = 0;
+  for (const r of cycling) {
+    if (!inWindow(r) || powerUsable(r)) continue;
+    const dist = r.summary?.heart_rate?.zone_distribution_pct;
+    if (!dist || r.duration_sec == null || r.duration_sec <= 0) continue;
+    for (const [z, pct] of Object.entries(dist)) {
+      if (typeof pct !== 'number' || !Number.isFinite(pct)) continue;
+      hrZoneSec[z] = (hrZoneSec[z] ?? 0) + (pct / 100) * r.duration_sec;
+    }
+    hrZoneWeightSec += r.duration_sec;
+  }
+  const hrZonePct =
+    hrZoneWeightSec > 0
+      ? Object.fromEntries(
+          Object.entries(hrZoneSec).map(([z, sec]) => [z, r1((sec / hrZoneWeightSec) * 100)]),
+        )
+      : null;
+
   // ---- 周负荷（结束于锚日的连续 8 周；TSS 剔除功率不可信，时长全采信） ----
   const weeks: DossierWeekLoad[] = [];
   for (let k = DOSSIER_LOAD_WEEKS - 1; k >= 0; k -= 1) {
@@ -273,6 +301,7 @@ export function buildDossier(
     cadence_profile: { rides_analyzed: cadenceRides, style_counts: style },
     intensity_structure: {
       zone_pct: zonePct,
+      hr_zone_pct: hrZonePct,
       intensity_types: monthly
         .filter((m) => m.type)
         .slice(0, 6)

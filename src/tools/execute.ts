@@ -440,7 +440,11 @@ const toolGetTrainingPlan: ToolImpl = async (_args, ctx, io) => {
 const toolUpdateTrainingPlan: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
   if (!ctx?.chat) return errResult(t(lang, 'tp.tool.report_source'));
-  const v = validateTrainingPlan(args?.plan, localDay(), 'adjust', lang);
+  const profile = await io.getProfile();
+  const v = validateTrainingPlan(args?.plan, localDay(), 'adjust', lang, {
+    coachMode: profile.coach_mode,
+    sessionMaxMin: profile.session_max_min,
+  });
   if (!v.ok || !v.plan) return errResult(v.errors.join('；'));
   if (v.violations.length) {
     return toResult(
@@ -457,7 +461,7 @@ const toolUpdateTrainingPlan: ToolImpl = async (args, ctx, io) => {
   const versionsTotal = await io.savePlanVersion(v.plan, {
     origin: 'adjust',
     change_note: note,
-    warnings: [],
+    warnings: v.warnings,
   });
   return toResult(
     {
@@ -467,6 +471,7 @@ const toolUpdateTrainingPlan: ToolImpl = async (args, ctx, io) => {
       valid_to: v.plan.valid_to,
       sessions: v.plan.sessions.length,
       note,
+      warnings: v.warnings.map((i) => formatPlanIssue(i, lang)),
     },
     lang,
   );
@@ -484,7 +489,11 @@ const toolAdjustPlanSessions: ToolImpl = async (args, ctx, io) => {
   if (!ctx?.chat) return errResult(t(lang, 'tp.tool.report_source'));
   const stored = await io.getTrainingPlan();
   if (!stored) return errResult(t(lang, 'tp.tool.no_plan'));
-  const r = applyPlanSessionOps(stored.plan, args?.ops, localDay(), lang);
+  const profile = await io.getProfile();
+  const r = applyPlanSessionOps(stored.plan, args?.ops, localDay(), lang, {
+    coachMode: profile.coach_mode,
+    sessionMaxMin: profile.session_max_min,
+  });
   if (!r.ok || !r.plan) {
     if (r.errors.length) return errResult(r.errors.join('；'));
     return toResult(
@@ -502,7 +511,7 @@ const toolAdjustPlanSessions: ToolImpl = async (args, ctx, io) => {
   const versionsTotal = await io.savePlanVersion(adjusted, {
     origin: 'adjust',
     change_note: note,
-    warnings: [],
+    warnings: r.warnings,
   });
   return toResult(
     {
@@ -513,6 +522,7 @@ const toolAdjustPlanSessions: ToolImpl = async (args, ctx, io) => {
       valid_to: adjusted.valid_to,
       sessions: adjusted.sessions.length,
       note,
+      warnings: r.warnings.map((i) => formatPlanIssue(i, lang)),
     },
     lang,
   );

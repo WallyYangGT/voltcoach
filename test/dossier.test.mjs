@@ -243,6 +243,41 @@ test('月度强度类型透传：null 剔除、最多 6 条', () => {
   assert.ok(d.intensity_structure.intensity_types.every((m) => m.type === 'polarized'));
 });
 
+test('单锚点降级：功率不可用骑行按心率五区聚合（功率可用骑行不进 HR 口径）', () => {
+  const noPower = ride({
+    file_name: 'np.fit',
+    duration_sec: 3600,
+    summary: {
+      power: null,
+      heart_rate: { zone_distribution_pct: { Z1: 50, Z2: 30, Z3: 10, Z4: 5, Z5: 5 } },
+    },
+  });
+  // 功率可用骑行：只进功率结构，不进 HR 结构（避免双计）
+  const withPower = ride({ file_name: 'wp.fit', duration_sec: 3600 });
+  // 功率被标记不可信：功率作废、心率仍可信 → 进 HR 口径
+  const flagged = ride({
+    file_name: 'fl.fit',
+    duration_sec: 1800,
+    power_flagged: true,
+    summary: {
+      power: { peak_curve: { '5s': 900 }, zone_distribution_pct: { Z1: 100 } },
+      heart_rate: { zone_distribution_pct: { Z1: 10, Z2: 20, Z3: 30, Z4: 20, Z5: 20 } },
+    },
+  });
+  const d = buildDossier([noPower, withPower, flagged], 200, [], NOW);
+  // 权重 = 3600 + 1800 = 5400s
+  assert.deepEqual(d.intensity_structure.hr_zone_pct, {
+    Z1: 36.7,
+    Z2: 26.7,
+    Z3: 16.7,
+    Z4: 10,
+    Z5: 10,
+  });
+  // 无功率不可用骑行时 HR 结构为 null（不产生空对象）
+  const onlyPower = buildDossier([withPower], 200, [], NOW);
+  assert.equal(onlyPower.intensity_structure.hr_zone_pct, null);
+});
+
 test('addDaysStr 跨月/跨年正确', () => {
   assert.equal(addDaysStr('2026-10-01', -1), '2026-09-30');
   assert.equal(addDaysStr('2026-01-01', -1), '2025-12-31');
