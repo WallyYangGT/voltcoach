@@ -75,6 +75,9 @@ test('业余教练技能：关键口径钉死 + zh/en 成对', () => {
   const en = SKILL_FILES.en.find((f) => f.name === '10-amateur-coach.en.md');
   assert.ok(zh, '缺少 10-amateur-coach.md');
   assert.ok(en, '缺少 10-amateur-coach.en.md');
+  // P1 不承诺尚不存在的工具（前向工具引用只能随 P2 一起加回来）
+  assert.ok(!zh.content.includes('update_rider_profile'));
+  assert.ok(!en.content.includes('update_rider_profile'));
   // 关键行为：两维取交集、健康锚点、目标阶梯分窗、首次询问不阻塞、
   // 活动日长骑是上限、记忆兜底、入门不做全力测试、质量课 ≤2
   for (const phrase of [

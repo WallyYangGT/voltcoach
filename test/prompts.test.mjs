@@ -132,6 +132,20 @@ test('周期规划/减量/对比提示词：数据段与固化问题齐全', () 
   assert.match(cmp, /6\. 基于对比结果，给出下一阶段的训练重点建议。/);
 });
 
+test('英文 taper：段标题与活动日口径同步', () => {
+  const formSeries = [{ date: '2026-03-25', tss: 0, ctl: 50, atl: 45, tsb: 5 }];
+  const recent = [{ file_name: 'a.fit', date: '2026-03-25', tss: 60 }];
+  const taper = buildTaperPrompt(
+    { raceDate: '2026-04-20', daysLeft: 25, form: { ctl: 50, atl: 45, tsb: 5 }, formSeries, recentActivities: recent },
+    ATHLETE, null, null, 'en', new Date(),
+  );
+  assert.match(taper, /## Race \/ Event Info/);
+  assert.match(taper, /Race\/event date: 2026-04-20/);
+  assert.match(taper, /"event day" framing/);
+  assert.match(taper, /never invent watts without power data/);
+  assert.match(taper, /skips sprint rehearsals or course scouting/);
+});
+
 test('compactSummaryForPrompt：anomalies 聚合 / segments 首尾省略 / climbs 取最大', () => {
   const anomalies = Array.from({ length: 8 }, (_, i) => ({ type: 'power_gap', duration_sec: 10 + i, at: `2026-03-25T0${i}:00:00.000Z` }));
   const segments = Array.from({ length: 25 }, (_, i) => ({ name: `S${i + 1}` }));
@@ -652,8 +666,7 @@ test('周期规划提示词：既有计划处理段 + plan-json 输出格式段�
   assert.match(en, /according to the rider's available anchor/);
 });
 
-test('英文业余口径：profile.tail 与 plan 会话指令同步', () => {
-  const p = buildReviewPrompt(
+test('英文业余口径：profile.tail 与 plan 会话指令同步', () => {  const p = buildReviewPrompt(
     sampleSummary(),
     ATHLETE,
     { identity: 'office worker', goal: 'stay healthy' },
