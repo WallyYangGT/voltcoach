@@ -54,6 +54,22 @@ test('buildSkillsSection 拼装专业知识库段（标题降为三级）', () =
   assert.match(section, /### 技能乙\n\n内容乙/);
 });
 
+test('E1 预算：超 maxChars 时整文件装入、装不下的尾部整篇省略并列名', () => {
+  const files = [
+    { name: '01-a.md', content: '# 技能甲\n\n' + '甲'.repeat(300) },
+    { name: '02-b.md', content: '# 技能乙\n\n' + '乙'.repeat(300) },
+    { name: '03-c.md', content: '# 技能丙\n\n' + '丙'.repeat(300) },
+  ];
+  // 预算只够前两篇（每篇约 320 字 + 段头开销）
+  const section = buildSkillsSection('zh', files, 1000);
+  assert.match(section, /### 技能甲/);
+  assert.match(section, /### 技能乙/);
+  assert.doesNotMatch(section, /### 技能丙\n/); // 整篇不注入（标题不出现在正文）
+  assert.match(section, /以下技能因上下文预算未注入：.*技能丙/); // 省略说明列名
+  // 半篇技能不允许出现（内容要么全在、要么全不在）
+  assert.doesNotMatch(section, /丙丙丙/);
+});
+
 test('内嵌 skills/ 目录默认加载十个技能且跳过 _README（zh）', () => {
   const titles = buildSkillsSection('zh');
   assert.match(titles, /Coggan 功率训练体系/);

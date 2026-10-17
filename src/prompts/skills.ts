@@ -6,6 +6,9 @@
  * 技能内容变更时重跑 `node scripts/embed-skills.mjs` 重新生成。
  */
 
+// E1 预算截断的省略说明文案走 i18n（core/i18n 不依赖本模块，无环）
+import { t } from '../core/i18n.ts';
+
 export type Lang = 'zh' | 'en';
 
 /** 单个技能文件（文件名保留原命名，title 兜底用） */
@@ -69,9 +72,12 @@ const SECTION_TEXT: Record<Lang, { head: string; intro: string }> = {
 /**
  * 把技能拼成「专业知识库」提示词段；无技能时返回 null（调用方 filter(Boolean)）。
  * 全文注入：每个技能保留原 Markdown 正文，标题统一降为三级。
- * files 缺省用内嵌技能；测试可注入自定义数组（口径同旧版 buildSkillsSection）。
+ * maxChars（E1 预算，CONTEXT_BUDGET.skills_max_chars）：超预算时按**整文件**装入、
+ * 装不下的尾部技能整篇省略（绝不切半个文件——半篇技能比缺一篇更误导），段尾列名交代。
+ * 前面的技能编号小（核心口径）优先保留。files 缺省用内嵌技能；测试可注入自定义数组
+ * （口径同旧版 buildSkillsSection）。
  */
-export function buildSkillsSection(lang: Lang = 'zh', files: SkillFile[] = SKILL_FILES[lang] ?? []): string | null {
+export function buildSkillsSection(lang: Lang = 'zh', files: SkillFile[] = SKILL_FILES[lang] ?? [], maxChars?: number): string | null {
   const skills: { title: string; content: string }[] = [];
   // 按文件名排序（口径同旧版 loadSkills 的 readdir 后 sort，数字前缀控制注入顺序）
   const sorted = [...files].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -85,7 +91,27 @@ export function buildSkillsSection(lang: Lang = 'zh', files: SkillFile[] = SKILL
     });
   }
   if (!skills.length) return null;
-  const body = skills.map((s) => `### ${s.title}\n\n${s.content}`).join('\n\n');
+
   const T = SECTION_TEXT[lang] ?? SECTION_TEXT.zh;
-  return `${T.head}\n\n${T.intro}\n\n${body}`;
+  // E1 预算：整文件贪心装入，装不下的尾部整篇省略（列名交代，不切半篇）
+  const omittedNames: string[] = [];
+  let kept = skills;
+  if (maxChars != null) {
+    const overhead = (T.head.length + T.intro.length + 4) * 2; // 标题/引入/空行的保守开销
+    kept = [];
+    let used = overhead;
+    for (const s of skills) {
+      const cost = s.content.length + s.title.length + 8;
+      if (kept.length && used + cost > maxChars) {
+        omittedNames.push(s.title);
+        continue;
+      }
+      kept.push(s);
+      used += cost;
+    }
+  }
+  if (!kept.length) return null;
+  const body = kept.map((s) => `### ${s.title}\n\n${s.content}`).join('\n\n');
+  const omission = omittedNames.length ? '\n\n' + t(lang, 'skill.omitted', { names: omittedNames.join('、') }) : '';
+  return `${T.head}\n\n${T.intro}\n\n${body}${omission}`;
 }

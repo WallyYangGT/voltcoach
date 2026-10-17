@@ -22,6 +22,7 @@ import type { AthleteParams } from '../core/settings.ts';
 import { AGENTIC, AMATEUR_FORM_SIMULATION, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from '../core/settings.ts';
 import { estimateFtpFromHistory, type CyclingRideInput } from '../core/ftp.ts';
 import { t, type Lang } from '../core/i18n.ts';
+import { compactJsonToLimit } from './compact.ts';
 import { localDay, localDayFromUtc } from '../core/local-day.ts';
 import { addDaysStr } from '../core/dossier.ts';
 import { safeName, type ThinResult } from '../core/records.ts';
@@ -131,13 +132,16 @@ function clampInt(v: unknown, min: number, max: number, fallback: number): numbe
   return Math.min(max, Math.max(min, Math.round(n)));
 }
 
-/** 结果序列化 + 截断（超 AGENTIC.tool_result_max_chars 附截断标记，按语言） */
+/**
+ * 结果序列化 + 结构化降级（E1）：超 AGENTIC.tool_result_max_chars 时**不再从中间
+ * 硬切 JSON**（截在 JSON 中间对模型是噪声且不可解析），改走 compactJsonToLimit——
+ * 长数组抽样保留首尾、长文本截短、顶层附 _truncated 元信息，任何情况下返回合法 JSON。
+ */
 function toResult(obj: unknown, lang: Lang = 'zh'): string {
-  let s = JSON.stringify(obj);
-  if (s.length > AGENTIC.tool_result_max_chars) {
-    s = s.slice(0, AGENTIC.tool_result_max_chars) + t(lang, 'tool.result_truncated');
-  }
-  return s;
+  return compactJsonToLimit(obj, {
+    maxChars: AGENTIC.tool_result_max_chars,
+    note: t(lang, 'tool.result_compacted'),
+  });
 }
 
 const errResult = (message: string) => JSON.stringify({ error: message });

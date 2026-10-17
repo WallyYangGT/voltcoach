@@ -49,6 +49,8 @@ import {
   listActivityRideKeys,
   listPendingAiReportRefs,
   listPendingChatMessageRefs,
+  getChatSummary,
+  saveChatSummary,
   saveMemory,
   setProfile,
   type AiChatMode,
@@ -64,14 +66,18 @@ import {
 import { callAI, runAgentLoop } from '@/ai/agent';
 import { t, type Lang } from '@/core/i18n';
 import { localDay, localDayFromUtc } from '@/core/local-day';
+import { CONTEXT_BUDGET } from '@/core/settings';
 import type { AthleteDossier } from '@/core/dossier';
 import { shouldFlushPartial, withinResumeWindow } from '@/core/report-status';
 import { safeName, thinRecords } from '@/core/records';
 import { extractPlanFromMarkdown, validateTrainingPlan } from '@/core/training-plan';
+import { buildSummaryInput, normalizeSummaryOutput, shouldSummarize } from '@/core/chat-summary';
 
-import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildDossierSection, buildMemorySection, buildMemoryReviewPrompt, withLocalActivityDate, withLocalActivityDates } from '@/prompts/prompts';
+import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, buildComparePrompt, buildAgenticSection, buildChatSummaryPrompt, buildDossierSection, buildMemorySection, buildMemoryReviewPrompt, withLocalActivityDate, withLocalActivityDates } from '@/prompts/prompts';
 import { buildSkillsSection } from '@/prompts/skills';
 import { buildChatSystemSection } from '@/prompts/chat';
+import { rankMemories } from '@/prompts/memory-rank';
+import { windowChatHistory } from '@/prompts/history';
 import { toolDefs, createExecuteTool, type ToolIo } from '@/tools';
 import { loadStoredRecords } from '@/records-store';
 import { getRideStartAt } from './aiTitle';
@@ -221,7 +227,7 @@ export async function buildReportPrompt(
   lang: Lang = 'zh',
 ): Promise<string> {
   const [profile, athlete] = await Promise.all([getProfile(), getEffectiveAthlete()]);
-  const skills = buildSkillsSection(lang);
+  const skills = buildSkillsSection(lang, undefined, CONTEXT_BUDGET.skills_max_chars);
   // 个人训练档案段（本地聚合长期基线；无骑行数据为 null 整段省略——首次使用/
   // 空库时提示词与旧形态一致）
   const dossierSection = buildDossierSection(await localAnchorDossier(await getDossier()), lang);
@@ -408,8 +414,27 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     // 天然不会碰 cancelled 行，无需额外守卫。
     let finalPrompt = report.prompt;
     if (config.agentic !== false) {
-      finalPrompt += '\n\n' + buildAgenticSection(lang);
-      finalPrompt += '\n\n' + buildMemorySection(await listMemories(), lang);
+      const agenticSection = buildAgenticSection(lang);
+      finalPrompt += '\n\n' + agenticSection;
+      // E1：记忆按相关度 top-k（query=报告基础 prompt 的正文特征），并在
+      // report_total_max_chars 的剩余预算内二次收口——基础段已由 assemble 控制在
+      // report_base_max_chars，记忆只吃剩余额度，绝不把总量推爆
+      const remaining = Math.max(
+        400,
+        CONTEXT_BUDGET.report_total_max_chars - finalPrompt.length - 4,
+      );
+      const memories = rankMemories(await listMemories(), {
+        mode: report.mode,
+        query: report.prompt,
+        topK: CONTEXT_BUDGET.memory_top_k,
+        maxChars: Math.min(CONTEXT_BUDGET.memory_max_chars, remaining),
+      });
+      finalPrompt += '\n\n' + buildMemorySection(memories, lang);
+      if (finalPrompt.length > CONTEXT_BUDGET.report_total_max_chars) {
+        console.warn(
+          `[AI] 报告 #${reportId} 上下文超出总预算：${finalPrompt.length}/${CONTEXT_BUDGET.report_total_max_chars} 字符（基础段+工具段为常量成本，记忆已按剩余额度收口）`,
+        );
+      }
     }
     // 生成期间启动保活前台服务（令牌制引用计数，见 src/ai/keepalive.ts）：进程脱离
     // cached 冻结桶，退后台/锁屏 SSE 不断流。放在所有取数/校验之后——fast-fail
@@ -564,7 +589,15 @@ async function runMemoryReviewRound(
 ): Promise<void> {
   try {
     const fetchImpl = await loadDefaultFetch();
-    const prompt = buildMemoryReviewPrompt(markdown, await listMemories(), lang);
+    // E1：既有记忆按报告正文相关度取 top-k（去重基准只保留真正相关的旧记忆），
+    // 报告正文本身在 buildMemoryReviewPrompt 内走首末章瘦身
+    const memories = rankMemories(await listMemories(), {
+      mode: 'review',
+      query: markdown,
+      topK: CONTEXT_BUDGET.memory_top_k,
+      maxChars: CONTEXT_BUDGET.memory_max_chars,
+    });
+    const prompt = buildMemoryReviewPrompt(markdown, memories, lang);
     // 仅 save_memory：回顾轮不需要（也不该再触发）取数/写计划等其他工具
     const defs = toolDefs(lang).filter((d) => d.function.name === 'save_memory');
     const answer = await runAgentLoop(
@@ -638,16 +671,78 @@ export async function submitChatMessage(
   return { chatId, messageId };
 }
 
+/**
+ * 对话滚动摘要（E1）：被窗口挤出的旧消息交给模型压缩，成功落 settings 行；失败/超时
+ * 回落确定性 digest，绝不影响主生成。
+ * - 体量 < chat_summary_trigger_chars：直接用 digest（不值得为几百字调一次模型）；
+ * - 已有摘要：只把 up_to_message_id 之后的增量与既有摘要一起送（滚动，不重复概括）；
+ * - 无新增量：复用既有摘要；取消（AiCancelledError）原样上抛给主任务回写 cancelled。
+ */
+async function maybeRefreshChatSummary(
+  config: AiConfig & { api_key: string },
+  chatId: number,
+  omitted: { id: number; role: 'user' | 'assistant'; content: string }[],
+  digest: string | null,
+  lang: Lang,
+  signal: AbortSignal,
+  onActivity?: (note: string) => void,
+): Promise<string | null> {
+  if (!omitted.length) return null;
+  if (!shouldSummarize(omitted)) return digest;
+
+  const prev = await getChatSummary(chatId);
+  const delta = buildSummaryInput(omitted, prev?.up_to_message_id ?? 0);
+  if (!delta.length) return prev?.summary ?? digest;
+
+  try {
+    onActivity?.(t(lang, 'ai.compacting'));
+    const fetchImpl = await loadDefaultFetch();
+    const prompt = buildChatSummaryPrompt(prev?.summary ?? null, delta, lang);
+    const text = await callAI(fetchImpl, config, [{ role: 'user', content: prompt }], {
+      lang,
+      signal,
+      timeoutMs: Math.min(config.timeout_ms, 60_000),
+    });
+    const normalized = normalizeSummaryOutput(text);
+    if (!normalized) return prev?.summary ?? digest;
+    // up_to = 最后一条被挤出窗口的消息 id（buildSummaryInput 已按输入上限从新往回保，
+    // 丢掉的是更早的极小部分；不把水位线停在中间，避免下轮重复概括同一批旧消息）
+    const upTo = omitted[omitted.length - 1].id;
+    await saveChatSummary(chatId, normalized, upTo);
+    onActivity?.(t(lang, 'ai.compacted'));
+    return normalized;
+  } catch (e) {
+    if (e instanceof AiCancelledError) throw e;
+    console.warn('[AI chat] 滚动摘要失败，回落到确定性 digest:', e);
+    return prev?.summary ?? digest;
+  }
+}
+
 /** 对话系统段：按当前状态重拼（记忆/备注/profile 修改即时生效）；answeredTurns 为此前已完成的回答轮数（follow_up 第 2 轮起 summary 降 headline 的依据） */
-async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAiChat>>>, agentic: boolean, lang: Lang, answeredTurns = 0): Promise<string> {
-  const [athlete, profile, memories, dossier] = await Promise.all([
+async function buildChatSystem(
+  chat: NonNullable<Awaited<ReturnType<typeof getAiChat>>>,
+  agentic: boolean,
+  lang: Lang,
+  answeredTurns = 0,
+  historySummary: string | null = null,
+  systemMaxChars?: number,
+): Promise<string> {
+  const [athlete, profile, allMemories, dossier] = await Promise.all([
     getEffectiveAthlete(),
     getProfile(),
     listMemories(),
     getDossier(),
   ]);
+  // E1：记忆按当前问题（最近一条 user 消息）相关度取 top-k，不再全量注入最近 30 条
+  const lastUser = [...chat.messages].reverse().find((m) => m.role === 'user')?.content ?? null;
+  const memories = rankMemories(allMemories, {
+    mode: chat.mode,
+    query: lastUser,
+    topK: CONTEXT_BUDGET.memory_top_k,
+    maxChars: CONTEXT_BUDGET.memory_max_chars,
+  });
   // 专业知识库注入 chat 直接对话与 plan 计划会话；follow_up 快答场景不注入（口径同旧版）
-  const skills = chat.mode === 'follow_up' ? null : buildSkillsSection(lang);
+  const skills = chat.mode === 'follow_up' ? null : buildSkillsSection(lang, undefined, CONTEXT_BUDGET.skills_max_chars);
   // follow_up：关联报告正文 + 压缩训练数据（报告可能已被滚动清理，缺则仅靠训练数据）；
   // 双口径统一：summary 的活动日期与档案锚日换算为本地日历日（与「当前时间」段同日历）
   const rep = chat.report_id != null ? await getAiReport(chat.report_id) : null;
@@ -667,6 +762,8 @@ async function buildChatSystem(chat: NonNullable<Awaited<ReturnType<typeof getAi
       reportMarkdown: rep?.markdown ?? null,
       summary,
       historyTurns: answeredTurns,
+      historySummary,
+      systemMaxChars,
     },
     lang,
   );
@@ -710,21 +807,57 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
     const chat = await getAiChat(chatId);
     if (!chat) throw new Error(t(lang, 'srv.chat_not_found'));
     // 不挡 cancelled（口径同 generateReport：手动重试是合法路径，自动补跑只认 pending）
-    const history = chat.messages
-      .filter((m) => m.status === 'completed' && m.content)
-      .map((m) => ({ role: m.role, content: m.content }));
+    const completed = chat.messages.filter((m) => m.status === 'completed' && m.content);
     // 首条 user 消息是用户刚提的问题（completed 已入 history），故以「已完成的回答数」计轮：
     // 0 = 首轮（summary 全量），≥1 = 第 2 轮起（summary 降 headline）
-    const answeredTurns = history.filter((m) => m.role === 'assistant').length;
-    const system = await buildChatSystem(chat, config.agentic !== false, lang, answeredTurns);
+    const answeredTurns = completed.filter((m) => m.role === 'assistant').length;
+    // E1：历史窗口化——最近 N 轮原样发，更早的旧消息由模型滚动摘要（失败回落 digest）。
+    // 保活先于摘要调用 acquire：摘要本身也是一次模型请求，不能被 cached 冻结打断。
     keepAlive = await acquireGenerationKeepAlive({
       title: t(lang, 'ai.keepalive_title'),
       body: t(lang, 'ai.keepalive_body'),
       channel: t(lang, 'ai.keepalive_channel'),
     });
+    const windowed = windowChatHistory(completed, {
+      recentTurns: CONTEXT_BUDGET.history_recent_turns,
+      recentChars: CONTEXT_BUDGET.history_recent_chars,
+      digestPerMessageChars: 200,
+      digestMaxChars: CONTEXT_BUDGET.chat_summary_output_max_chars,
+    });
+    const historySummary = await maybeRefreshChatSummary(
+      config,
+      chatId,
+      windowed.omitted,
+      windowed.digest,
+      lang,
+      ctrl.signal,
+      (note) => setActivity(chatProgress, key, note),
+    );
+    // 系统段预算 = 请求总预算 - 原样历史 - 摘要段（摘要已含在系统段里，这里一起扣）
+    const historyChars =
+      windowed.recent.reduce((n, m) => n + m.content.length, 0) + (historySummary?.length ?? 0);
+    const systemBudget = Math.max(
+      12000,
+      Math.min(CONTEXT_BUDGET.system_max_chars, CONTEXT_BUDGET.request_max_chars - historyChars),
+    );
+    const system = await buildChatSystem(
+      chat,
+      config.agentic !== false,
+      lang,
+      answeredTurns,
+      historySummary,
+      systemBudget,
+    );
+    if (windowed.omitted.length) {
+      console.log(
+        `[AI chat] 历史窗口：保留 ${windowed.recent.length} 条 / 挤出 ${windowed.omitted.length} 条，摘要 ${historySummary?.length ?? 0} 字符，系统段预算 ${systemBudget}`,
+      );
+    }
+    // 只把 role/content 发给 API（窗口化结果带 id 等 db 字段，不透传）
+    const recentMessages = windowed.recent.map((m) => ({ role: m.role, content: m.content }));
     const markdown = await callAiMaybeAgentic(
       config,
-      [{ role: 'user', content: system }, ...history],
+      [{ role: 'user', content: system }, ...recentMessages],
       {
         source: chat.mode, // 场景标记：save_memory 写入 ai_memories.source
         lang,

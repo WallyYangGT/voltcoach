@@ -511,12 +511,15 @@ test('executeTool：未知工具与执行异常均返回 {error}', async () => {
   assert.match(failed.error, /工具执行失败: boom/);
 });
 
-test('结果超长截断：超 AGENTIC.tool_result_max_chars 附截断标记', async () => {
+test('结果超长：结构化降级为合法 JSON（长文本截短 + _truncated 元信息）', async () => {
   const big = 'x'.repeat(AGENTIC.tool_result_max_chars + 100);
   const exec = createExecuteTool(fakeIo({ getActivitySummary: async () => ({ blob: big }) }), { lang: 'zh' });
   const raw = await exec('get_activity_summary', { file_name: 'a.fit' });
-  assert.ok(raw.length <= AGENTIC.tool_result_max_chars + '（结果已截断）'.length);
-  assert.ok(raw.endsWith('（结果已截断）'));
+  assert.ok(raw.length <= AGENTIC.tool_result_max_chars, `len=${raw.length}`);
+  const parsed = JSON.parse(raw); // 能 parse 即未从中间切坏
+  assert.ok(parsed.blob.length < big.length);
+  assert.equal(parsed._truncated.original_chars, JSON.stringify({ blob: big }).length);
+  assert.match(parsed._truncated.note, /结果超限已压缩/);
 });
 
 test('get_activity_records：60s 全秒窄窗不截断（逐秒核对暂停时刻的可用性，截断放宽回归）', async () => {
