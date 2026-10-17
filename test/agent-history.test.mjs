@@ -114,3 +114,15 @@ test('tool_calls arguments 计入预算：旧组的 arguments 被清空、id/nam
   assert.equal(asst.tool_calls[0].function.name, 'update_training_plan');
   assert.ok(out.find((m) => m.role === 'tool' && m.tool_call_id === 'c1'));
 });
+
+test('畸形 tool_calls（缺 function）不抛错，按 0 体积处理', () => {
+  const messages = [
+    { role: 'user', content: 'P' },
+    { role: 'assistant', content: null, tool_calls: [{ id: 'c1', type: 'function' }] },
+    { role: 'tool', tool_call_id: 'c1', content: 'R'.repeat(40000) },
+    { role: 'user', content: 'Q1' },
+    { role: 'assistant', content: 'A1' },
+    { role: 'user', content: 'Q2' },
+  ];
+  assert.doesNotThrow(() => compactAgentHistory(messages, { maxChars: 32000, note: NOTE }));
+});

@@ -190,5 +190,12 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
       `[AI] 对话系统段预算降级：${result.chars}/${budget} 字符，丢弃=[${result.dropped.join(',')}] 截断=[${result.trimmed.join(',')}]`,
     );
   }
+  if (result.chars > budget) {
+    // 记忆段（save_memory 规则）不整段丢弃、skills 已按整文件裁到最小后仍超限：
+    // 记录明确信号，便于排查「单轮回答极大导致历史突破 12k 下限」的极端场景
+    console.warn(
+      `[AI] 对话系统段仍超预算：${result.chars}/${budget} 字符（必保段+记忆规则无法再压）`,
+    );
+  }
   return result.text;
 }

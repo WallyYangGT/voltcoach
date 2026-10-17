@@ -36,8 +36,9 @@ export interface CompactAgentHistoryOptions {
 /** 单条消息的体积：content + tool_calls 的 arguments（计划/记忆等工具参数可能数 KB） */
 function messageChars(m: AgentMessage): number {
   const content = m.content?.length ?? 0;
+  // 畸形 tool_call（模型/代理缺 function）按 0 计，不能让体积统计抛错把整次生成标 failed
   const args =
-    m.tool_calls?.reduce((n, tc) => n + (tc.function.arguments?.length ?? 0), 0) ?? 0;
+    m.tool_calls?.reduce((n, tc) => n + (tc.function?.arguments?.length ?? 0), 0) ?? 0;
   return content + args;
 }
 
@@ -112,7 +113,7 @@ export function compactAgentHistory(
             ? {
                 tool_calls: m.tool_calls.map((tc) => ({
                   ...tc,
-                  function: { ...tc.function, arguments: '{}' },
+                  function: { ...(tc.function ?? {}), arguments: '{}' },
                 })),
               }
             : {}),

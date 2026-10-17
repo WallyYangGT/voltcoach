@@ -714,6 +714,7 @@ async function maybeRefreshChatSummary(
       maxChars: CONTEXT_BUDGET.chat_summary_output_max_chars,
       userLabel: t(lang, 'chat.digest.user'),
       assistantLabel: t(lang, 'chat.digest.assistant'),
+      keep: 'both', // 积压中间段：头尾都保留，避免只看到最旧或最新
     });
     fallback = [prev?.summary, deltaDigest].filter(Boolean).join('\n') || digest;
     if (!shouldSummarize(unsummarized)) return fallback;
@@ -740,8 +741,22 @@ async function maybeRefreshChatSummary(
       // 落库失败不影响本轮使用模型摘要（下轮会重算，代价可接受）
       console.warn('[AI chat] 滚动摘要落库失败（不影响本轮）:', e);
     }
+    // 本轮只概括了连续前缀；剩余积压（中间段）追加确定性 digest 给**当轮**用，
+    // 但不推进水位线——下一轮继续用模型概括，兼顾当轮不缺上下文与不漏摘要（P2-2）
+    const remaining = unsummarized.filter((m) => m.id > upTo);
+    let summaryForPrompt = normalized;
+    if (remaining.length) {
+      const rest = buildHistoryDigest(remaining, {
+        perMessageChars: 200,
+        maxChars: CONTEXT_BUDGET.chat_summary_output_max_chars,
+        userLabel: t(lang, 'chat.digest.user'),
+        assistantLabel: t(lang, 'chat.digest.assistant'),
+        keep: 'both',
+      });
+      if (rest) summaryForPrompt = `${normalized}\n${rest}`;
+    }
     onActivity?.(t(lang, 'ai.compacted'));
-    return normalized;
+    return summaryForPrompt;
   } catch (e) {
     if (e instanceof AiCancelledError) throw e;
     console.warn('[AI chat] 滚动摘要失败，回落到确定性 digest:', e);

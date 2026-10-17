@@ -132,26 +132,34 @@ export function truncateSkillsSection(
   if (maxChars <= 0) return '';
   if (section.length <= maxChars) return section;
   const first = section.indexOf('\n### ');
-  if (first < 0) return section.slice(0, Math.max(0, maxChars));
-  const preamble = section.slice(0, first + 1); // 含段头/引入 + 分隔换行
+  if (first < 0) return section.slice(0, maxChars);
+  const preamble = section.slice(0, first); // 段头 + 引入（不含分隔换行）
   const blocks = section
     .slice(first + 1)
     .split(/\n### /)
     .map((b, i) => (i === 0 ? b : '### ' + b));
-  const kept: string[] = [];
-  const omitted: string[] = [];
-  let used = preamble.length;
-  for (const b of blocks) {
-    const cost = b.length + 2;
-    if (used + cost > maxChars) {
-      omitted.push(b.split('\n')[0].replace(/^###\s*/, ''));
-      continue;
+  const sep = lang === 'en' ? ', ' : '、';
+  const titleOf = (b: string) => b.split('\n')[0].replace(/^###\s*/, '');
+  const noteFor = (omitted: string[]) =>
+    omitted.length ? '\n\n' + t(lang, 'skill.omitted', { names: omitted.join(sep) }) : '';
+
+  // 贪心只收「渲染后（含省略说明）仍 ≤ maxChars」的前缀；n=10 规模下 O(n²) 可忽略
+  let keptCount = 0;
+  let rendered = '';
+  for (let i = 0; i < blocks.length; i++) {
+    const candidate = blocks.slice(0, i + 1);
+    const text =
+      preamble +
+      '\n\n' +
+      candidate.join('\n\n') +
+      noteFor(blocks.slice(i + 1).map(titleOf));
+    if (text.length <= maxChars) {
+      keptCount = i + 1;
+      rendered = text;
     }
-    kept.push(b);
-    used += cost;
   }
-  const note = omitted.length
-    ? '\n\n' + t(lang, 'skill.omitted', { names: omitted.join(lang === 'en' ? ', ' : '、') })
-    : '';
-  return preamble + kept.join('\n\n') + note;
+  if (keptCount > 0) return rendered;
+  // 连一篇技能都放不下：返回最小省略说明（只列技能名）；仍超则硬截说明本身
+  const minNote = t(lang, 'skill.omitted', { names: blocks.map(titleOf).join(sep) });
+  return minNote.length <= maxChars ? minNote : minNote.slice(0, maxChars);
 }

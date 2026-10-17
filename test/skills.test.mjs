@@ -78,11 +78,17 @@ test('truncateSkillsSection：对已拼好的段按整技能边界截断，不�
   ];
   const section = buildSkillsSection('zh', files);
   const out = truncateSkillsSection(section, 900, 'zh');
-  assert.ok(out.length <= 900 + 40); // 省略说明余量
+  assert.ok(out.length <= 900, `len=${out.length}`); // 含省略说明严格不超预算
   assert.match(out, /### 技能甲/);
   assert.doesNotMatch(out, /### 技能丙\n/);
   assert.match(out, /以下技能因上下文预算未注入：.*技能丙/);
   assert.doesNotMatch(out, /丙丙丙/); // 整篇省略，不切半篇
+  // 小预算：一篇都放不下时返回最小省略说明（截到预算），绝不出现半篇技能
+  for (const n of [300, 120, 50]) {
+    const tiny = truncateSkillsSection(section, n, 'zh');
+    assert.ok(tiny.length <= n, `n=${n} len=${tiny.length}`);
+    assert.doesNotMatch(tiny, /甲甲甲|乙乙乙|丙丙丙/);
+  }
   // 预算充足时原样返回
   assert.equal(truncateSkillsSection(section, section.length + 10, 'zh'), section);
 });

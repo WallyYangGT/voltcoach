@@ -27,6 +27,8 @@ export interface WindowOptions {
   /** digest 的角色标签（按提示词语言传入；缺省中文） */
   userLabel?: string;
   assistantLabel?: string;
+  /** digest 超上限时的保留策略（缺省 head：保留会话起点） */
+  digestKeep?: 'head' | 'tail' | 'both';
 }
 
 /** 确定性 digest 的选项（buildHistoryDigest 与 windowChatHistory 共用） */
@@ -35,6 +37,13 @@ export interface DigestOptions {
   maxChars?: number;
   userLabel?: string;
   assistantLabel?: string;
+  /**
+   * 超上限时的保留策略：
+   * - head（默认）：保留最旧内容（会话起点锚，窗口 digest 用）；
+   * - tail：保留最新内容（本轮新挤出的上下文，降级兜底用）；
+   * - both：头尾各保一半（积压中间段，避免只看到最旧或最新）。
+   */
+  keep?: 'head' | 'tail' | 'both';
 }
 
 export interface WindowedHistory<T extends HistoryMessage = HistoryMessage> {
@@ -76,7 +85,18 @@ export function buildHistoryDigest(
   const assistantLabel = opts.assistantLabel ?? '教练';
   const lines = messages.map((m) => digestLine(m, perMessage, userLabel, assistantLabel));
   let body = lines.join('\n');
-  if (body.length > maxChars) body = body.slice(0, maxChars) + '…';
+  if (body.length > maxChars) {
+    const keep = opts.keep ?? 'head';
+    if (keep === 'tail') {
+      body = '…' + body.slice(-Math.max(0, maxChars - 1));
+    } else if (keep === 'both') {
+      const head = Math.floor(maxChars * 0.6);
+      const tail = Math.max(0, maxChars - head - 3); // 3 = "\n…\n"
+      body = body.slice(0, head) + '\n…\n' + (tail ? body.slice(-tail) : '');
+    } else {
+      body = body.slice(0, maxChars) + '…';
+    }
+  }
   return body;
 }
 
@@ -131,6 +151,7 @@ export function windowChatHistory<T extends HistoryMessage>(
     maxChars: opts.digestMaxChars,
     userLabel: opts.userLabel,
     assistantLabel: opts.assistantLabel,
+    keep: opts.digestKeep,
   });
   return { recent, omitted, digest };
 }

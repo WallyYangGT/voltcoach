@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { windowChatHistory } from '../src/prompts/history.ts';
+import { buildHistoryDigest, windowChatHistory } from '../src/prompts/history.ts';
 
 const msg = (role, content) => ({ role, content });
 const turn = (u, a) => [msg('user', u), msg('assistant', a)];
@@ -86,4 +86,34 @@ test('空历史：全部为空', () => {
   assert.deepEqual(r.recent, []);
   assert.deepEqual(r.omitted, []);
   assert.equal(r.digest, null);
+});
+
+test('buildHistoryDigest：keep=head/tail/both 的覆盖范围与长度上限', () => {
+  const messages = Array.from({ length: 50 }, (_, i) => ({
+    role: i % 2 ? 'assistant' : 'user',
+    content: `MSG${i}-` + 'x'.repeat(30),
+  }));
+  const opts = { perMessageChars: 40, maxChars: 150 };
+  const head = buildHistoryDigest(messages, { ...opts, keep: 'head' });
+  assert.match(head, /MSG0-/);
+  assert.doesNotMatch(head, /MSG49-/);
+  const tail = buildHistoryDigest(messages, { ...opts, keep: 'tail' });
+  assert.match(tail, /MSG49-/);
+  assert.doesNotMatch(tail, /MSG0-/);
+  const both = buildHistoryDigest(messages, { ...opts, keep: 'both' });
+  assert.match(both, /MSG0-/);
+  assert.match(both, /MSG49-/);
+  assert.ok(both.length <= 150, `len=${both.length}`);
+});
+
+test('buildHistoryDigest：角色标签按语言传入（英文对话不混中文）', () => {
+  const out = buildHistoryDigest(
+    [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+    ],
+    { userLabel: 'User', assistantLabel: 'Coach' },
+  );
+  assert.match(out, /^- User: hi/m);
+  assert.match(out, /^- Coach: hello/m);
 });
