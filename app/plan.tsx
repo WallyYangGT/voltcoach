@@ -107,7 +107,8 @@ export default function PlanScreen() {
         getCurrentPlan(),
         getPlanHistory(),
         findPlanChat(),
-        getProfile(),
+        // 档案读取失败不应拖垮整个计划页（按 standard 阈值降级即可）
+        getProfile().catch(() => null),
       ]);
       setCfg(cfgRes.configured);
       setStored(plan);
@@ -127,7 +128,7 @@ export default function PlanScreen() {
         setRisk(
           last
             ? projectPlanForm(plan.plan, last.ctl, last.atl, lang, {
-                amateur: prof.coach_mode === 'amateur',
+                amateur: prof?.coach_mode === 'amateur',
               }).risk_flags
             : [],
         );

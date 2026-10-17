@@ -16,7 +16,8 @@
  *   现成（savePlanVersion 天然留档）；
  * - set_type/set_duration 改动后该课 tss 置空，由 resolvePlanTss 按新课型/时长重估
  *   （模型无需自己算 TSS，也与 estimateSessionTss 单源）；
- * - 全计划合理性复检用 adjust 档（quality_gap 等进 violations 硬拒，vars 已锚定具体两课）。
+ * - 全计划合理性复检用 ops 档（与 adjust 同为硬拒档；quality_gap 等进 violations 硬拒，
+ *   业余软约束只进 warnings，vars 已锚定具体两课/周）。
  */
 
 import { t, type Lang } from './i18n.ts';

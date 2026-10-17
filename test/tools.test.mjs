@@ -326,9 +326,9 @@ test('generate_workout：FTP 取生效骑手参数；时长非法兜 {error}', a
   assert.deepEqual(ok.main_sets.power_watts, [200, 221]); // 95–105% × 210W
   const bad = JSON.parse(await exec('generate_workout', { target: 'threshold', duration_minutes: 'abc' }));
   assert.match(bad.error, /duration_minutes 需为 15–300 的整数/);
-  // 超下限的数值被夹到 15（clampInt 口径），装不下间歇课时报"时长不足"
+  // 超下限的数值被夹到 15（clampInt 口径），连短课版也装不下时报"时长不足"
   const clamped = JSON.parse(await exec('generate_workout', { target: 'threshold', duration_minutes: 5 }));
-  assert.match(clamped.error, /15 分钟装不下 阈值 课表/);
+  assert.match(clamped.error, /15 分钟连短课版也装不下/);
 });
 
 test('save_memory：source 场景标记写入、错误兜 {error} 不抛异常', async () => {
@@ -631,8 +631,7 @@ test('update_training_plan：合规调整落库——TSS 回填/rest 归零/chan
   assert.equal(saved.plan.sessions[1].tss, 0); // rest 课负荷归零
 });
 
-test('update_training_plan：业余模式软约束只回传 warnings，不硬拒（超出只提示）', async () => {
-  const io = fakeIo({
+test('update_training_plan：业余模式软约束只回传 warnings，不硬拒（超出只提示）', async () => {  const io = fakeIo({
     getProfile: async () => ({
       identity: '',
       goal: '保持健康',
@@ -748,4 +747,42 @@ test('adjust_plan_sessions：合规局部调整落库 origin=adjust——applied
   const moved = saved.plan.sessions.find((x) => x.date === day(3));
   assert.equal(moved.duration_min, 120);
   assert.equal(moved.tss, 92.5); // endurance 120min 重估：120×60×0.68²/36
+});
+
+test('adjust_plan_sessions：业余模式软约束只回传 warnings（ops 档不硬拒）', async () => {
+  // 三节质量课放进同一自然周（下周一/三/五）：插入周五课后周质量课 = 3 > 2
+  const dow = new Date(localDay() + 'T00:00:00Z').getUTCDay();
+  const nextMon = ((1 - dow + 7) % 7) || 7;
+  const mon = day(nextMon);
+  const stored = {
+    plan: planObj([pSession(mon, 'threshold', 60), pSession(day(nextMon + 2), 'threshold', 60)]),
+    created_at: 'x', origin: 'generate', source_report_id: null, change_note: null, warnings: [],
+  };
+  const io = fakeIo({
+    getTrainingPlan: async () => stored,
+    getProfile: async () => ({
+      identity: '',
+      goal: '保持健康',
+      coach_mode: 'amateur',
+      weekly_hours: '3to5',
+      available_days: [],
+      session_max_min: 60,
+    }),
+  });
+  let saved = null;
+  io.savePlanVersion = async (plan, meta) => {
+    saved = { plan, meta };
+    return 4;
+  };
+  const exec = createExecuteTool(io, { source: 'plan', chat: true, lang: 'zh' });
+  const out = JSON.parse(
+    await exec('adjust_plan_sessions', {
+      ops: [{ op: 'insert', date: day(nextMon + 4), type: 'threshold', duration_min: 90 }],
+    }),
+  );
+  assert.equal(out.ok, true); // 软约束不阻断
+  assert.equal(out.violations, undefined);
+  // 1 条周质量课上限 + 1 条单课超时（90 > 60）
+  assert.equal(out.warnings.length, 2);
+  assert.equal(saved.meta.warnings.length, 2);
 });

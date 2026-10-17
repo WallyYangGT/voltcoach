@@ -235,6 +235,21 @@ export function generateWorkout({
     }
   }
   if (!chosen) {
+    // 短课也装不下时给出短课的最小总时长（比标准模板的报错更贴近用户实际可选项）
+    const short = shortTemplates[key];
+    if (short) {
+      const reps = short.reps![0];
+      const rest = short.rest_min == null ? short.set!.min_min * (reps - 1) : short.rest_min * (reps - 1);
+      const minTotal = short.warmup_min! + reps * short.set!.min_min + rest + short.cooldown_min!;
+      return {
+        error: t(lang, 'plan.too_short_short', { dur, min: minTotal, label: short.label }),
+        target: key,
+        label: tpl.label,
+        duration_minutes: dur,
+        estimated_tss: 0,
+        notes,
+      };
+    }
     return {
       error: t(lang, 'plan.too_short', {
         dur,

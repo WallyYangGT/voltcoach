@@ -19,7 +19,7 @@
  */
 
 import type { AthleteParams } from '../core/settings.ts';
-import { AGENTIC, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from '../core/settings.ts';
+import { AGENTIC, AMATEUR_FORM_SIMULATION, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from '../core/settings.ts';
 import { estimateFtpFromHistory, type CyclingRideInput } from '../core/ftp.ts';
 import { t, type Lang } from '../core/i18n.ts';
 import { localDay, localDayFromUtc } from '../core/local-day.ts';
@@ -293,11 +293,13 @@ const toolSimulateForm: ToolImpl = async (args, ctx, io) => {
     startCtl = cur?.ctl ?? 0;
     startAtl = cur?.atl ?? 0;
   }
+  const profile = await io.getProfile();
   const { projection, risk_flags, end_form } = simulateForm({
     startCtl,
     startAtl,
     plan: clean,
-    cfg: FORM_SIMULATION,
+    // 与计划页同口径：业余模式用放宽后的推演阈值（对话里的 what-if 不再按训练者标尺报风险）
+    cfg: profile.coach_mode === 'amateur' ? AMATEUR_FORM_SIMULATION : FORM_SIMULATION,
     lang,
   });
   return toResult({ start: { ctl: startCtl, atl: startAtl }, projection, risk_flags, end_form }, lang);

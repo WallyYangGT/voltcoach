@@ -443,7 +443,7 @@ export const DICT = {
     'plan.week.empty': '该周暂无安排',
     'plan.long.goal': '目标',
     'plan.long.tss_head': '计划 TSS 合计 {n}',
-    'plan.warn.head': '合理性提示（生成时校验，不影响执行）',
+    'plan.warn.head': '合理性提示（不影响执行）',
     // AI 调整披露条（U1 收尾④：PlanAdjustBanner，撤销=current↔history[0] 交换）
     'plan.adjust.banner': 'AI 教练已于 {date} 调整计划：{note}',
     'plan.adjust.no_note': '（无变更说明）',
@@ -1310,7 +1310,7 @@ export const DICT = {
     'plan.week.empty': 'No sessions scheduled this week',
     'plan.long.goal': 'Goal',
     'plan.long.tss_head': 'Total planned TSS {n}',
-    'plan.warn.head': 'Sanity notes (checked at generation, advisory only)',
+    'plan.warn.head': 'Sanity notes (advisory only)',
     // Plan adjust disclosure banner (U1: PlanAdjustBanner; undo swaps current↔history[0])
     'plan.adjust.banner': 'AI coach adjusted the plan on {date}: {note}',
     'plan.adjust.no_note': '(no change note)',

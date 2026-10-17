@@ -436,8 +436,15 @@ test('档案段：null 省略；完整档案逐行渲染；被标记披露', () 
   assert.match(s, /周均 TSS 200（峰值 200），周均骑行 10 小时/);
   assert.match(s, /心率漂移中位 3\.4%（9 次样本/);
   assert.match(s, /功率可信度：2 次骑行被标记功率不可信/);
+  // 旧缓存 dossier（shape 1，无 hr_zone_pct）不产生该行，也不报错
+  const oldDossier = {
+    ...dossier,
+    intensity_structure: { zone_pct: dossier.intensity_structure.zone_pct, intensity_types: [] },
+  };
+  assert.doesNotMatch(buildDossierSection(oldDossier, 'zh'), /心率强度结构/);
   const en = buildDossierSection(dossier, 'en');
   assert.match(en, /^## Athlete Dossier/);
+  assert.match(en, /90-day HR intensity structure/);
 });
 
 test('复盘提示词注入档案段（新末参，缺省不影响旧调用）', () => {

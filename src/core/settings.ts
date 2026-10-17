@@ -202,7 +202,7 @@ export const PLAN_VALIDATION = {
 // 没空，不逼用户放弃爱好；既有结构规则（质量课间隔/休息日/减量周）不放松。
 export const PLAN_AMATEUR_LIMITS = {
   weekly_quality_max: 2, // 每周质量课建议上限
-  weekly_sessions_max: 6, // 每周非休息课次软上限
+  weekly_sessions_max: 5, // 每周非休息课次软上限（6 次起提示；7 次会被既有「每周休息日」规则硬拦）
 };
 
 // ============ 计划执行情况视图（U1 收尾②：本地 adherence，src/core/plan-adherence） ============
@@ -264,8 +264,8 @@ export const WORKOUT_TEMPLATES: Record<
 
 // 短课版模板（业余模式：30–45 分钟也能上一次质量课；2026-10-17 decisions §30）。
 // 标准模板的甜区最短约 50 分钟（热身 15 + 2×10 + 组间 5 + 冷身 10），对时间受限
-// 骑手直接判「装不下」；短课版压缩热身/冷身与最少组数，保证 20 分钟也能成课。
-// 只在标准模板装不下时回退使用（generateWorkout），不改变标准模板行为。
+// 骑手直接判「装不下」；短课版压缩热身/冷身与最少组数（甜区/阈值最少 19 分钟、
+// VO2max 最少 23 分钟）。只在标准模板装不下时回退使用，不改变标准模板行为。
 export const WORKOUT_TEMPLATES_SHORT: Partial<
   Record<'recovery' | 'endurance' | 'sweet_spot' | 'threshold' | 'vo2max', WorkoutTemplate>
 > = {

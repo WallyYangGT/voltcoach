@@ -252,8 +252,16 @@ test('单锚点降级：功率不可用骑行按心率五区聚合（功率可�
       heart_rate: { zone_distribution_pct: { Z1: 50, Z2: 30, Z3: 10, Z4: 5, Z5: 5 } },
     },
   });
-  // 功率可用骑行：只进功率结构，不进 HR 结构（避免双计）
-  const withPower = ride({ file_name: 'wp.fit', duration_sec: 3600 });
+  // 功率可用骑行：只进功率结构，不进 HR 结构（避免双计）——给它满心率分区数据，
+  // 若排除逻辑失效，期望值会从 Z1 36.7 变成 75，测试才能真正拦住回归
+  const withPower = ride({
+    file_name: 'wp.fit',
+    duration_sec: 3600,
+    summary: {
+      power: { peak_curve: { '5s': 900 }, zone_distribution_pct: { Z1: 100 } },
+      heart_rate: { zone_distribution_pct: { Z1: 100 } },
+    },
+  });
   // 功率被标记不可信：功率作废、心率仍可信 → 进 HR 口径
   const flagged = ride({
     file_name: 'fl.fit',
