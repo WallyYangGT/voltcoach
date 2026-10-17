@@ -202,7 +202,7 @@ export const PLAN_VALIDATION = {
 // 没空，不逼用户放弃爱好；既有结构规则（质量课间隔/休息日/减量周）不放松。
 export const PLAN_AMATEUR_LIMITS = {
   weekly_quality_max: 2, // 每周质量课建议上限
-  weekly_sessions_max: 5, // 每周非休息课次软上限（6 次起提示；7 次会被既有「每周休息日」规则硬拦）
+  weekly_sessions_max: 5, // 每周非休息课次软上限（6 次起提示；7 次无休息日在 adjust/ops 档会被既有结构规则硬拒，create 档只提示）
 };
 
 // ============ 计划执行情况视图（U1 收尾②：本地 adherence，src/core/plan-adherence） ============

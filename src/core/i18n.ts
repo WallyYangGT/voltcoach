@@ -49,7 +49,7 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'plan.unknown_type': '未知课表类型: {target}（可选: {opts}）',
     'plan.too_short': '{dur} 分钟装不下 {label} 课表（热身 {w} + 至少 {reps}×{min} 分钟主组 + 冷身 {c}），请增加时长或换低时长课表',
     'plan.too_short_short': '{dur} 分钟连短课版也装不下（{label}最少约 {min} 分钟），请增加时长或改有氧/恢复课',
-    'plan.short_fallback': '可用时长不足标准课表，已改用短课版本（{label}）',
+    'plan.short_fallback': '可用时长不足标准课表，已改用短课版本：{label}',
     'sim.tsb_low': 'TSB 连续 {days} 天低于 {thr}，深度疲劳风险',
     'sim.ctl_ramp': 'CTL 周增幅 {pct}% 超过 {thr}%，过度训练风险',
     // ---- 结构化训练计划（src/core/training-plan，v2 训练计划载体） ----
@@ -261,7 +261,7 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'plan.unknown_type': 'Unknown workout type: {target} (options: {opts})',
     'plan.too_short': '{dur} minutes cannot fit the {label} workout (warmup {w} + at least {reps}×{min} min main sets + cooldown {c}) — increase the duration or pick a shorter workout',
     'plan.too_short_short': '{dur} minutes cannot fit even the short version of {label} (minimum about {min} min) — add time or switch to an endurance/recovery ride',
-    'plan.short_fallback': 'Not enough time for the standard workout — using the short version ({label})',
+    'plan.short_fallback': 'Not enough time for the standard workout — using the short version: {label}',
     'sim.tsb_low': 'TSB below {thr} for {days} consecutive days — deep fatigue risk',
     'sim.ctl_ramp': 'CTL weekly ramp {pct}% exceeds {thr}% — overtraining risk',
     'tp.no_block': 'Report has no plan-json data block (```plan-json fence)',

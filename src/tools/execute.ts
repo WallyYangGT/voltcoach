@@ -293,13 +293,14 @@ const toolSimulateForm: ToolImpl = async (args, ctx, io) => {
     startCtl = cur?.ctl ?? 0;
     startAtl = cur?.atl ?? 0;
   }
-  const profile = await io.getProfile();
+  // 档案读取失败按标准阈值继续推演（纯计算工具不因档案异常失败）
+  const profile = await io.getProfile().catch(() => null);
   const { projection, risk_flags, end_form } = simulateForm({
     startCtl,
     startAtl,
     plan: clean,
     // 与计划页同口径：业余模式用放宽后的推演阈值（对话里的 what-if 不再按训练者标尺报风险）
-    cfg: profile.coach_mode === 'amateur' ? AMATEUR_FORM_SIMULATION : FORM_SIMULATION,
+    cfg: profile?.coach_mode === 'amateur' ? AMATEUR_FORM_SIMULATION : FORM_SIMULATION,
     lang,
   });
   return toResult({ start: { ctl: startCtl, atl: startAtl }, projection, risk_flags, end_form }, lang);

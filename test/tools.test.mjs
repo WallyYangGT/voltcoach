@@ -294,6 +294,43 @@ test('estimate_ftp：数据不足时返回 insufficient 结构（不报错）', 
   assert.equal(r.status, 'insufficient'); // 假库无骑行数据
 });
 
+test('simulate_form：业余模式用放宽阈值（同计划标准报风险、业余不报）', async () => {
+  const plan14 = Array.from({ length: 14 }, (_, i) => ({ date: day(i), tss: 90 }));
+  const std = JSON.parse(
+    await createExecuteTool(fakeIo(), { lang: 'zh' })('simulate_form', {
+      plan: plan14,
+      start_ctl: 50,
+      start_atl: 100,
+    }),
+  );
+  assert.ok(std.risk_flags.some((f) => f.type === 'tsb_low_sustained'));
+  const amateurIo = fakeIo({
+    getProfile: async () => ({ identity: '', goal: '', coach_mode: 'amateur' }),
+  });
+  const am = JSON.parse(
+    await createExecuteTool(amateurIo, { lang: 'zh' })('simulate_form', {
+      plan: plan14,
+      start_ctl: 50,
+      start_atl: 100,
+    }),
+  );
+  assert.equal(am.risk_flags.some((f) => f.type === 'tsb_low_sustained'), false);
+  // 档案读取失败按标准阈值降级（工具不因档案异常失败）
+  const brokenIo = fakeIo({
+    getProfile: async () => {
+      throw new Error('db down');
+    },
+  });
+  const broken = JSON.parse(
+    await createExecuteTool(brokenIo, { lang: 'zh' })('simulate_form', {
+      plan: plan14,
+      start_ctl: 50,
+      start_atl: 100,
+    }),
+  );
+  assert.ok(broken.risk_flags.some((f) => f.type === 'tsb_low_sustained'));
+});
+
 test('simulate_form：plan 清洗（排序/tss 夹取）、起始值缺省读库、参数错误兜 {error}', async () => {
   const exec = createExecuteTool(fakeIo(), { lang: 'zh' });
   const ok = JSON.parse(await exec('simulate_form', {
@@ -631,7 +668,8 @@ test('update_training_plan：合规调整落库——TSS 回填/rest 归零/chan
   assert.equal(saved.plan.sessions[1].tss, 0); // rest 课负荷归零
 });
 
-test('update_training_plan：业余模式软约束只回传 warnings，不硬拒（超出只提示）', async () => {  const io = fakeIo({
+test('update_training_plan：业余模式软约束只回传 warnings，不硬拒（超出只提示）', async () => {
+  const io = fakeIo({
     getProfile: async () => ({
       identity: '',
       goal: '保持健康',

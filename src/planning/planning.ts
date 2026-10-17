@@ -250,6 +250,7 @@ export function generateWorkout({
         notes,
       };
     }
+    // 内置甜区/阈值/VO2max 均有短课模板，此分支仅在自定义模板缺失短课版时可达（防御）
     return {
       error: t(lang, 'plan.too_short', {
         dur,

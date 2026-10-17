@@ -409,7 +409,7 @@ test('projectPlanForm: 高负荷计划触发 TSB 持续过低旗标，轻负荷�
   assert.equal(light.risk_flags.length, 0);
 
   // 阈值差异的可判定场景：起始 ATL 100 / CTL 50，连续 14 天 90 TSS →
-  // TSB 连续约 11 天 < -30（标准档触发），但只有约 4 天 < -40（业余档不触发）
+  // TSB 连续约 13 天 < -30（标准档触发），但只有约 5 天 < -40（业余档不触发）
   const steadyDays = Array.from({ length: 14 }, (_, k) =>
     session(addDaysStr('2026-10-12', k), 'endurance', 60, { tss: 90 }),
   );

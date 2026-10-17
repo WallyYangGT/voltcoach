@@ -35,7 +35,7 @@
 - Busy-season maintenance: two sessions a week with intensity preserved maintains endurance performance (for up to roughly 15 weeks); the goal is "do not lose ground", not "improve".
 - Missed sessions: skip them; do not stack them up or compensate with extra load. If the remaining week is short, keep one quality session plus one easy ride and drop the rest.
 - Keep recovery weeks and rest days: judge a recovery week by weekly TSS falling below 70% of the window's max week. With 2–3 sessions a week, dropping one session may suffice; with 4+, also shorten sessions or lower intensity — dropping one session alone is not enough.
-- In amateur mode keep weekly quality sessions at about 2 or fewer; try not to exceed the rider's per-session time cap — if exceeded, explain why and flag it, but do not refuse or silently delete the session (the system only warns, never blocks).
+- In amateur mode keep weekly quality sessions at about 2 or fewer and weekly sessions at about 5 or fewer; try not to exceed the rider's per-session time cap — if exceeded, explain why and flag it, but do not refuse or silently delete the session (the system only warns, never blocks).
 
 ## Intensity Anchors and Riders Without Power
 

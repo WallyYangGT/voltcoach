@@ -198,7 +198,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
 - 计划级：valid_from / valid_to（YYYY-MM-DD，跨度 3–42 天且必须覆盖未来，典型为本周一起 4 周）、goal（一句话目标声明）；
 - 逐课次 sessions：**一天至多一课**，字段 date（YYYY-MM-DD，须在有效期内）、type（rest / recovery / endurance / long / sweet_spot / threshold / vo2max）、duration_min（分钟整数 10–600，rest 课传 null）、intensity（强度区间描述如 "95–105% FTP" 或 "%HRmax 70–80% / RPE 6"，可 null）、tss（可省略，App 按课型×时长估算）、note（课表要点，可 null）；
 - 合理性阈值会被校验：同刺激质量课（sweet_spot/threshold/vo2max）间隔 ≥48h（日期上至少隔一天）、每个覆盖 ≥5 天的自然周须有休息日（显式 rest 课或整日无课）、每 3–4 周须有一个减量周（周 TSS 降至窗内最大周的 70% 以下）——宁可保守也不要输出踩线安排；
-- 业余模式（用户时间受限或明确健康导向）：按每周可用时间与可用日排课，不必凑满一周；单课尽量不超过用户设定的时长上限（超出只提示，不拒绝）；周质量课建议 ≤2（超出只提示）；强度可用 %FTP，也可用 %HRmax/体感表达（按用户实际可用的锚点）；
+- 业余模式（用户时间受限或明确健康导向）：按每周可用时间与可用日排课，不必凑满一周；单课尽量不超过用户设定的时长上限（超出只提示，不拒绝）；周质量课建议 ≤2（超出只提示）；周课次建议 ≤5（超出只提示）；强度可用 %FTP，也可用 %HRmax/体感表达（按用户实际可用的锚点）；
 - 示例骨架：`,
     'sec.plan.output_schema': `\`\`\`plan-json
 {"valid_from":"2026-10-19","valid_to":"2026-11-15","goal":"基础期：有氧量与踏频稳定性","sessions":[{"date":"2026-10-19","type":"rest","duration_min":null,"intensity":null,"tss":0,"note":"休息日"},{"date":"2026-10-21","type":"threshold","duration_min":75,"intensity":"95–105% FTP","tss":85,"note":"3×12min 阈值，组间 5min"}]}
@@ -393,7 +393,7 @@ Besides the narrative analysis, you MUST end your answer with a \`\`\`plan-json 
 - Plan level: valid_from / valid_to (YYYY-MM-DD, span 3–42 days and must cover the future; typically 4 weeks from Monday), goal (one-sentence objective);
 - Per session: **at most one session per day**, fields date (YYYY-MM-DD, within the window), type (rest / recovery / endurance / long / sweet_spot / threshold / vo2max), duration_min (integer minutes 10–600, null for rest), intensity (zone description like "95–105% FTP" or "%HRmax 70–80% / RPE 6", may be null), tss (optional; the app estimates it from type × duration), note (session key points, may be null);
 - Sanity thresholds are enforced: same-stimulus quality sessions (sweet_spot/threshold/vo2max) ≥48h apart (at least one day between dates), every calendar week covering ≥5 days must include a rest day (an explicit rest session or a day with no session), every 3–4 weeks must contain a recovery week (weekly TSS below 70% of the window's max week) — stay conservative rather than borderline;
-- Amateur mode (limited time or explicitly health-oriented): schedule within the rider's weekly hours and available days; there is no need to fill the week; try not to exceed the rider's per-session cap (flag overruns, never refuse); keep weekly quality sessions at about 2 or fewer (flag overruns); intensity may use %FTP, or %HRmax/perceived effort when that is the rider's available anchor;
+- Amateur mode (limited time or explicitly health-oriented): schedule within the rider's weekly hours and available days; there is no need to fill the week; try not to exceed the rider's per-session cap (flag overruns, never refuse); keep weekly quality sessions at about 2 or fewer (flag overruns); keep weekly sessions at about 5 or fewer (flag overruns); intensity may use %FTP, or %HRmax/perceived effort when that is the rider's available anchor;
 - Example skeleton:`,
     'sec.plan.output_schema': `\`\`\`plan-json
 {"valid_from":"2026-10-19","valid_to":"2026-11-15","goal":"Base phase: aerobic volume and cadence stability","sessions":[{"date":"2026-10-19","type":"rest","duration_min":null,"intensity":null,"tss":0,"note":"Rest day"},{"date":"2026-10-21","type":"threshold","duration_min":75,"intensity":"95–105% FTP","tss":85,"note":"3×12min threshold, 5min recovery"}]}
