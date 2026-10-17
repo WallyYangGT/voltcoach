@@ -449,7 +449,7 @@ test('复盘提示词注入档案段（新末参，缺省不影响旧调用）',
   assert.ok(withDossier.indexOf('个人训练档案') < withDossier.indexOf('## 训练数据'));
 });
 
-test('agentic 工具指引段：19 个工具与 7 条规则（含 FTP 更新/档案/训练计划双工具）', () => {
+test('agentic 工具指引段：18 个工具与 7 条规则（save_memory 在记忆段交代，不单列）', () => {
   const s = buildAgenticSection('zh');
   for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'update_rider_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'get_training_plan', 'update_training_plan', 'adjust_plan_sessions', 'set_power_flag', 'recalibrate_activity_power']) {
     assert.ok(s.includes(`- ${name}：`), name);

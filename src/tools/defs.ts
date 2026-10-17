@@ -242,12 +242,12 @@ export function toolDefs(lang: Lang = 'zh'): ToolDef[] {
           properties: {
             coach_mode: {
               type: 'string',
-              enum: ['amateur', 'standard'],
+              enum: ['', 'amateur', 'standard'],
               description: L('update_rider_profile.coach_mode'),
             },
             weekly_hours: {
               type: 'string',
-              enum: ['lt3', '3to5', '5to8', 'gt8'],
+              enum: ['', 'lt3', '3to5', '5to8', 'gt8'],
               description: L('update_rider_profile.weekly_hours'),
             },
             available_days: {
@@ -257,7 +257,7 @@ export function toolDefs(lang: Lang = 'zh'): ToolDef[] {
             },
             session_max_min: {
               type: 'integer',
-              minimum: 10,
+              minimum: 0,
               maximum: 600,
               description: L('update_rider_profile.session_max_min'),
             },

@@ -157,7 +157,7 @@ export default function MeScreen() {
     }
     setSavingProfile(true);
     try {
-      await setProfile(
+      const saved = await setProfile(
         {
           identity,
           goal,
@@ -168,7 +168,13 @@ export default function MeScreen() {
         },
         lang,
       );
-      await load(); // 规范化后的值立即回显（trim/可用日排序）
+      // 只回显档案字段（不跑整页 load：避免冲掉骑手参数/AI 配置里未保存的草稿）
+      setIdentity(saved.identity);
+      setGoal(saved.goal);
+      setCoachMode(saved.coach_mode ?? null);
+      setWeeklyHours(saved.weekly_hours ?? null);
+      setAvailableDays(saved.available_days ?? []);
+      setSessionMax(saved.session_max_min == null ? '' : String(saved.session_max_min));
       flashSaved('profile');
     } catch (e) {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));

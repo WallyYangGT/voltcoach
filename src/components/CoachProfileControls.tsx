@@ -60,7 +60,7 @@ export function CoachProfileControls({
           selected={weeklyHours == null}
           onPress={() => onWeeklyHoursChange(null)}
           testID="coach-hours-unset"
-          style={styles.dayChip}>
+          style={[styles.dayChip, weeklyHours == null && styles.chipSelected]}>
           {t('set.coach.hours.unset')}
         </Chip>
         {WEEKLY_HOURS_TIERS.map((tier) => (
@@ -70,7 +70,7 @@ export function CoachProfileControls({
             selected={weeklyHours === tier}
             onPress={() => onWeeklyHoursChange(tier)}
             testID={`coach-hours-${tier}`}
-            style={styles.dayChip}>
+            style={[styles.dayChip, weeklyHours === tier && styles.chipSelected]}>
             {t(`set.coach.hours.${tier}` as never)}
           </Chip>
         ))}
@@ -85,7 +85,7 @@ export function CoachProfileControls({
             selected={availableDays.includes(d)}
             onPress={() => onToggleDay(d)}
             testID={`coach-day-${d}`}
-            style={styles.dayChip}>
+            style={[styles.dayChip, availableDays.includes(d) && styles.chipSelected]}>
             {t(`set.coach.day.${d}` as never)}
           </Chip>
         ))}
@@ -112,6 +112,7 @@ const styles = StyleSheet.create({
   label: { color: palette.text, fontSize: 13, marginTop: 2 },
   dayRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   dayChip: { backgroundColor: palette.panel2 },
+  chipSelected: { backgroundColor: palette.voltDim },
   input: { backgroundColor: palette.panel2 },
   hint: { color: palette.faint, fontSize: 11, lineHeight: 16 },
 });

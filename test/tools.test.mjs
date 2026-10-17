@@ -112,6 +112,10 @@ test('toolDefs：19 个工具、双语描述、schema 关键字段', () => {
   // 短期失效口径（两周/5 次，2026-10-13 放宽）zh/en 双语同步——告知模型的分层规则
   // 必须与 core/memory.ts 判定实现一致（code-review P2-1：en 侧曾漏改）
   assert.match(byName.save_memory.function.parameters.properties.scope.description, /两周或 5 次训练/);
+  // update_rider_profile：清空语义可由 schema 表达（空串清枚举、0 清单次上限）
+  assert.deepEqual(byName.update_rider_profile.function.parameters.properties.coach_mode.enum, ['', 'amateur', 'standard']);
+  assert.deepEqual(byName.update_rider_profile.function.parameters.properties.weekly_hours.enum, ['', 'lt3', '3to5', '5to8', 'gt8']);
+  assert.equal(byName.update_rider_profile.function.parameters.properties.session_max_min.minimum, 0);
   const enByName = Object.fromEntries(en.map((d) => [d.function.name, d]));
   assert.match(enByName.save_memory.function.parameters.properties.scope.description, /two weeks or 5 activities/);
   assert.deepEqual(byName.reanalyze_activity.function.parameters.required, ['file_name']);
