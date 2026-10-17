@@ -12,6 +12,7 @@ const base = {
   days: 7,
   moderate_min: 120,
   vigorous_min: 90,
+  vigorous_equivalent_min: 180,
   light_min: 30,
   equivalent_min: 300,
   target_min: 150,
@@ -62,6 +63,6 @@ describe('WeeklyActivityTile', () => {
     const screen = await renderWithProviders(
       <WeeklyActivityTile summary={{ ...base, power_trusted: false }} />,
     );
-    expect(screen.getByText('FTP 未校准：功率强度按保守口径估算，校准后更准确')).toBeTruthy();
+    expect(screen.getByText('功率数据未校准/不可用：强度按保守口径估算，校准后更准确')).toBeTruthy();
   });
 });

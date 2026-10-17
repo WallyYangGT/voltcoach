@@ -77,6 +77,7 @@ test('空输入/负时长返回全零；非法 days 回退 7', () => {
     days: 7,
     moderate_min: 0,
     vigorous_min: 0,
+    vigorous_equivalent_min: 0,
     light_min: 0,
     equivalent_min: 0,
     target_min: 150,
@@ -138,4 +139,21 @@ test('同日多次累加、未来日期排除、NaN IF 与无效数值不炸', (
   assert.equal(s.moderate_min, 60); // 30 + 30（NaN 兜底）
   assert.equal(s.vigorous_min, 30);
   assert.equal(s.equivalent_min, 120);
+});
+
+test('高强度折算分钟与等效总量同口径（30 秒 / 90 秒边界）', () => {
+  const s30 = summarizeWeeklyActivity(
+    [{ date: '2026-10-17', duration_sec: 30, intensity_factor: 0.95, tss: 5 }],
+    '2026-10-17',
+  );
+  assert.equal(s30.vigorous_min, 1);
+  assert.equal(s30.vigorous_equivalent_min, 1);
+  assert.equal(s30.equivalent_min, 1); // 披露行与大字数字一致
+  const s90 = summarizeWeeklyActivity(
+    [{ date: '2026-10-17', duration_sec: 90, intensity_factor: 0.95, tss: 5 }],
+    '2026-10-17',
+  );
+  assert.equal(s90.vigorous_min, 2);
+  assert.equal(s90.vigorous_equivalent_min, 3);
+  assert.equal(s90.equivalent_min, 3);
 });

@@ -72,8 +72,10 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [data, setData] = useState<HomeData | null>(null);
-  // 近 30 条活动：最近训练取前 6，业余模式健康瓦片从中取近 7 天（本地日换算用）
+  // 业余模式健康瓦片候选（近 7 天本地日；standard/未设置不查询）
   const [healthRows, setHealthRows] = useState<ActivityListItem[]>([]);
+  // 健康区间查询失败时隐藏瓦片（避免把「读取失败」显示成 0 分钟）
+  const [healthOk, setHealthOk] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [ftpOpen, setFtpOpen] = useState(false); // FTP 科学估算面板展开态（dash.ftp_btn）
   const [glossOpen, setGlossOpen] = useState(false); // 指标说明弹窗（标题旁「?」）
@@ -89,14 +91,18 @@ export default function HomeScreen() {
       // 避免 standard/未设置用户为一张不显示的瓦片多读 records 首帧。
       const prof = await getProfile().catch(() => null);
       const isAmateur = prof?.coach_mode === 'amateur';
-      const [athleteState, daily, monthly, recent, health, cfg, aiFtpUpdate] = await Promise.all([
+      // 健康查询多取到 today+1 / today-7（跨时区边界），候选再按本地日过滤到 7 天窗
+      const healthPromise = isAmateur
+        ? listActivitiesInRange(addDaysStr(today, -7), addDaysStr(today, 1))
+            .then((rows) => ({ rows, ok: true }))
+            .catch(() => ({ rows: [] as ActivityListItem[], ok: false }))
+        : Promise.resolve({ rows: [] as ActivityListItem[], ok: true });
+      const [athleteState, daily, monthly, recent, healthRes, cfg, aiFtpUpdate] = await Promise.all([
         getAthleteState(),
         recentFormDaily(90),
         monthlySummary(6),
         listActivities(6),
-        isAmateur
-          ? listActivitiesInRange(addDaysStr(today, -9), addDaysStr(today, 1)).catch(() => [])
-          : Promise.resolve([] as ActivityListItem[]),
+        healthPromise,
         getAiConfig(),
         getAiFtpUpdate(),
       ]);
@@ -109,7 +115,8 @@ export default function HomeScreen() {
         aiFtpUpdate,
         coachMode: prof?.coach_mode ?? null,
       });
-      setHealthRows(health);
+      setHealthRows(healthRes.rows);
+      setHealthOk(healthRes.ok);
       setConfigured(cfg.configured);
     } catch (e) {
       console.warn('仪表盘加载失败:', e);
@@ -123,6 +130,7 @@ export default function HomeScreen() {
         coachMode: null,
       });
       setHealthRows([]);
+      setHealthOk(true);
     }
   }, []);
 
@@ -139,7 +147,7 @@ export default function HomeScreen() {
   // 最近训练行日期按本地日历日展示（双口径统一，与训练列表/报告标题同源同口径）；
   // 业余模式下把健康瓦片候选文件名合并进同一次标签解析（避免两条 hook 重复读 records）
   const healthCandidates = isAmateur
-    ? healthRows.filter((r) => r.date >= addDaysStr(today, -9))
+    ? healthRows.filter((r) => r.date >= addDaysStr(today, -7))
     : [];
   const labelNames = [
     ...new Set([
@@ -197,7 +205,7 @@ export default function HomeScreen() {
 
       {/* 业余模式健康活动量瓦片（WHO 150–300min/周）：作为首要成功指标排在负荷仪表盘之前；
           standard/未设置不显示，避免与 CTL/TSS 口径叠加噪声 */}
-      {isAmateur && healthSummary && <WeeklyActivityTile summary={healthSummary} />}
+      {isAmateur && healthOk && healthSummary && <WeeklyActivityTile summary={healthSummary} />}
 
       <View style={styles.titleRow}>
         <Text style={styles.title}>{t('dash.title')}</Text>

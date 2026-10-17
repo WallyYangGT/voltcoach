@@ -37,7 +37,10 @@ export function WeeklyActivityTile({ summary }: { summary: WeeklyActivitySummary
       </Text>
       {summary.vigorous_min > 0 && (
         <Text style={styles.meta}>
-          {t('dash.who.vigorous', { min: summary.vigorous_min, equiv: summary.vigorous_min * 2 })}
+          {t('dash.who.vigorous', {
+            min: summary.vigorous_min,
+            equiv: summary.vigorous_equivalent_min,
+          })}
         </Text>
       )}
       {summary.light_min > 0 && (

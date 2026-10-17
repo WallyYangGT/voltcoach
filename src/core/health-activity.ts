@@ -27,9 +27,9 @@ export const WHO_ACTIVITY_TARGET = {
   extra_min: 300,
 } as const;
 
-/** 强度分界（与功率分区单源：Z2 下沿 0.55 中等、Z4 下沿 0.9 高强度） */
-export const HEALTH_IF_MODERATE = POWER_ZONES[1].min; // 0.55
-export const HEALTH_IF_VIGOROUS = POWER_ZONES[3].min; // 0.9
+/** 强度分界（与功率分区单源：按区名取 Z2 下沿 = 中等、Z4 下沿 = 高强度） */
+export const HEALTH_IF_MODERATE = POWER_ZONES.find((z) => z.name === 'Z2')?.min ?? 0.55;
+export const HEALTH_IF_VIGOROUS = POWER_ZONES.find((z) => z.name === 'Z4')?.min ?? 0.9;
 
 export interface HealthActivityRow {
   /** 本地日历日 YYYY-MM-DD */
@@ -49,6 +49,8 @@ export interface WeeklyActivitySummary {
   moderate_min: number;
   /** 高强度原始分钟（折算时 ×2） */
   vigorous_min: number;
+  /** 高强度折算后的等效中等分钟（与 equivalent_min 同口径，供披露行使用） */
+  vigorous_equivalent_min: number;
   /** 轻松骑分钟（IF<0.55；不计入达标，单列披露） */
   light_min: number;
   /** WHO 等效中等强度分钟 = moderate + 2×vigorous */
@@ -113,6 +115,7 @@ export function summarizeWeeklyActivity(
     days: span,
     moderate_min: Math.round(moderateSec / 60),
     vigorous_min: Math.round(vigorousSec / 60),
+    vigorous_equivalent_min: Math.round((2 * vigorousSec) / 60),
     light_min: Math.round(lightSec / 60),
     equivalent_min: Math.round((moderateSec + 2 * vigorousSec) / 60),
     target_min: WHO_ACTIVITY_TARGET.moderate_min,
