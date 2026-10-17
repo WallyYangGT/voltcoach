@@ -7,11 +7,15 @@
  * 于是「先前手动导入过、后来又被云同步拉到」的同一趟骑行会二次入库（2026-09-23
  * 真机复现）。这里按**解析结果的内容特征**判重，与文件名无关。
  *
- * 口径（2026-09-23 定）：同一 UTC 日期 + 时长 ±2s + 距离 ±0.05km。
+ * 口径（2026-09-23 定，2026-10-17 扩展室内骑行）：
+ *  - **有距离**（两侧均 >0）：同一 UTC 日期 + 时长 ±2s + 距离 ±0.05km；
+ *  - **无有效距离**（两侧均为 null 或 0，典型室内骑行）：同一 UTC 日期 + 时长 ±2s
+ *    + **起骑时刻 ±60s**（records 首帧，跨源转码可能按分钟舍入）+ sport 已知时须相同；
+ *    任一侧缺起骑时刻则保守不判重；
+ *  - 一侧有距离、另一侧无 → 不判重（宁可漏合也不误合）。
  *  - 日期两侧都取自 records[0].timestamp 的 UTC 日期，同一份 FIT 必然相等；
  *  - 时长/距离留容差：同趟骑行经服务端转码（如顽鹿把 .st 日志转 FIT）可能有末秒差异；
- *  - 任一侧距离为空（室内骑行/缺数据）时**不判重**——宁可漏合也不误合，漏合的多余
- *    记录可由数据管理页的「重复检查」人工确认合并。
+ *  - 漏合的多余记录可由数据管理页的「重复检查」人工确认合并。
  */
 
 /** 判定所需的骑行键（activities 行 / 待入库候选均可提供） */
@@ -19,6 +23,10 @@ export interface RideKey {
   date: string;
   duration_sec: number | null;
   distance_km: number | null;
+  /** 起骑时刻（records 首帧 ISO UTC；无有效距离时作为室内指纹的核心信号） */
+  start_at?: string | null;
+  /** 运动类型（室内分支的保守护栏：两侧都已知且不同则不判重） */
+  sport?: string | null;
 }
 
 /** 时长容差（秒）：吸收同一原始数据两次解析的末秒差异 */
@@ -26,6 +34,15 @@ export const RIDE_DURATION_TOLERANCE_SEC = 2;
 
 /** 距离容差（km）：0.05km 远小于任何两趟不同骑行的实际差异，又能吸收舍入差异 */
 export const RIDE_DISTANCE_TOLERANCE_KM = 0.05;
+
+/** 起骑时刻容差（秒）：跨源转码可能按分钟舍入；同一天两场不同室内课恰好同起点同
+ * 时长的概率可忽略，宁可漏合也不误合 */
+export const RIDE_START_TOLERANCE_SEC = 60;
+
+/** 距离是否有效（>0）；null/0 一律视为「无有效距离」（室内骑行/缺距离传感器） */
+export function hasPositiveDistance(distanceKm: number | null | undefined): boolean {
+  return distanceKm != null && Number.isFinite(distanceKm) && distanceKm > 0;
+}
 
 /** 两个数值是否在给定容差内相等（任一为空视为不可比） */
 function withinTolerance(a: number | null, b: number | null, tol: number): boolean {
@@ -36,14 +53,38 @@ function withinTolerance(a: number | null, b: number | null, tol: number): boole
   return diff <= tol;
 }
 
+/** 两个 ISO 时刻是否在容差内（任一缺失/非法视为不可比） */
+function withinStartTolerance(a: string | null | undefined, b: string | null | undefined, tol: number): boolean {
+  if (!a || !b) return false;
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (!Number.isFinite(ta) || !Number.isFinite(tb)) return false;
+  return Math.abs(ta - tb) / 1000 <= tol;
+}
+
 /**
- * 是否同一趟骑行：日期必须完全相等，时长与距离都必须存在且落在容差内。
- * 只用于「新入库候选 vs 库内已有记录」与「库内记录互相比对」两种场景。
+ * 是否同一趟骑行：
+ * 1) 两侧都有有效距离 → 日期 + 时长 ±2s + 距离 ±0.05km（原口径）；
+ * 2) 两侧都无有效距离 → 日期 + 时长 ±2s + 起骑时刻 ±60s，sport 已知时须相同；
+ * 3) 一侧有距离一侧无 → false（保守）。
  */
 export function isSameRide(a: RideKey, b: RideKey): boolean {
   if (!a.date || !b.date || a.date !== b.date) return false;
   if (!withinTolerance(a.duration_sec, b.duration_sec, RIDE_DURATION_TOLERANCE_SEC)) return false;
-  return withinTolerance(a.distance_km, b.distance_km, RIDE_DISTANCE_TOLERANCE_KM);
+
+  const aHasDistance = hasPositiveDistance(a.distance_km);
+  const bHasDistance = hasPositiveDistance(b.distance_km);
+  if (aHasDistance && bHasDistance) {
+    return withinTolerance(a.distance_km, b.distance_km, RIDE_DISTANCE_TOLERANCE_KM);
+  }
+  if (aHasDistance !== bHasDistance) return false;
+
+  // 室内骑行（无有效距离）：起骑时刻是唯一足够强的身份信号。
+  // sport 只在两侧都已知（非 unknown）时比较——旧行/异常文件缺 sport 不因此阻断判重。
+  const sportA = a.sport && a.sport !== 'unknown' ? a.sport : null;
+  const sportB = b.sport && b.sport !== 'unknown' ? b.sport : null;
+  if (sportA && sportB && sportA !== sportB) return false;
+  return withinStartTolerance(a.start_at, b.start_at, RIDE_START_TOLERANCE_SEC);
 }
 
 /**

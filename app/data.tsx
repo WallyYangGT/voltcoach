@@ -26,10 +26,10 @@ import { findDuplicateGroups } from '@/core/dedupe';
 import { formatDuration } from '@/core/metrics';
 import { copyStoredRecord, deleteStoredRecord } from '@/records-store';
 import { invalidateReportTitles, useRideDateLabels } from '@/services/aiTitle';
+import { listRideKeysForDedupe } from '@/services/dedupe';
 import {
   SCHEMA_VERSION,
   deleteActivity,
-  listActivityRideKeys,
   mergeActivityExtras,
   retargetActivityRefs,
   type ActivityRideKey,
@@ -225,11 +225,11 @@ export default function DataScreen() {
 
   // ---------------- 重复记录检查（M5） ----------------
 
-  /** 扫描：全表骑行键 → core/dedupe 分组，只留重复组。silent=true 时不弹「没有重复」（供失败后静默刷新用） */
+  /** 扫描：全表骑行键（无有效距离的室内行按需补起骑时刻）→ core/dedupe 分组，只留重复组。silent=true 时不弹「没有重复」（供失败后静默刷新用） */
   const scanDuplicates = async (silent = false) => {
     setScanning(true);
     try {
-      const rows = await listActivityRideKeys();
+      const rows = await listRideKeysForDedupe();
       const groups = findDuplicateGroups(rows).sort((a, b) => (a[0].date < b[0].date ? 1 : -1));
       setDupGroups(groups);
       if (!groups.length && !silent) Alert.alert(t('data.dupe.title'), t('data.dupe.none'));
