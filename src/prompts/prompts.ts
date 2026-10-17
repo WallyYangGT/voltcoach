@@ -26,6 +26,7 @@ import { PEAK_WINDOWS, type AthleteDossier } from '../core/dossier.ts';
 import type { Lang } from '../core/i18n.ts';
 import { localDayFromUtc } from '../core/local-day.ts';
 import { assembleBudgetedSections, truncateTextBlock, type PromptSection } from './context.ts';
+import { truncateSkillsSection } from './skills.ts';
 
 /** 提示词语言缺省值 */
 type PromptLang = Lang;
@@ -712,7 +713,7 @@ export function buildChatSummaryPrompt(
     (m) => `${TT(lang, m.role === 'user' ? 'chat.summary.user' : 'chat.summary.assistant')}${m.content}`,
   );
   const prev = previousSummary
-    ? `\n\n${TT(lang, 'chat.summary.previous')}\n${previousSummary}`
+    ? `\n\n${TT(lang, 'chat.summary.previous')}\n${dataBlockNote(lang)}\n${wrapDataBlock('MODEL', previousSummary)}`
     : '';
   return `${TT(lang, 'chat.summary.prompt', { max: CONTEXT_BUDGET.chat_summary_output_max_chars })}${prev}\n\n${TT(lang, 'chat.summary.new')}\n${dataBlockNote(lang)}\n${wrapDataBlock('CONVERSATION', lines.join('\n'))}`;
 }
@@ -859,7 +860,7 @@ function assemble(
           id: 'skills',
           text: skills,
           priority: 2,
-          degrade: (n: number) => truncateTextBlock(skills, n, TT(lang, 'report.omitted')),
+          degrade: (n: number) => truncateSkillsSection(skills, n, lang),
         }]
       : []),
     ...(profileSection ? [{ id: 'profile', text: profileSection, priority: 1 }] : []),

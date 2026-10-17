@@ -57,15 +57,25 @@ test('buildSummaryInput：逐条截 1500 字', () => {
   for (const m of kept) assert.ok(m.content.length <= 1501); // 1500 + 省略号
 });
 
-test('buildSummaryInput 总量截断：超过输入上限时保最新', () => {
+test('buildSummaryInput 总量截断：保最早未概括的连续前缀（水位线才能连续推进）', () => {
   const big = 'z'.repeat(3000); // 截到 1501/条
   const history = Array.from({ length: 12 }, (_, i) => ({
     id: i + 1,
     role: i % 2 ? 'assistant' : 'user',
     content: big,
   }));
-  const kept = buildSummaryInput(history, 0); // 11 条 = 16511 > 16000 → 只保最新 10 条
-  assert.deepEqual(kept.map((m) => m.id), [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  const kept = buildSummaryInput(history, 0); // 11 条 = 16511 > 16000 → 只保最早 10 条
+  assert.deepEqual(kept.map((m) => m.id), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  // 水位线推进到 10 后，下一次从 11 继续——不跨过任何未概括消息
+  const next = buildSummaryInput(history, kept[kept.length - 1].id);
+  assert.deepEqual(next.map((m) => m.id), [11, 12]);
+});
+
+test('buildSummaryInput 单条超上限：仍收下首条（保证每次调用都有推进）', () => {
+  const huge = 'q'.repeat(5000);
+  const kept = buildSummaryInput([{ id: 7, role: 'user', content: huge }], 0);
+  assert.deepEqual(kept.map((m) => m.id), [7]);
+  assert.ok(kept[0].content.length <= 1501);
 });
 
 test('normalizeSummaryOutput：截到输出上限、空白剥离、空正文为 null', () => {

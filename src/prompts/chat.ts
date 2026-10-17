@@ -25,6 +25,7 @@
 import { t, type Lang } from '../core/i18n.ts';
 import { CONTEXT_BUDGET, type AthleteParams } from '../core/settings.ts';
 import { assembleBudgetedSections, truncateTextBlock, type PromptSection } from './context.ts';
+import { truncateSkillsSection } from './skills.ts';
 import {
   buildAgenticSection,
   buildChatInstruction,
@@ -88,7 +89,7 @@ function reportSectionText(markdown: string, lang: Lang, maxChars?: number): str
     ? compactReportForPrompt(markdown, lang)
     : truncateTextBlock(
         compactReportForPrompt(markdown, lang),
-        Math.max(200, maxChars - label.length - note.length - 60),
+        Math.max(0, maxChars - label.length - note.length - 60),
         t(lang, 'report.tail_truncated'),
       );
   return `${label}\n${note}\n${wrapDataBlock('MODEL', body)}`;
@@ -148,7 +149,9 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
     if (input.dossierSection) sections.push({ id: 'dossier', text: input.dossierSection, priority: 5, optional: true });
     if (agentic) {
       sections.push({ id: 'agentic', text: buildAgenticSection(lang), priority: 0 });
-      sections.push({ id: 'memory', text: buildMemorySection(memories, lang), priority: 4, optional: true });
+      // 记忆段不参与「整段丢弃」：其中的 save_memory 规则是记忆链路的使用指引，
+      // 丢掉会让「记忆绝迹」复发；预算超限时优先裁 skills（priority 2）而不是记忆
+      sections.push({ id: 'memory', text: buildMemorySection(memories, lang), priority: 4 });
     }
     const digest = historySummarySection(input, lang);
     if (digest) sections.push(digest);
@@ -163,7 +166,7 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
         id: 'skills',
         text: skills,
         priority: 2,
-        degrade: (n) => truncateTextBlock(skills, n, omission),
+        degrade: (n) => truncateSkillsSection(skills, n, lang),
       });
     }
     const profileSection = buildProfileSection(profile, lang, mode === 'plan' ? 'plan' : 'other');
@@ -172,7 +175,9 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
     sections.push({ id: 'instr', text: buildChatInstruction(mode, lang), priority: 0 });
     if (agentic) {
       sections.push({ id: 'agentic', text: buildAgenticSection(lang), priority: 0 });
-      sections.push({ id: 'memory', text: buildMemorySection(memories, lang), priority: 4, optional: true });
+      // 记忆段不参与「整段丢弃」：其中的 save_memory 规则是记忆链路的使用指引，
+      // 丢掉会让「记忆绝迹」复发；预算超限时优先裁 skills（priority 2）而不是记忆
+      sections.push({ id: 'memory', text: buildMemorySection(memories, lang), priority: 4 });
     }
     const digest = historySummarySection(input, lang);
     if (digest) sections.push(digest);

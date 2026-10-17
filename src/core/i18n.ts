@@ -142,6 +142,8 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'chat.summary.head': '更早对话的要点摘要（由系统生成，细节可能省略；需要细节可询问用户或用工具查询）',
     // 对话滚动摘要的模型调用提示词
     'chat.summary.prompt': '请把以下对话增量浓缩为要点摘要，供教练在后续对话中延续上下文。保留：用户的目标与约束、商定的结论、伤病/日程等关键事实、尚未回答的问题；丢弃：寒暄与重复内容。直接输出摘要正文（{max} 字以内），不要开场白。',
+    'chat.digest.user': '用户',
+    'chat.digest.assistant': '教练',
     // 前台服务保活（src/ai/keepalive，2026-10-11 推翻「不做保活」决策）：生成期间
     // dataSync FGS 的通知文案（传给原生模块前按语言取好）
     'ai.keepalive_title': 'AI 生成进行中',
@@ -357,6 +359,8 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'skill.omitted': ' (the following skills were omitted due to the context budget: {names})',
     'chat.summary.head': 'Key-point summary of earlier conversation (system-generated; details may be omitted — ask the user or query tools when needed)',
     'chat.summary.prompt': 'Condense the following conversation delta into key-point notes so the coach can continue the conversation later. Keep: the user\'s goals and constraints, agreed conclusions, key facts (injuries/schedule), unanswered questions. Drop: pleasantries and repetition. Output the summary text only (within {max} chars), no preamble.',
+    'chat.digest.user': 'User',
+    'chat.digest.assistant': 'Coach',
     'ai.keepalive_title': 'AI generation in progress',
     'ai.keepalive_body': 'Generation continues in the background — come back for the result',
     'ai.keepalive_channel': 'AI generation',

@@ -83,3 +83,34 @@ test('工具组压完后仍超：keepRecent 现场不动，尽力压缩返回', 
   const c3 = out.find((m) => m.role === 'tool' && m.tool_call_id === 'c3');
   assert.equal(c3.content, 'R'.repeat(8000));
 });
+
+test('首条系统段不计入 32k 历史预算：英文 49k 系统段 + 12k 窗口历史不被压缩（P1-1）', () => {
+  const messages = [{ role: 'user', content: 'S'.repeat(49000) }];
+  for (let i = 0; i < 6; i++) {
+    messages.push({ role: 'user', content: 'Q'.repeat(1000) });
+    messages.push({ role: 'assistant', content: 'A'.repeat(1000) });
+  }
+  // 首条不计入：12k < 32000 → 原样返回（同引用）
+  assert.equal(compactAgentHistory(messages, { maxChars: 32000, note: NOTE }), messages);
+});
+
+test('tool_calls arguments 计入预算：旧组的 arguments 被清空、id/name 保持', () => {
+  const messages = [
+    { role: 'user', content: 'P' },
+    {
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'update_training_plan', arguments: 'x'.repeat(40000) } }],
+    },
+    { role: 'tool', tool_call_id: 'c1', content: 'ok' },
+    { role: 'user', content: 'Q1' },
+    { role: 'assistant', content: 'A1' },
+    { role: 'user', content: 'Q2' },
+  ];
+  const out = compactAgentHistory(messages, { maxChars: 32000, note: NOTE });
+  const asst = out.find((m) => m.role === 'assistant' && m.tool_calls?.length);
+  assert.equal(asst.tool_calls[0].function.arguments, '{}');
+  assert.equal(asst.tool_calls[0].id, 'c1');
+  assert.equal(asst.tool_calls[0].function.name, 'update_training_plan');
+  assert.ok(out.find((m) => m.role === 'tool' && m.tool_call_id === 'c1'));
+});

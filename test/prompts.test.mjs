@@ -827,7 +827,7 @@ test('buildChatSummaryPrompt：既有摘要/新增对话分段，对话原文进
     'zh',
   );
   assert.match(p, /浓缩为要点摘要/);
-  assert.match(p, /## 既有摘要\n此前商定每周三次训练。/);
+  assert.match(p, /## 既有摘要\n【数据边界】[\s\S]*<<<MODEL:DATA>>>\n此前商定每周三次训练。/);
   assert.match(p, /## 新增对话/);
   assert.match(p, /<<<CONVERSATION:DATA>>>\n用户：我下周只能骑两次。\n教练：收到，按两次安排。\n<<<END_CONVERSATION:DATA>>>/);
   // 无既有摘要时不出「既有摘要」段

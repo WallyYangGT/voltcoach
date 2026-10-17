@@ -14,7 +14,8 @@
  * 约定：
  * - 所有工具返回 JSON 字符串；业务错误（file_name 不存在、参数非法）返回
  *   {error: "..."} JSON，不抛异常中断 agent 循环。
- * - 每个结果超过 AGENTIC.tool_result_max_chars 时截断并附"（结果已截断）"标记。
+ * - 每个结果超过 AGENTIC.tool_result_max_chars 时走 compactJsonToLimit 结构化降级
+ *   （数组抽样/长文本截短/顶层 _truncated 元信息），始终返回合法 JSON。
  * - file_name 参数一律经 safeName basename 校验，防路径穿越。
  */
 

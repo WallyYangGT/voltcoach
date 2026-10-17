@@ -186,7 +186,12 @@ export default function DataScreen() {
       .catch((e) => {
         const retryable = e instanceof BackupError && (e.code === 'wrong_key' || e.code === 'passphrase_required');
         if (retryable) setDialogPass('');
-        else setPendingImport(null);
+        else {
+          setPendingImport(null);
+          // 非可重试失败可能发生在整库替换之后（如 records 落盘/迁移中途出错）：
+          // 起骑时刻缓存可能已陈旧，照样清掉——室内判重/标题都依赖它
+          invalidateReportTitles();
+        }
         Alert.alert(t('data.err.generic'), describeError(e));
       })
       .finally(() => {

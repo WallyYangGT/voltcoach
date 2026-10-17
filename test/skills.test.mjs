@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { SKILL_FILES, buildSkillsSection } = await import('../src/prompts/skills.ts');
+const { SKILL_FILES, buildSkillsSection, truncateSkillsSection } = await import('../src/prompts/skills.ts');
 
 test('按文件名排序加载，标题取首个一级标题（files 注入）', () => {
   const files = [
@@ -68,6 +68,23 @@ test('E1 预算：超 maxChars 时整文件装入、装不下的尾部整篇省�
   assert.match(section, /以下技能因上下文预算未注入：.*技能丙/); // 省略说明列名
   // 半篇技能不允许出现（内容要么全在、要么全不在）
   assert.doesNotMatch(section, /丙丙丙/);
+});
+
+test('truncateSkillsSection：对已拼好的段按整技能边界截断，不出半篇', () => {
+  const files = [
+    { name: '01-a.md', content: '# 技能甲\n\n' + '甲'.repeat(300) },
+    { name: '02-b.md', content: '# 技能乙\n\n' + '乙'.repeat(300) },
+    { name: '03-c.md', content: '# 技能丙\n\n' + '丙'.repeat(300) },
+  ];
+  const section = buildSkillsSection('zh', files);
+  const out = truncateSkillsSection(section, 900, 'zh');
+  assert.ok(out.length <= 900 + 40); // 省略说明余量
+  assert.match(out, /### 技能甲/);
+  assert.doesNotMatch(out, /### 技能丙\n/);
+  assert.match(out, /以下技能因上下文预算未注入：.*技能丙/);
+  assert.doesNotMatch(out, /丙丙丙/); // 整篇省略，不切半篇
+  // 预算充足时原样返回
+  assert.equal(truncateSkillsSection(section, section.length + 10, 'zh'), section);
 });
 
 test('内嵌 skills/ 目录默认加载十个技能且跳过 _README（zh）', () => {

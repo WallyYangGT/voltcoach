@@ -77,7 +77,7 @@ import { thinToWeekly, buildReviewPrompt, buildPlanPrompt, buildTaperPrompt, bui
 import { buildSkillsSection } from '@/prompts/skills';
 import { buildChatSystemSection } from '@/prompts/chat';
 import { rankMemories } from '@/prompts/memory-rank';
-import { windowChatHistory } from '@/prompts/history';
+import { buildHistoryDigest, windowChatHistory } from '@/prompts/history';
 import { toolDefs, createExecuteTool, type ToolIo } from '@/tools';
 import { loadStoredRecords } from '@/records-store';
 import { getRideStartAt } from './aiTitle';
@@ -416,24 +416,34 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
     if (config.agentic !== false) {
       const agenticSection = buildAgenticSection(lang);
       finalPrompt += '\n\n' + agenticSection;
-      // E1：记忆按相关度 top-k（query=报告基础 prompt 的正文特征），并在
+      // E1：记忆按相关度 top-k（query=报告基础 prompt 的尾部数据段），并在
       // report_total_max_chars 的剩余预算内二次收口——基础段已由 assemble 控制在
-      // report_base_max_chars，记忆只吃剩余额度，绝不把总量推爆。预留 ~600 字符给
-      // 记忆段的固定规则文案（save_memory 指引依赖它，不能只按条目内容算预算）。
-      const remaining = Math.max(
-        400,
-        CONTEXT_BUDGET.report_total_max_chars - finalPrompt.length - 600,
+      // report_base_max_chars，记忆只吃剩余额度。按**实际渲染文本**（含规则文案）
+      // 校验，超限就降 top-k/字符预算再试，而不是只打 warn。
+      const allMemories = await listMemories();
+      let memoryBudget = Math.min(
+        CONTEXT_BUDGET.memory_max_chars,
+        Math.max(0, CONTEXT_BUDGET.report_total_max_chars - finalPrompt.length - 600),
       );
-      const memories = rankMemories(await listMemories(), {
-        mode: report.mode,
-        query: report.prompt,
-        topK: CONTEXT_BUDGET.memory_top_k,
-        maxChars: Math.min(CONTEXT_BUDGET.memory_max_chars, remaining),
-      });
-      finalPrompt += '\n\n' + buildMemorySection(memories, lang);
+      let memoryText = '';
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const memories = rankMemories(allMemories, {
+          mode: report.mode,
+          // prompt 开头是角色/口径/技能等通用文本，取尾部（数据段 + 问题清单）作
+          // 相关度参照才指向本次训练（rankMemories 内部再截前 2000 字）
+          query: report.prompt.slice(-3000),
+          topK: CONTEXT_BUDGET.memory_top_k,
+          maxChars: memoryBudget,
+        });
+        memoryText = buildMemorySection(memories, lang);
+        if (finalPrompt.length + 2 + memoryText.length <= CONTEXT_BUDGET.report_total_max_chars) break;
+        if (memoryBudget <= 0) break;
+        memoryBudget = Math.max(0, memoryBudget - 800);
+      }
+      finalPrompt += '\n\n' + memoryText;
       if (finalPrompt.length > CONTEXT_BUDGET.report_total_max_chars) {
         console.warn(
-          `[AI] 报告 #${reportId} 上下文超出总预算：${finalPrompt.length}/${CONTEXT_BUDGET.report_total_max_chars} 字符（基础段+工具段为常量成本，记忆已按剩余额度收口）`,
+          `[AI] 报告 #${reportId} 上下文超出总预算：${finalPrompt.length}/${CONTEXT_BUDGET.report_total_max_chars} 字符（基础段+工具段为常量成本，记忆已按实际文本收口；strategy 权威段不受字符预算裁剪）`,
         );
       }
     }
@@ -593,7 +603,7 @@ async function runMemoryReviewRound(
     // E1：既有记忆按报告正文相关度取 top-k（去重基准只保留真正相关的旧记忆），
     // 报告正文本身在 buildMemoryReviewPrompt 内走首末章瘦身
     const memories = rankMemories(await listMemories(), {
-      mode: 'review',
+      mode, // 用真实报告场景（plan/taper/compare 的类别亲和才会生效）
       query: markdown,
       topK: CONTEXT_BUDGET.memory_top_k,
       maxChars: CONTEXT_BUDGET.memory_max_chars,
@@ -675,9 +685,12 @@ export async function submitChatMessage(
 /**
  * 对话滚动摘要（E1）：被窗口挤出的旧消息交给模型压缩，成功落 settings 行；失败/超时
  * 回落确定性 digest，绝不影响主生成。
- * - 体量 < chat_summary_trigger_chars：直接用 digest（不值得为几百字调一次模型）；
- * - 已有摘要：只把 up_to_message_id 之后的增量与既有摘要一起送（滚动，不重复概括）；
- * - 无新增量：复用既有摘要；取消（AiCancelledError）原样上抛给主任务回写 cancelled。
+ * - 只有「尚未概括」的 omitted 体量达到 chat_summary_trigger_chars 才调模型；
+ *   低于阈值用确定性 digest（prev 存在时拼在旧摘要后），零成本；
+ * - 增量用 buildSummaryInput 取**连续前缀**，水位线只推进到实际送入摘要的最后一条
+ *   ——积压很大时分多轮覆盖，绝不跨过未概括消息（评审 P1-2）；
+ * - 模型失败/空正文：返回「旧摘要 + 本轮增量 digest」，本轮新挤出的上下文不丢；
+ * - 取消（AiCancelledError）原样上抛给主任务回写 cancelled。
  */
 async function maybeRefreshChatSummary(
   config: AiConfig & { api_key: string },
@@ -689,13 +702,25 @@ async function maybeRefreshChatSummary(
   onActivity?: (note: string) => void,
 ): Promise<string | null> {
   if (!omitted.length) return null;
-  if (!shouldSummarize(omitted)) return digest;
 
-  const prev = await getChatSummary(chatId);
-  const delta = buildSummaryInput(omitted, prev?.up_to_message_id ?? 0);
-  if (!delta.length) return prev?.summary ?? digest;
-
+  let fallback = digest;
   try {
+    const prev = await getChatSummary(chatId);
+    const unsummarized = omitted.filter((m) => m.id > (prev?.up_to_message_id ?? 0));
+    if (!unsummarized.length) return prev?.summary ?? digest;
+
+    const deltaDigest = buildHistoryDigest(unsummarized, {
+      perMessageChars: 200,
+      maxChars: CONTEXT_BUDGET.chat_summary_output_max_chars,
+      userLabel: t(lang, 'chat.digest.user'),
+      assistantLabel: t(lang, 'chat.digest.assistant'),
+    });
+    fallback = [prev?.summary, deltaDigest].filter(Boolean).join('\n') || digest;
+    if (!shouldSummarize(unsummarized)) return fallback;
+
+    const delta = buildSummaryInput(unsummarized, prev?.up_to_message_id ?? 0);
+    if (!delta.length) return fallback;
+
     onActivity?.(t(lang, 'ai.compacting'));
     const fetchImpl = await loadDefaultFetch();
     const prompt = buildChatSummaryPrompt(prev?.summary ?? null, delta, lang);
@@ -705,10 +730,10 @@ async function maybeRefreshChatSummary(
       timeoutMs: Math.min(config.timeout_ms, 60_000),
     });
     const normalized = normalizeSummaryOutput(text);
-    if (!normalized) return prev?.summary ?? digest;
-    // up_to = 最后一条被挤出窗口的消息 id（buildSummaryInput 已按输入上限从新往回保，
-    // 丢掉的是更早的极小部分；不把水位线停在中间，避免下轮重复概括同一批旧消息）
-    const upTo = omitted[omitted.length - 1].id;
+    if (!normalized) return fallback;
+    // 水位线只推进到实际送入摘要的最后一条：buildSummaryInput 是连续前缀，
+    // 下一轮从这条之后继续，不会跨过任何未概括消息
+    const upTo = delta[delta.length - 1].id;
     try {
       await saveChatSummary(chatId, normalized, upTo);
     } catch (e) {
@@ -720,7 +745,7 @@ async function maybeRefreshChatSummary(
   } catch (e) {
     if (e instanceof AiCancelledError) throw e;
     console.warn('[AI chat] 滚动摘要失败，回落到确定性 digest:', e);
-    return prev?.summary ?? digest;
+    return fallback;
   }
 }
 
@@ -829,6 +854,8 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
       recentChars: CONTEXT_BUDGET.history_recent_chars,
       digestPerMessageChars: 200,
       digestMaxChars: CONTEXT_BUDGET.chat_summary_output_max_chars,
+      userLabel: t(lang, 'chat.digest.user'),
+      assistantLabel: t(lang, 'chat.digest.assistant'),
     });
     const historySummary = await maybeRefreshChatSummary(
       config,

@@ -24,6 +24,17 @@ export interface WindowOptions {
   digestPerMessageChars?: number;
   /** digest 总字符上限 */
   digestMaxChars?: number;
+  /** digest 的角色标签（按提示词语言传入；缺省中文） */
+  userLabel?: string;
+  assistantLabel?: string;
+}
+
+/** 确定性 digest 的选项（buildHistoryDigest 与 windowChatHistory 共用） */
+export interface DigestOptions {
+  perMessageChars?: number;
+  maxChars?: number;
+  userLabel?: string;
+  assistantLabel?: string;
 }
 
 export interface WindowedHistory<T extends HistoryMessage = HistoryMessage> {
@@ -36,13 +47,37 @@ export interface WindowedHistory<T extends HistoryMessage = HistoryMessage> {
 }
 
 /** 单条消息的确定性概括行 */
-function digestLine(m: HistoryMessage, perMessageChars: number): string {
-  const who = m.role === 'user' ? '用户' : '教练';
+function digestLine(
+  m: HistoryMessage,
+  perMessageChars: number,
+  userLabel: string,
+  assistantLabel: string,
+): string {
+  const who = m.role === 'user' ? userLabel : assistantLabel;
   const body = m.content.length > perMessageChars
     ? m.content.slice(0, perMessageChars) + '…'
     : m.content;
   // 压成单行：换行会破坏「逐条要点」的行结构
   return `- ${who}: ${body.replace(/\s+/g, ' ').trim()}`;
+}
+
+/**
+ * 确定性 digest：把消息列表压成逐条要点。首条消息是会话起点锚，必含；
+ * 其余逐条截断后按总上限截尾。无消息返回 null。
+ */
+export function buildHistoryDigest(
+  messages: HistoryMessage[],
+  opts: DigestOptions = {},
+): string | null {
+  if (!messages.length) return null;
+  const perMessage = opts.perMessageChars ?? 200;
+  const maxChars = opts.maxChars ?? 2000;
+  const userLabel = opts.userLabel ?? '用户';
+  const assistantLabel = opts.assistantLabel ?? '教练';
+  const lines = messages.map((m) => digestLine(m, perMessage, userLabel, assistantLabel));
+  let body = lines.join('\n');
+  if (body.length > maxChars) body = body.slice(0, maxChars) + '…';
+  return body;
 }
 
 /**
@@ -67,14 +102,12 @@ function toTurns(messages: HistoryMessage[]): HistoryMessage[][] {
 
 /**
  * 窗口化对话历史：保留最近 recentTurns 轮且总量 ≤ recentChars（超限从最旧轮起丢，
- * 至少保留最后一轮）。omitted 非空时生成确定性 digest（首条用户消息=会话锚点必含）。
+ * 至少保留最后一轮）。omitted 非空时生成确定性 digest。
  */
 export function windowChatHistory<T extends HistoryMessage>(
   messages: T[],
   opts: WindowOptions,
 ): WindowedHistory<T> {
-  const perMessage = opts.digestPerMessageChars ?? 200;
-  const digestMax = opts.digestMaxChars ?? 2000;
   const turns = toTurns(messages);
 
   // 从最后一轮向前收集，直到轮数或字符超限；最后一轮强制保留
@@ -93,14 +126,11 @@ export function windowChatHistory<T extends HistoryMessage>(
   const recent = messages.slice(messages.length - keptCount);
   const omitted = messages.slice(0, messages.length - keptCount);
 
-  let digest: string | null = null;
-  if (omitted.length) {
-    const lines = omitted.map((m) => digestLine(m, perMessage));
-    let body = lines.join('\n');
-    if (body.length > digestMax) {
-      body = body.slice(0, digestMax) + '…';
-    }
-    digest = body;
-  }
+  const digest = buildHistoryDigest(omitted, {
+    perMessageChars: opts.digestPerMessageChars,
+    maxChars: opts.digestMaxChars,
+    userLabel: opts.userLabel,
+    assistantLabel: opts.assistantLabel,
+  });
   return { recent, omitted, digest };
 }

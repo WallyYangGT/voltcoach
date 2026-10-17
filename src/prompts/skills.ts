@@ -112,6 +112,46 @@ export function buildSkillsSection(lang: Lang = 'zh', files: SkillFile[] = SKILL
   }
   if (!kept.length) return null;
   const body = kept.map((s) => `### ${s.title}\n\n${s.content}`).join('\n\n');
-  const omission = omittedNames.length ? '\n\n' + t(lang, 'skill.omitted', { names: omittedNames.join('、') }) : '';
+  const omission = omittedNames.length
+    ? '\n\n' + t(lang, 'skill.omitted', { names: omittedNames.join(lang === 'en' ? ', ' : '、') })
+    : '';
   return `${T.head}\n\n${T.intro}\n\n${body}${omission}`;
+}
+
+/**
+ * E1 预算兜底：把已拼好的「专业知识库」段按**整技能边界**截到 maxChars 内。
+ * 装配器（assembleBudgetedSections）只能看到拼好的字符串；若直接按字符截会切出
+ * 半篇技能——比缺一篇更误导。这里按 `\n### ` 分块，装不下的整篇省略并列名，
+ * 保证任何情况下不会出现半篇技能正文。段头/引入句始终保留。
+ */
+export function truncateSkillsSection(
+  section: string,
+  maxChars: number,
+  lang: Lang = 'zh',
+): string {
+  if (maxChars <= 0) return '';
+  if (section.length <= maxChars) return section;
+  const first = section.indexOf('\n### ');
+  if (first < 0) return section.slice(0, Math.max(0, maxChars));
+  const preamble = section.slice(0, first + 1); // 含段头/引入 + 分隔换行
+  const blocks = section
+    .slice(first + 1)
+    .split(/\n### /)
+    .map((b, i) => (i === 0 ? b : '### ' + b));
+  const kept: string[] = [];
+  const omitted: string[] = [];
+  let used = preamble.length;
+  for (const b of blocks) {
+    const cost = b.length + 2;
+    if (used + cost > maxChars) {
+      omitted.push(b.split('\n')[0].replace(/^###\s*/, ''));
+      continue;
+    }
+    kept.push(b);
+    used += cost;
+  }
+  const note = omitted.length
+    ? '\n\n' + t(lang, 'skill.omitted', { names: omitted.join(lang === 'en' ? ', ' : '、') })
+    : '';
+  return preamble + kept.join('\n\n') + note;
 }

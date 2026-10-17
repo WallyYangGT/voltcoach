@@ -64,8 +64,12 @@ export function shouldSummarize(omitted: { content: string }[]): boolean {
 }
 
 /**
- * 组装摘要请求的增量输入：只取 up_to 之后的消息，逐条截 1500 字，
- * 总量截 chat_summary_input_max_chars（从最新往回保——越新的对话对延续越关键）。
+ * 组装摘要请求的增量输入：只取 up_to 之后的消息，逐条截 1500 字，按**从最早未
+ * 概括的消息开始连续装入**到 chat_summary_input_max_chars。
+ *
+ * ⚠️ 不能从最新往回保：水位线（up_to_message_id）只能推进到「实际送入摘要的最后
+ * 一条」，若优先装最新的，较早的积压消息会被水位线永久跨过、再也不进摘要。
+ * 连续前缀保证每次调用都推进一小段，多轮下来完整覆盖历史（积压大时下次继续）。
  */
 export function buildSummaryInput(
   history: SummaryInputMessage[],
@@ -79,10 +83,10 @@ export function buildSummaryInput(
   }));
   let total = 0;
   const kept: SummaryInputMessage[] = [];
-  for (let i = clipped.length - 1; i >= 0; i--) {
-    const m = clipped[i];
-    if (total + m.content.length > CONTEXT_BUDGET.chat_summary_input_max_chars) break;
-    kept.unshift(m);
+  for (const m of clipped) {
+    // 首条即使超上限也收下（单条已截到 1500，保证每次调用至少推进一条，避免死循环）
+    if (kept.length && total + m.content.length > CONTEXT_BUDGET.chat_summary_input_max_chars) break;
+    kept.push(m);
     total += m.content.length;
   }
   return kept;

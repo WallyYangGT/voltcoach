@@ -1534,15 +1534,19 @@ export async function saveChatSummary(
   );
 }
 
-/** 清理已不存在的对话留下的摘要行（createAiChat 滚动删除后调用） */
+/** 清理已不存在的对话留下的摘要行（createAiChat 滚动删除后调用；best-effort，失败不影响新建对话） */
 async function pruneOrphanChatSummaries(): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    `DELETE FROM settings
-     WHERE key LIKE 'chat_summary:%'
-       AND CAST(substr(key, ?) AS INTEGER) NOT IN (SELECT id FROM ai_chats)`,
-    CHAT_SUMMARY_KEY_PREFIX.length + 1,
-  );
+  try {
+    const db = await getDb();
+    await db.runAsync(
+      `DELETE FROM settings
+       WHERE key LIKE 'chat_summary:%'
+         AND CAST(substr(key, ?) AS INTEGER) NOT IN (SELECT id FROM ai_chats)`,
+      CHAT_SUMMARY_KEY_PREFIX.length + 1,
+    );
+  } catch (e) {
+    console.warn('清理孤儿对话摘要失败（不影响新建对话）:', e);
+  }
 }
 
 // ---------------- AI 记忆（ai_memories，带时间戳与取代链，M3） ----------------

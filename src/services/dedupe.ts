@@ -30,11 +30,9 @@ async function withStarts(
 ): Promise<RideKeyWithStart[]> {
   if (!candidates.length) return rows.map((r) => ({ ...r, start_at: null }));
   const starts = new Map<string, string | null>();
-  await Promise.all(
-    candidates.map(async (r) => {
-      starts.set(r.file_name, await getRideStartAt(r.file_name));
-    }),
-  );
+  // 串行读取：每条候选都要整包解压 records gzip，同一日期候选多时并发会同时压多份
+  // 文件进内存；个人训练量级（同日期无距离候选通常 2–5 条）串行成本可忽略
+  for (const r of candidates) starts.set(r.file_name, await getRideStartAt(r.file_name));
   return rows.map((r) => ({ ...r, start_at: starts.get(r.file_name) ?? null }));
 }
 
