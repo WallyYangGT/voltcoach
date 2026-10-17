@@ -655,7 +655,7 @@ export const DICT = {
     'set.identity': '身份（如：上班族 / 运动员 / 学生 / 自由职业）',
     'set.identity.placeholder': '例如：上班族，只有早晚和周末能训练',
     'set.goal': '训练目标（想达到什么）',
-    'set.goal.placeholder': '例如：半年内 FTP 提升到 250W；备战 10 月 granfondo 完赛；减脂并保持有氧基础…',
+    'set.goal.placeholder': '例如：每周骑 3 次保持健康；完成 10 月 granfondo；半年内 FTP 提升到 250W…',
     'set.profile.note': '说明：填写后，AI 复盘/规划等报告会结合你的身份与目标给出更贴合实际的建议；都留空则不纳入。',
     // ---- M3：AI 服务配置（set.ai.* 与 Web 版同 key 同源；note 改 Keystore 口径） ----
     'set.ai': 'AI 服务',
@@ -1084,7 +1084,7 @@ export const DICT = {
     'set.identity': 'Identity (e.g. office worker / athlete / student / freelancer)',
     'set.identity.placeholder': 'e.g. office worker, can train only mornings and weekends',
     'set.goal': 'Training goal (what you want to achieve)',
-    'set.goal.placeholder': 'e.g. raise FTP to 250W within 6 months; finish the October granfondo; lose fat while keeping the aerobic base…',
+    'set.goal.placeholder': 'e.g. ride 3 times a week for health; finish the October granfondo; raise FTP to 250W within 6 months…',
     'set.profile.note': 'Note: when filled, AI reviews/plans tailor advice to your identity and goals; leave both empty to skip.',
     'set.ai': 'AI service',
     'set.ai.key': 'API key (leave empty to fall back to copy-prompt mode)',
