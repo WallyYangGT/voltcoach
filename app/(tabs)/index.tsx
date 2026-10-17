@@ -6,7 +6,8 @@
  * 移植自 Web 版 views/dashboard.js：hero 瓦片/趋势/月度/最近训练同在首页（Web 版即此
  * 信息架构），App 侧空库引导语按移动端信息架构改指「记录」tab。数据一次并行取齐：
  * recentFormDaily(90)（趋势图与 hero 大数字同源，序列末端已延伸到今天）/ monthlySummary(6) /
- * listActivities(6) / getAiConfig（对话卡片与训练计划卡共用的「已配置 Key」门）；
+ * listActivities(30)（最近训练取前 6 条 + 业余模式健康瓦片取近 7 天）/ getAiConfig /
+ * getProfile（教练模式决定是否显示 WHO 活动量瓦片）。
  * FTP 科学估算面板见 FtpEstimatePanel（dash.ftp_btn 入口）。
  */
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -22,16 +23,19 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChartScroller } from '@/charts/ChartScroller';
 import { TrendChart, type TrendPoint } from '@/charts/TrendChart';
+import { addDaysStr } from '@/core/dossier';
+import { summarizeWeeklyActivity } from '@/core/health-activity';
 import { formNote } from '@/core/i18n';
 import { localDay } from '@/core/local-day';
 import { formatDuration } from '@/core/metrics';
 import type { MonthlyItem } from '@/core/monthly';
-import { ATHLETE, type AthleteParams } from '@/core/settings';
+import { ATHLETE, type AthleteParams, type CoachMode } from '@/core/settings';
 import {
   ActivityListItem,
   getAiConfig,
   getAiFtpUpdate,
   getEffectiveAthlete,
+  getProfile,
   listActivities,
   monthlySummary,
   recentFormDaily,
@@ -43,6 +47,7 @@ import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
 import { PlanAdjustBanner } from '@/components/PlanAdjustBanner';
 import { TodayAdviceCard } from '@/components/TodayAdviceCard';
+import { WeeklyActivityTile } from '@/components/WeeklyActivityTile';
 import { useI18n } from '@/i18n';
 import { useRideDateLabels } from '@/services/aiTitle';
 import { palette } from '@/theme';
@@ -55,6 +60,8 @@ interface HomeData {
   recent: ActivityListItem[];
   /** AI 教练 FTP 更新快照（披露条用；null=无可披露） */
   aiFtpUpdate: AiFtpUpdateSnapshot | null;
+  /** 教练模式：amateur 时显示 WHO 健康活动量瓦片（未设置/standard 不显示） */
+  coachMode: CoachMode | null;
 }
 
 export default function HomeScreen() {
@@ -62,6 +69,8 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [data, setData] = useState<HomeData | null>(null);
+  // 近 30 条活动：最近训练取前 6，业余模式健康瓦片从中取近 7 天（本地日换算用）
+  const [healthRows, setHealthRows] = useState<ActivityListItem[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [ftpOpen, setFtpOpen] = useState(false); // FTP 科学估算面板展开态（dash.ftp_btn）
   const [glossOpen, setGlossOpen] = useState(false); // 指标说明弹窗（标题旁「?」）
@@ -72,19 +81,29 @@ export default function HomeScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [athlete, daily, monthly, recent, cfg, aiFtpUpdate] = await Promise.all([
+      const [athlete, daily, monthly, all, cfg, aiFtpUpdate, prof] = await Promise.all([
         getEffectiveAthlete(),
         recentFormDaily(90),
         monthlySummary(6),
-        listActivities(6),
+        listActivities(30),
         getAiConfig(),
         getAiFtpUpdate(),
+        getProfile().catch(() => null), // 档案异常不拖垮首页；按未设置模式处理
       ]);
-      setData({ athlete, daily, monthly, recent, aiFtpUpdate });
+      setData({
+        athlete,
+        daily,
+        monthly,
+        recent: all.slice(0, 6),
+        aiFtpUpdate,
+        coachMode: prof?.coach_mode ?? null,
+      });
+      setHealthRows(all);
       setConfigured(cfg.configured);
     } catch (e) {
       console.warn('仪表盘加载失败:', e);
-      setData({ athlete: ATHLETE, daily: [], monthly: [], recent: [], aiFtpUpdate: null });
+      setData({ athlete: ATHLETE, daily: [], monthly: [], recent: [], aiFtpUpdate: null, coachMode: null });
+      setHealthRows([]);
     }
   }, []);
 
@@ -96,13 +115,26 @@ export default function HomeScreen() {
   );
 
   const last = data && data.daily.length ? data.daily[data.daily.length - 1] : null;
+  const today = localDay();
   // 最近训练行日期按本地日历日展示（双口径统一，与训练列表/报告标题同源同口径）
   const dateLabels = useRideDateLabels((data?.recent ?? []).map((r) => r.file_name));
-  // 今天是否已练（今日建议卡免扰档输入）：最近几行里有本地日=今天的骑行即算。
-  // 行级本地日的唯一瞬间源是 records 首帧（dateLabels 正是它的换算）；标签尚未
-  // 解析完成的行回退存储 UTC 日比对（§24 展示层同款回退，消冷缓存 1–3s 的状态
-  // 翻转抖动——code-review P3-4）；仅看最近 6 条，一天多练超 6 条病态不扩查询
-  const today = localDay();
+  // 业余模式健康瓦片：近 7 天活动的本地日标签（多取 1 天余量覆盖时区边界），
+  // 标签未解析完成时回退存储日（与下方 trainedToday 同款回退）
+  const healthCandidates = (healthRows ?? []).filter((r) => r.date >= addDaysStr(today, -8));
+  const healthLabels = useRideDateLabels(healthCandidates.map((r) => r.file_name));
+  const healthSummary = summarizeWeeklyActivity(
+    healthCandidates.map((r) => ({
+      date: healthLabels.get(r.file_name) ?? r.date,
+      duration_sec: r.duration_sec,
+      intensity_factor: r.intensity_factor,
+      tss: r.tss,
+      category: r.category,
+    })),
+    today,
+  );
+  // 今天是否已练（今日建议卡免扰档输入）：最近几行里有本地日=今天的骑行即算；
+  // 行级本地日的唯一瞬间源是 records 首帧（dateLabels 正是它的换算），标签未解析
+  // 完成时回退存储 UTC 日比对（§24 展示层同款回退）
   const trainedToday = (data?.recent ?? []).some(
     (r) => (dateLabels.has(r.file_name) ? dateLabels.get(r.file_name) : r.date) === today,
   );
@@ -179,6 +211,9 @@ export default function HomeScreen() {
         currentFtp={data?.athlete.ftp_watts ?? null}
         onChanged={load}
       />
+
+      {/* 业余模式健康活动量瓦片（WHO 150–300min/周；standard/未设置不显示，避免叠加噪声） */}
+      {data?.coachMode === 'amateur' && <WeeklyActivityTile summary={healthSummary} />}
 
       {/* FTP 科学估算面板（展开时渲染，采纳写回后经 onApplied 刷新 hero） */}
       {ftpOpen && <FtpEstimatePanel onApplied={load} />}
