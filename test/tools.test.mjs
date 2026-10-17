@@ -247,6 +247,43 @@ test('update_rider_profile：仅对话放行、至少一项、白名单字段、
   assert.match(bad.error, /weekly_hours 取值非法/);
 });
 
+test('update_rider_profile：部分更新不清空其他字段；空串/0/空数组清空语义', async () => {
+  const exec = createExecuteTool(fakeIo(), { lang: 'zh', chat: true });
+  await exec('update_rider_profile', {
+    coach_mode: 'amateur',
+    weekly_hours: '5to8',
+    available_days: [1, 4],
+    session_max_min: 120,
+  });
+  // 只改每周时长档：其余教练字段与身份/目标保持
+  const partial = JSON.parse(await exec('update_rider_profile', { weekly_hours: '3to5' }));
+  assert.equal(partial.coach_mode, 'amateur');
+  assert.equal(partial.weekly_hours, '3to5');
+  assert.deepEqual(partial.available_days, [1, 4]);
+  assert.equal(partial.session_max_min, 120);
+  const read = JSON.parse(await exec('get_athlete_profile', {}));
+  assert.equal(read.identity, '上班族骑手');
+  assert.equal(read.goal, '200km 骑游');
+
+  // 清空：空串清模式/时长档，0 清单次上限，空数组清可用日
+  const cleared = JSON.parse(
+    await exec('update_rider_profile', {
+      coach_mode: '',
+      weekly_hours: '',
+      session_max_min: 0,
+      available_days: [],
+    }),
+  );
+  assert.equal(cleared.coach_mode, null);
+  assert.equal(cleared.weekly_hours, null);
+  assert.equal(cleared.session_max_min, null);
+  assert.deepEqual(cleared.available_days, []);
+  const reRead = JSON.parse(await exec('get_athlete_profile', {}));
+  assert.equal(reRead.coach_mode, null);
+  assert.equal(reRead.coach_mode_configured, false);
+  assert.equal(reRead.identity, '上班族骑手'); // 清空教练字段不影响身份目标
+});
+
 test('estimate_ftp：数据不足时返回 insufficient 结构（不报错）', async () => {
   const exec = createExecuteTool(fakeIo(), { lang: 'zh' });
   const r = JSON.parse(await exec('estimate_ftp', {}));

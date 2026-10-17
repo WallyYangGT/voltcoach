@@ -101,7 +101,7 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
     buildMetricGlossary(athlete, lang),
     buildDateSection(now, lang),
     skills,
-    buildProfileSection(profile, lang),
+    buildProfileSection(profile, lang, mode === 'plan' ? 'plan' : 'other'),
     input.dossierSection ?? null,
     buildChatInstruction(mode, lang),
   ].filter(Boolean) as string[];

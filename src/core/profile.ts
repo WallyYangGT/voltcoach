@@ -40,7 +40,7 @@ export interface RiderProfileData {
   session_max_min: number | null;
 }
 
-/** 局部更新入参：undefined = 不修改；null/[] = 清空该项 */
+/** 局部更新入参：undefined = 不修改；null（模式/时长档/单次上限）或 []（可用日）清空；identity/goal 传空字符串清空 */
 export interface RiderProfilePatch {
   identity?: string;
   goal?: string;
@@ -58,6 +58,37 @@ export function emptyProfile(): RiderProfileData {
     weekly_hours: null,
     available_days: [],
     session_max_min: null,
+  };
+}
+
+/**
+ * 容错解析存档（行内容损坏/旧版本缺字段/未来未知字段时按空值处理，不抛错）。
+ * 旧版本 profile 行只有 identity/goal；未知值（如手改的枚举）一律归 null。
+ */
+export function parseStoredProfile(raw: unknown): RiderProfileData {
+  const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const mode = p.coach_mode;
+  const hours = p.weekly_hours;
+  const max = p.session_max_min;
+  const days = Array.isArray(p.available_days)
+    ? [...new Set(p.available_days.filter((d): d is number => Number.isInteger(d) && d >= 1 && d <= 7))].sort(
+        (a, b) => a - b,
+      )
+    : [];
+  return {
+    identity: typeof p.identity === 'string' ? p.identity : '',
+    goal: typeof p.goal === 'string' ? p.goal : '',
+    coach_mode: COACH_MODES.includes(mode as CoachMode) ? (mode as CoachMode) : null,
+    weekly_hours: WEEKLY_HOURS_TIERS.includes(hours as WeeklyHoursTier)
+      ? (hours as WeeklyHoursTier)
+      : null,
+    available_days: days,
+    session_max_min:
+      Number.isInteger(max) &&
+      (max as number) >= COACH_PROFILE_LIMITS.session_max_min.min &&
+      (max as number) <= COACH_PROFILE_LIMITS.session_max_min.max
+        ? (max as number)
+        : null,
   };
 }
 
@@ -82,7 +113,16 @@ export function normalizeProfilePatch(
   patch: Partial<RiderProfilePatch> | null | undefined,
   lang: Lang = 'zh',
 ): RiderProfileData {
-  const next: RiderProfileData = { ...current, available_days: [...current.available_days] };
+  // 显式逐字段构造（不展开 current）：current 在生产路径是 db 的 RiderProfile，
+  // 带 configured 派生字段，展开会把派生值序列化进 settings JSON 行（review P2-3）
+  const next: RiderProfileData = {
+    identity: current.identity,
+    goal: current.goal,
+    coach_mode: current.coach_mode,
+    weekly_hours: current.weekly_hours,
+    available_days: [...current.available_days],
+    session_max_min: current.session_max_min,
+  };
   const p = patch ?? {};
 
   for (const [key, max] of [

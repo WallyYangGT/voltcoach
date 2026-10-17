@@ -22,7 +22,12 @@ import { KeepAliveCard } from '@/components/KeepAliveCard';
 import { CoachProfileControls } from '@/components/CoachProfileControls';
 import type { FormSnapshot } from '@/core/form';
 import { localDay } from '@/core/local-day';
-import type { AthleteParams, CoachMode, WeeklyHoursTier } from '@/core/settings';
+import {
+  COACH_PROFILE_LIMITS,
+  type AthleteParams,
+  type CoachMode,
+  type WeeklyHoursTier,
+} from '@/core/settings';
 import { computeForm, getAiConfig, getAthleteState, getProfile, rebuildDossierQuietly, setAiConfig, setAthlete, setProfile } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
@@ -143,6 +148,13 @@ export default function MeScreen() {
   };
 
   const saveProfile = async () => {
+    // 单次上限在台账前先本地校验（避免把内部字段名透到 Alert）
+    const maxNum = sessionMax.trim() === '' ? null : Number(sessionMax);
+    const { min, max } = COACH_PROFILE_LIMITS.session_max_min;
+    if (maxNum != null && (!Number.isInteger(maxNum) || maxNum < min || maxNum > max)) {
+      Alert.alert(t('set.coach.session_max_invalid', { min, max }));
+      return;
+    }
     setSavingProfile(true);
     try {
       await setProfile(
@@ -152,10 +164,11 @@ export default function MeScreen() {
           coach_mode: coachMode,
           weekly_hours: weeklyHours,
           available_days: availableDays,
-          session_max_min: sessionMax.trim() === '' ? null : Number(sessionMax),
+          session_max_min: maxNum,
         },
         lang,
       );
+      await load(); // 规范化后的值立即回显（trim/可用日排序）
       flashSaved('profile');
     } catch (e) {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));

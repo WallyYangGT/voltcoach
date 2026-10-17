@@ -29,24 +29,20 @@ import { isShortMemoryExpired, type MemoryScope } from '@/core/memory';
 import { localDay } from '@/core/local-day';
 import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
 import {
-  COACH_MODES,
   emptyProfile,
   isProfileEmpty,
   normalizeProfilePatch,
+  parseStoredProfile,
   type RiderProfileData,
   type RiderProfilePatch,
 } from '@/core/profile';
 import {
   ATHLETE,
   AI_CONFIG,
-  COACH_PROFILE_LIMITS,
   FTP_ESTIMATION,
   PLAN_VALIDATION,
-  WEEKLY_HOURS_TIERS,
   type AiConfig,
   type AthleteParams,
-  type CoachMode,
-  type WeeklyHoursTier,
 } from '@/core/settings';
 import type { PlanIssue, TrainingPlan } from '@/core/training-plan';
 import {
@@ -406,34 +402,6 @@ export async function setAthlete(
 export interface RiderProfile extends RiderProfileData {
   /** 任一字段非空即视为已配置 */
   configured: boolean;
-}
-
-/** 容错解析存档（行内容损坏/旧版本缺字段时按空值处理，不抛错） */
-function parseStoredProfile(raw: unknown): RiderProfileData {
-  const p = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
-  const mode = p.coach_mode;
-  const hours = p.weekly_hours;
-  const max = p.session_max_min;
-  const days = Array.isArray(p.available_days)
-    ? [...new Set(p.available_days.filter((d): d is number => Number.isInteger(d) && d >= 1 && d <= 7))].sort(
-        (a, b) => a - b,
-      )
-    : [];
-  return {
-    identity: typeof p.identity === 'string' ? p.identity : '',
-    goal: typeof p.goal === 'string' ? p.goal : '',
-    coach_mode: COACH_MODES.includes(mode as CoachMode) ? (mode as CoachMode) : null,
-    weekly_hours: WEEKLY_HOURS_TIERS.includes(hours as WeeklyHoursTier)
-      ? (hours as WeeklyHoursTier)
-      : null,
-    available_days: days,
-    session_max_min:
-      Number.isInteger(max) &&
-      (max as number) >= COACH_PROFILE_LIMITS.session_max_min.min &&
-      (max as number) <= COACH_PROFILE_LIMITS.session_max_min.max
-        ? (max as number)
-        : null,
-  };
 }
 
 /** 当前骑手档案；未配置时各字段为空值（行内容损坏时按未配置返回） */

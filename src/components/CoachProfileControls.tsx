@@ -8,12 +8,10 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Chip, SegmentedButtons, TextInput } from 'react-native-paper';
-import type { CoachMode, WeeklyHoursTier } from '@/core/settings';
+import { WEEKLY_HOURS_TIERS, type CoachMode, type WeeklyHoursTier } from '@/core/settings';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
-/** 每周可用时间档（顺序即 UI 顺序；与 core/settings 的 WEEKLY_HOURS_TIERS 同源） */
-const HOUR_TIERS: WeeklyHoursTier[] = ['lt3', '3to5', '5to8', 'gt8'];
 /** 可骑日（1=周一 … 7=周日） */
 const WEEKDAYS = [1, 2, 3, 4, 5, 6, 7] as const;
 
@@ -55,19 +53,28 @@ export function CoachProfileControls({
       />
 
       <Text style={styles.label}>{t('set.coach.hours')}</Text>
-      <SegmentedButtons
-        value={weeklyHours ?? ''}
-        onValueChange={(v) => onWeeklyHoursChange(v === '' ? null : (v as WeeklyHoursTier))}
-        buttons={[
-          { value: '', label: t('set.coach.hours.unset'), testID: 'coach-hours-unset' },
-          ...HOUR_TIERS.map((tier) => ({
-            value: tier,
-            label: t(`set.coach.hours.${tier}` as never),
-            testID: `coach-hours-${tier}`,
-          })),
-        ]}
-        density="small"
-      />
+      {/* 用 Chip 而非 SegmentedButtons：5 个选项在窄屏（320dp）下分段按钮触摸目标过小 */}
+      <View style={styles.dayRow}>
+        <Chip
+          compact
+          selected={weeklyHours == null}
+          onPress={() => onWeeklyHoursChange(null)}
+          testID="coach-hours-unset"
+          style={styles.dayChip}>
+          {t('set.coach.hours.unset')}
+        </Chip>
+        {WEEKLY_HOURS_TIERS.map((tier) => (
+          <Chip
+            key={tier}
+            compact
+            selected={weeklyHours === tier}
+            onPress={() => onWeeklyHoursChange(tier)}
+            testID={`coach-hours-${tier}`}
+            style={styles.dayChip}>
+            {t(`set.coach.hours.${tier}` as never)}
+          </Chip>
+        ))}
+      </View>
 
       <Text style={styles.label}>{t('set.coach.days')}</Text>
       <View style={styles.dayRow}>

@@ -78,6 +78,12 @@ test('业余教练技能：关键口径钉死 + zh/en 成对', () => {
   // P2 起模式与时间预算写入结构化档案（工具真实存在）
   assert.ok(zh.content.includes('update_rider_profile'));
   assert.ok(en.content.includes('update_rider_profile'));
+  // P1 遗留的「更新记忆」口径必须清除（否则模型只写记忆、不落结构化档案）
+  assert.ok(!zh.content.includes('更新记忆'));
+  assert.ok(!en.content.includes('update the memory'));
+  // 可用日空 = 不限（与 UI/工具口径一致）
+  assert.ok(zh.content.includes('可用日未设置（available_days 为空）= 不限'));
+  assert.ok(en.content.includes('unset available days (empty available_days) means unrestricted'));
   // 关键行为：两维取交集、健康锚点、目标阶梯分窗、首次询问不阻塞、
   // 活动日长骑是上限、记忆兜底、入门不做全力测试、质量课 ≤2
   for (const phrase of [

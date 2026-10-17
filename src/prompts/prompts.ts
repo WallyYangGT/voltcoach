@@ -67,7 +67,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'agentic.tool.get_activity_records': `- get_activity_records：按 file_name 取逐秒时序（功率/心率/踏频等），可用 start_sec/end_sec 只取时间窗片段`,
     'agentic.tool.get_form_series': `- get_form_series：最近 N 天逐日 CTL/ATL/TSB（疲劳与状态走势）`,
     'agentic.tool.get_monthly_summary': `- get_monthly_summary：逐月训练汇总（长期负荷趋势）`,
-    'agentic.tool.get_athlete_profile': `- get_athlete_profile：骑手参数（FTP/最大心率/体重，含是否已校准）、用户身份/训练目标、教练模式与时间预算（每周可用时长档/可骑日/单次上限）`,
+    'agentic.tool.get_athlete_profile': `- get_athlete_profile：骑手参数（FTP/最大心率/体重，含是否已校准）、用户身份/训练目标、教练模式与时间预算（每周可用时长档/可骑日，空=不限/单次上限）`,
     'agentic.tool.update_rider_profile': `- update_rider_profile：更新教练模式与时间预算（coach_mode/weekly_hours/available_days/session_max_min）——⚠️ 调用前必须复述将写入的内容并获用户肯定答复；用户没提到的字段不要传`,
     'agentic.tool.estimate_ftp': `- estimate_ftp：基于历史骑行估算 FTP（含置信度）`,
     'agentic.tool.simulate_form': `- simulate_form：未来负荷推演——给出逐日计划 TSS，预测 CTL/ATL/TSB 走势与风险（"每周加练会怎样"、赛前减量评估）`,
@@ -139,9 +139,10 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'profile.identity': `身份：{v}`,
     'profile.goal': `训练目标：{v}`,
     'profile.mode': `教练模式：{v}`,
-    'profile.mode.amateur': `业余（用户期望与可用时间主导；成功包含健康与习惯，维持是合法结果）`,
-    'profile.mode.standard': `系统训练（按能力与目标提升，默认口径）`,
+    'profile.mode.amateur': `业余（用户期望与可用时间主导；成功包含健康与习惯，维持是合法结果；目标不现实时给阶梯、忙季每周 2 次维持合法）`,
+    'profile.mode.standard': `系统训练（按能力与目标提升）`,
     'profile.mode.unset': `教练模式：未设置（首次生成计划时先询问用户；在此之前按保守的业余口径给计划）`,
+    'profile.mode.unset.other': `教练模式：未设置`,
     'profile.hours': `每周可用时间：{v}`,
     'profile.hours.lt3': `<3 小时`,
     'profile.hours.3to5': `3–5 小时`,
@@ -185,7 +186,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'sec.plan.recent': `## 近期训练清单`,
     'sec.plan.existing': `## 既有计划处理
 
-生成新计划前，先用 get_training_plan 查看当前训练计划：
+生成新计划前，先用 get_training_plan 查看当前训练计划，并用 get_athlete_profile 确认教练模式是否已配置（未配置时按业余教练技能先询问）：
 - 存在有效期内的计划：默认按续订处理（顺延周期、结合近期执行情况调整），并在回答开头说明是「续订」还是「替换」及差异要点；用户明确要求重开时才整体替换；
 - 存在已过期计划：参考其结构生成新周期，说明与旧计划的关键差异；
 - 没有计划：直接生成。若教练模式未配置，先按「业余教练模式」技能询问一句（按成绩还是按健康与可用时间安排），并同时给出保守的可执行计划，不要停下来等回答。`,
@@ -263,7 +264,7 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     'agentic.tool.get_activity_records': `- get_activity_records: per-second time series (power/HR/cadence etc.) by file_name, with start_sec/end_sec to fetch only a time window`,
     'agentic.tool.get_form_series': `- get_form_series: daily CTL/ATL/TSB for the last N days (fatigue and form trend)`,
     'agentic.tool.get_monthly_summary': `- get_monthly_summary: monthly training summary (long-term load trend)`,
-    'agentic.tool.get_athlete_profile': `- get_athlete_profile: athlete parameters (FTP/max HR/weight, including whether calibrated), user identity/goals, coaching mode, and time budget (weekly hours tier / available days / per-session cap)`,
+    'agentic.tool.get_athlete_profile': `- get_athlete_profile: athlete parameters (FTP/max HR/weight, including whether calibrated), user identity/goals, coaching mode, and time budget (weekly hours tier / available days, empty = unrestricted / per-session cap)`,
     'agentic.tool.update_rider_profile': `- update_rider_profile: update coaching mode and time budget (coach_mode/weekly_hours/available_days/session_max_min) — ⚠️ restate exactly what will be written and get the rider's explicit agreement before calling; omit fields the rider did not mention`,
     'agentic.tool.estimate_ftp': `- estimate_ftp: estimate FTP from ride history (with confidence)`,
     'agentic.tool.simulate_form': `- simulate_form: future load simulation — give a daily plan TSS to predict the CTL/ATL/TSB trend and risks ("what if I add X weekly", taper evaluation)`,
@@ -332,9 +333,10 @@ You are in the "training plan" conversation, answering questions about and adjus
     'profile.identity': `Identity: {v}`,
     'profile.goal': `Training goal: {v}`,
     'profile.mode': `Coaching mode: {v}`,
-    'profile.mode.amateur': `amateur (rider expectations and available time lead; success includes health and consistency, maintaining is a valid outcome)`,
-    'profile.mode.standard': `systematic training (progression by capability and goals; default)`,
+    'profile.mode.amateur': `amateur (rider expectations and available time lead; success includes health and consistency, maintaining is a valid outcome; unrealistic goals get a goal ladder, and two sessions a week during a busy season is legitimate)`,
+    'profile.mode.standard': `systematic training (progression by capability and goals)`,
     'profile.mode.unset': `Coaching mode: not set (ask the rider the first time a plan is generated; until then, plan under conservative amateur assumptions)`,
+    'profile.mode.unset.other': `Coaching mode: not set`,
     'profile.hours': `Weekly available time: {v}`,
     'profile.hours.lt3': `under 3 h`,
     'profile.hours.3to5': `3–5 h`,
@@ -378,7 +380,7 @@ The user has categorized this record as **{cat}**. Interpret it accordingly; if 
     'sec.plan.recent': `## Recent Activity List`,
     'sec.plan.existing': `## Handling an Existing Plan
 
-Before generating a new plan, fetch the current training plan with get_training_plan:
+Before generating a new plan, fetch the current plan with get_training_plan and check whether coaching mode is set with get_athlete_profile (if unset, ask first per the Amateur Coaching Mode skill):
 - If a plan is currently valid: treat this as a renewal by default (extend the cycle, adjust based on recent execution), and state at the top of your answer whether this is a "renewal" or a "replacement" and the key differences; replace wholesale only when the user explicitly asks to start over;
 - If only an expired plan exists: use its structure as a reference for the new cycle and state the key differences;
 - No plan: generate directly. If coaching mode is unset, first ask one question per the Amateur Coaching Mode skill (performance-oriented vs health/time-oriented) and still provide a conservative executable plan — do not stop and wait.`,
@@ -758,7 +760,8 @@ ${lines.join('\n')}`;
  * （复制提示词兜底也注入——与旧 Web 版返回的提示词一致，知识段对粘贴场景同样有益）；
  * athlete 为生效骑手参数（buildMetricGlossary 用）；
  * now 为当前时刻（buildDateSection 用，非法时该段省略）；
- * dossierSection 为个人训练档案段（buildDossierSection 输出，可空）。
+ * dossierSection 为个人训练档案段（buildDossierSection 输出，可空）；
+ * profilePurpose 透传给 buildProfileSection（plan 场景空档案也渲染「未设置 + 先询问」）。
  */
 function assemble(
   athlete: AthleteParams,
@@ -769,6 +772,7 @@ function assemble(
   lang: PromptLang,
   now: Date | string | number | null,
   dossierSection: string | null = null,
+  profilePurpose: 'plan' | 'other' = 'other',
 ): string {
   return [
     lang === 'en' ? TEXT.en.role : ROLE,
@@ -776,7 +780,7 @@ function assemble(
     ...[
       buildDateSection(now, lang),
       skills,
-      buildProfileSection(profile, lang),
+      buildProfileSection(profile, lang, profilePurpose),
       dossierSection,
       ...dataSections,
     ].filter(Boolean),
@@ -786,11 +790,17 @@ function assemble(
 
 /**
  * 用户背景与训练目标段（设置页维护，存训练库 settings 表 profile 行）。
- * 2026-10-17 起含教练模式与时间预算（业余教练模式的结构化字段）；全部字段为空时
- * 返回 null（不产生该段）。教练模式未设置但存在其他档案内容时明确写出「未设置 +
- * 首次生成计划先询问」，让模型不必从缺失字段推断。
+ * 2026-10-17 起含教练模式与时间预算（业余教练模式的结构化字段）。
+ * purpose='plan'（周期规划场景）：档案全空也渲染「教练模式：未设置 + 先询问」——
+ *   首次使用的用户正是空档案，不能只靠缺失字段让模型自己推断；其他场景全空返回 null。
+ * 未设置模式的措辞分场景：plan 带「先询问 + 保守业余」指令，其他场景只写中性的
+ * 「未设置」，避免把计划专用指令带进复盘/对比/减量/追问。
  */
-export function buildProfileSection(profile: PromptProfile | null, lang: PromptLang = 'zh'): string | null {
+export function buildProfileSection(
+  profile: PromptProfile | null,
+  lang: PromptLang = 'zh',
+  purpose: 'plan' | 'other' = 'other',
+): string | null {
   if (!profile) return null;
   const identity = String(profile.identity ?? '').trim();
   const goal = String(profile.goal ?? '').trim();
@@ -800,7 +810,10 @@ export function buildProfileSection(profile: PromptProfile | null, lang: PromptL
   const hours = profile.weekly_hours ?? null;
   const mode = profile.coach_mode ?? null;
   const sessionMax = profile.session_max_min ?? null;
-  if (!identity && !goal && !mode && !hours && !days.length && sessionMax == null) return null;
+  const hasContent = !!(identity || goal || mode || hours || days.length || sessionMax != null);
+  if (!hasContent && purpose !== 'plan') return null;
+  // 计划场景的空档案：只给未设置模式 + 先询问（无身份目标可评估，不附 profile.tail）
+  if (!hasContent) return `${TT(lang, 'profile.head')}\n\n${TT(lang, 'profile.mode.unset')}`;
 
   const lines: string[] = [];
   if (identity) lines.push(TT(lang, 'profile.identity', { v: identity }));
@@ -808,7 +821,7 @@ export function buildProfileSection(profile: PromptProfile | null, lang: PromptL
   if (mode) {
     lines.push(TT(lang, 'profile.mode', { v: TT(lang, `profile.mode.${mode}`) }));
   } else {
-    lines.push(TT(lang, 'profile.mode.unset'));
+    lines.push(TT(lang, purpose === 'plan' ? 'profile.mode.unset' : 'profile.mode.unset.other'));
   }
   if (hours) lines.push(TT(lang, 'profile.hours', { v: TT(lang, `profile.hours.${hours}`) }));
   if (days.length) {
@@ -1155,6 +1168,7 @@ export function buildPlanPrompt(
     lang,
     now,
     dossierSection,
+    'plan',
   );
 }
 

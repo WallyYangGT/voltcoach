@@ -239,7 +239,13 @@ const toolUpdateRiderProfile: ToolImpl = async (args, ctx, io) => {
   if (!keys.some((k) => args?.[k] !== undefined)) return errResult(t(lang, 'profile.tool.empty'));
   const patch: RiderProfilePatch = {};
   for (const k of keys) {
-    if (args?.[k] !== undefined) (patch as Record<string, unknown>)[k] = args[k];
+    if (args?.[k] === undefined) continue;
+    let v = args[k];
+    // 清空语义（工具 schema 不能表达 null，用哨兵值）：空串清模式/时长档，0 清单次上限；
+    // 可用日的空数组本身就是「不限/清空」，直接交给 core/profile 校验。
+    if ((k === 'coach_mode' || k === 'weekly_hours') && v === '') v = null;
+    else if (k === 'session_max_min' && v === 0) v = null;
+    (patch as Record<string, unknown>)[k] = v;
   }
   const updated = await io.setRiderProfile(patch, lang);
   return toResult(

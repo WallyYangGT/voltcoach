@@ -120,6 +120,18 @@ test('profile 段：教练模式与时间预算渲染（zh/en，可用日去重�
   assert.match(en, /Per-session time cap: 90 min/);
   // 只有教练字段、没有身份目标时同样成段
   assert.match(buildProfileSection({ coach_mode: 'standard' }, 'zh'), /教练模式：系统训练/);
+  // 场景化：plan 全空也渲染「未设置 + 先询问」，其他场景全空返回 null、未设置措辞中性
+  const empty = { identity: '', goal: '' };
+  assert.equal(buildProfileSection(empty, 'zh', 'other'), null);
+  assert.match(buildProfileSection(empty, 'zh', 'plan'), /教练模式：未设置（首次生成计划时先询问用户/);
+  assert.match(
+    buildProfileSection({ identity: '上班族' }, 'zh', 'other'),
+    /教练模式：未设置\n/,
+  );
+  assert.doesNotMatch(
+    buildProfileSection({ identity: '上班族' }, 'zh', 'other'),
+    /首次生成计划时先询问/,
+  );
 });
 
 test('周期规划/减量/对比提示词：数据段与固化问题齐全', () => {
@@ -437,7 +449,7 @@ test('复盘提示词注入档案段（新末参，缺省不影响旧调用）',
   assert.ok(withDossier.indexOf('个人训练档案') < withDossier.indexOf('## 训练数据'));
 });
 
-test('agentic 工具指引段：18 个工具与 7 条规则（含 FTP 更新/档案/训练计划双工具）', () => {
+test('agentic 工具指引段：19 个工具与 7 条规则（含 FTP 更新/档案/训练计划双工具）', () => {
   const s = buildAgenticSection('zh');
   for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'update_rider_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'get_training_plan', 'update_training_plan', 'adjust_plan_sessions', 'set_power_flag', 'recalibrate_activity_power']) {
     assert.ok(s.includes(`- ${name}：`), name);
@@ -668,6 +680,17 @@ test('对话系统段：agentic 关闭时无工具指引与记忆段', () => {
 test('周期规划提示词：既有计划处理段 + plan-json 输出格式段（双语，v2 计划载体）', () => {
   const data = { months: [], formSeries: [], recentActivities: [] };
   const zh = buildPlanPrompt(data, ATHLETE, null, null, 'zh', new Date('2026-03-26T10:00:00'));
+  // 空档案（首次使用）也必须拿到「教练模式未设置 + 先询问」的确定性信号
+  const emptyProfileZh = buildPlanPrompt(
+    data,
+    ATHLETE,
+    { identity: '', goal: '' },
+    null,
+    'zh',
+    new Date('2026-03-26T10:00:00'),
+  );
+  assert.match(emptyProfileZh, /教练模式：未设置（首次生成计划时先询问用户/);
+  assert.match(zh, /用 get_athlete_profile 确认教练模式是否已配置/);
   assert.match(zh, /## 既有计划处理/);
   assert.match(zh, /get_training_plan/);
   assert.match(zh, /「续订」还是「替换」/);

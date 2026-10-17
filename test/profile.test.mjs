@@ -13,6 +13,7 @@ const {
   emptyProfile,
   isProfileEmpty,
   normalizeProfilePatch,
+  parseStoredProfile,
 } = await import('../src/core/profile.ts');
 
 test('空档案：全空判定 + 首次局部更新', () => {
@@ -117,4 +118,57 @@ test('身份/目标：trim、长度上限、类型校验（双语消息）', () 
     () => normalizeProfilePatch(emptyProfile(), { session_max_min: 700 }, 'en'),
     /session_max_min must be an integer from 10–600/,
   );
+});
+
+test('NaN/Infinity/字符串与 null patch：非法值报错，null/undefined patch 原样返回', () => {
+  for (const bad of [Number.NaN, Infinity, '90']) {
+    assert.throws(
+      () => normalizeProfilePatch(emptyProfile(), { session_max_min: bad }),
+      /session_max_min 需为 10–600 的整数/,
+    );
+  }
+  const current = normalizeProfilePatch(emptyProfile(), { identity: '上班族' });
+  assert.deepEqual(normalizeProfilePatch(current, null), current);
+  assert.deepEqual(normalizeProfilePatch(current, undefined), current);
+});
+
+test('合并结果只含六个业务字段（不泄漏 configured 派生值到 settings JSON）', () => {
+  // 生产路径的 current 是 db 的 RiderProfile（带 configured）；展开会把派生值写进备份
+  const merged = normalizeProfilePatch(
+    { ...emptyProfile(), identity: '上班族', configured: true },
+    { coach_mode: 'amateur' },
+  );
+  assert.deepEqual(Object.keys(merged).sort(), [
+    'available_days',
+    'coach_mode',
+    'goal',
+    'identity',
+    'session_max_min',
+    'weekly_hours',
+  ]);
+});
+
+test('容错解析旧行/损坏行/未知值：缺字段按空、非法枚举归 null、可用日过滤排序', () => {
+  // 旧版本只有 identity/goal
+  assert.deepEqual(parseStoredProfile({ identity: '上班族', goal: '200km' }), {
+    ...emptyProfile(),
+    identity: '上班族',
+    goal: '200km',
+  });
+  // 损坏行/非对象
+  assert.deepEqual(parseStoredProfile(null), emptyProfile());
+  assert.deepEqual(parseStoredProfile('broken'), emptyProfile());
+  // 未知枚举/越界值归 null；可用日过滤非法项并去重升序
+  const parsed = parseStoredProfile({
+    coach_mode: 'pro',
+    weekly_hours: '2h',
+    session_max_min: 900,
+    available_days: [5, 2, 2, 9, 0, '3'],
+  });
+  assert.equal(parsed.coach_mode, null);
+  assert.equal(parsed.weekly_hours, null);
+  assert.equal(parsed.session_max_min, null);
+  assert.deepEqual(parsed.available_days, [2, 5]);
+  // 未来未知字段不影响已知字段
+  assert.equal(parseStoredProfile({ coach_mode: 'amateur', future_field: 1 }).coach_mode, 'amateur');
 });

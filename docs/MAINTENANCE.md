@@ -10,7 +10,8 @@
 app/                    Expo Router 文件路由（底部四 tab + 详情/计划/会话/数据管理/导入/关于等页面）
 src/
   core/                 ★ 纯函数算法层：解析、指标、FTP、规划、去重、报告标题、
-                        训练计划（结构化课表校验/周聚合/负荷推演）——
+                        训练计划（结构化课表校验/周聚合/负荷推演）、骑手档案
+                        （教练模式与时间预算校验/合并）——
                         不 import 任何 RN/Expo 模块，node:test 直接覆盖
   db/                   训练库（expo-sqlite + SQLCipher；开库后第一条语句必须是 PRAGMA key）
   records-store.ts      逐秒数据 gzip 文件落盘/读取（不进 SQLite，与库行一一对应）
@@ -46,6 +47,7 @@ assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-
 - **AI 报告标题在渲染侧拼、不落库**（落库会把标题冻结在生成时的语言）；数据源 = 活动行 + records 首帧时间戳 + created_at，带多级降级模板。改动训练数据的三处入口（导入/删除/合并）都必须清标题缓存。
 - **个人训练档案（v2）**：`src/core/dossier` 以**最新骑行日为锚**聚合 90 天峰功率 PB/爬坡踏频画像/强度结构/8 周负荷四组基线（确定性计算，零 AI token），缓存于 settings 表 `dossier` 行（指纹 = 活动总数 + FTP，miss 自愈重建）；导入/删除/合并/FTP 变更/功率标记/重算各触发点 fire-and-forget 重建。档案段注入四场景报告与对话（空库整段省略）。
 - **结构化训练计划（v2）**：周期规划（plan 场景）报告在正文末尾输出 ```plan-json 围栏块，生成完成后由编排层**提取 → create 档确定性校验 → 落库**（settings 表 `training_plan` 当前 + `training_plan_history` 历史双键，JSON 行带 shape 演进字段，**不动 SCHEMA_VERSION**；历史上限 10 版）。合理性阈值（质量课间隔 ≥48h 日粒度、每周休息日、每 3–4 周减量周）以 `PLAN_VALIDATION` 为代码单源（与技能库 05 周计划节奏口径一致）：**生成时只警告**（随版本存档展示），**会话调整时硬拒**——调整必须经 `update_training_plan` 整体重发并过 adjust 档校验，报告生成场景拒写计划（会话与报告的 source 都可能是 `'plan'`，以显式 chat 标记区分）。计划查询是通用工具 `get_training_plan`（任意场景按需调用），会话锚定 `ai_chats.mode='plan'`（不属任何活动、跨版本存活）；有效期判定/过期提示/周聚合/负荷推演全在 `src/core/training-plan` 确定性层，「今天」一律走 `localDay` 本地日历日（不新增 UTC 日口径）。
+- **教练模式与时间预算（业余教练模式，2026-10）**：骑手档案除身份/目标外，存 `coach_mode`（未设置 / amateur 业余健康导向 / standard 系统训练）、`weekly_hours` 区间档（<3 / 3–5 / 5–8 / 8h+）、`available_days`（1=周一…7=周日，空=未设置/不限）、`session_max_min`（10–600）；全部在 settings 表 `profile` JSON 行，**不加列、不动 SCHEMA_VERSION**（随备份包整体迁移，旧行缺字段容错为空）。校验/合并单一来源是 `src/core/profile`（设置页与 AI 工具共用）；AI 经 `update_rider_profile` 写入（仅对话放行，须先复述并获用户确认，报告生成场景拒写），`get_athlete_profile` 回读。模式未设置时，plan 场景提示词无条件注入「未设置 + 首次生成计划先询问」，其他场景只写中性的「未设置」；业余口径的知识层在技能 `10-amateur-coach`（时间预算主导、健康成功定义、目标阶梯、活动日减量、单锚点分析），与水平校准（08）两维取交集。
 - **记忆分层（v2）**：`ai_memories.scope`——`short` 短期记忆**过 14 天或新增 5 次活动先到即失效**（判定单一事实源在 `src/core/memory.ts`，注入期过滤、不物理删）；`long` 默认长期。报告生成完成后编排层强制跑一次记忆回顾轮（仅 `save_memory` 单工具的小 agent 循环，失败静默不影响报告），不依赖模型在生成中自觉补记。`category='strategy'`（与教练商定的训练策略）单独成「既定结论」权威段置顶注入，规则要求分析以其为前提、修订须显式声明。
 - **功率可信度标记（v2）**：`activities.power_flagged`（详情页开关或 AI `set_power_flag` 工具，可逆）——被标记骑行从档案一切功率派生基线排除（峰功率/分区/爬坡/踏频风格/周 TSS），**心率漂移与时长仍采信**；`recalibrate_activity_power` 工具按系数（夹逼 0.5–1.5）缩放重算单骑全部功率派生指标并写回，逐秒原始数据不改写（重导原 FIT 可回退）。
 - **云同步行为口径（多平台，2026-10 起）**：平台适配层在 `src/services/syncProviders.ts`（凭据存 SecureStore、会话缓存/失效自愈、端点探测），协议客户端在 `src/sync/`（`onelap` / `igpsport` / `wahoo` + 平台无关的 `common.ts`），编排层 `src/services/sync.ts` 只认注册表与 `SyncRunner` 五动作（start/listSince/getFileRef/download/recover）。**同一时间只有一个生效平台**（settings 的 `sync` 行 `provider` 字段，单账户互斥）；状态按平台分槽（`providers{<id>: {last_sync_at, last_counts}}`），M4 的单平台扁平行由 `src/sync/state.ts` 的 `normalizeSyncState` 自动归一化到顽鹿槽位（老用户水位线不丢），切换平台再切回不重拉历史。
