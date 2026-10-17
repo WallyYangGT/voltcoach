@@ -66,8 +66,15 @@ function tokenSet(text: string): { bigrams: Set<string>; words: Set<string> } {
   return { bigrams, words };
 }
 
+/** 查询侧分词结果（整份 query 只算一次，避免每条记忆重复分词长报告） */
+type TokenBag = ReturnType<typeof tokenSet>;
+
 /** 打分单个记忆（确定性；created_at 缺失/非法时时间分与重叠时延分不生效） */
-function scoreMemory(mem: PromptMemory, opts: Required<Pick<RankOptions, 'mode' | 'query' | 'nowMs'>>): RankedMemory {
+function scoreMemory(
+  mem: PromptMemory,
+  opts: Required<Pick<RankOptions, 'mode' | 'nowMs'>>,
+  queryTokens: TokenBag | null,
+): RankedMemory {
   let score = 0;
   if (mem.category === 'strategy') score += 1000;
   const affinity = MODE_CATEGORY_AFFINITY[opts.mode];
@@ -83,12 +90,11 @@ function scoreMemory(mem: PromptMemory, opts: Required<Pick<RankOptions, 'mode' 
     else if (ageDays < 90) score += 1;
   }
 
-  if (opts.query) {
+  if (queryTokens) {
     const { bigrams, words } = tokenSet(mem.content);
-    const q = tokenSet(opts.query);
     let hits = 0;
-    for (const g of q.bigrams) if (bigrams.has(g)) hits++;
-    for (const w of q.words) if (words.has(w)) hits++;
+    for (const g of queryTokens.bigrams) if (bigrams.has(g)) hits++;
+    for (const w of queryTokens.words) if (words.has(w)) hits++;
     score += Math.min(8, hits);
   }
   return { mem, score, timeMs: timeMs != null && Number.isFinite(timeMs) ? timeMs : null };
@@ -105,14 +111,17 @@ export function rankMemories(
 ): PromptMemory[] {
   const all = memories ?? [];
   if (!all.length) return [];
-  const full: Required<Pick<RankOptions, 'mode' | 'query' | 'nowMs'>> & Pick<RankOptions, 'topK' | 'maxChars'> = {
+  const full: Required<Pick<RankOptions, 'mode' | 'nowMs'>> & Pick<RankOptions, 'topK' | 'maxChars'> = {
     mode: opts.mode ?? '',
-    query: opts.query ?? '',
     nowMs: opts.nowMs ?? Date.now(),
     topK: opts.topK,
     maxChars: opts.maxChars,
   };
-  const ranked = all.map((m) => scoreMemory(m, full));
+  // 相关度参照文本可能是一整份报告 prompt（最长 ~56k）：只取前 2000 字分词，
+  // 且整份 query 只分词一次（逐记忆重复分词会让长报告场景退化成 O(n×m)）
+  const queryText = (opts.query ?? '').slice(0, 2000);
+  const queryTokens = queryText ? tokenSet(queryText) : null;
+  const ranked = all.map((m) => scoreMemory(m, full, queryTokens));
 
   const strategies = ranked.filter((r) => r.mem.category === 'strategy');
   const rest = ranked
