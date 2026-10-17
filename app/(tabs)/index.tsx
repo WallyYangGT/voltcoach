@@ -34,9 +34,10 @@ import {
   ActivityListItem,
   getAiConfig,
   getAiFtpUpdate,
-  getEffectiveAthlete,
+  getAthleteState,
   getProfile,
   listActivities,
+  listActivitiesInRange,
   monthlySummary,
   recentFormDaily,
   type AiFtpUpdateSnapshot,
@@ -62,6 +63,8 @@ interface HomeData {
   aiFtpUpdate: AiFtpUpdateSnapshot | null;
   /** 教练模式：amateur 时显示 WHO 健康活动量瓦片（未设置/standard 不显示） */
   coachMode: CoachMode | null;
+  /** FTP 是否已校准（未校准则健康瓦片不采信 IF，按保守口径估计） */
+  athleteConfigured: boolean;
 }
 
 export default function HomeScreen() {
@@ -81,28 +84,44 @@ export default function HomeScreen() {
 
   const load = useCallback(async () => {
     try {
-      const [athlete, daily, monthly, all, cfg, aiFtpUpdate, prof] = await Promise.all([
-        getEffectiveAthlete(),
+      const today = localDay();
+      // 先取教练模式：只有业余模式才查近 9 天活动（健康瓦片）。
+      // 避免 standard/未设置用户为一张不显示的瓦片多读 records 首帧。
+      const prof = await getProfile().catch(() => null);
+      const isAmateur = prof?.coach_mode === 'amateur';
+      const [athleteState, daily, monthly, recent, health, cfg, aiFtpUpdate] = await Promise.all([
+        getAthleteState(),
         recentFormDaily(90),
         monthlySummary(6),
-        listActivities(30),
+        listActivities(6),
+        isAmateur
+          ? listActivitiesInRange(addDaysStr(today, -9), addDaysStr(today, 1)).catch(() => [])
+          : Promise.resolve([] as ActivityListItem[]),
         getAiConfig(),
         getAiFtpUpdate(),
-        getProfile().catch(() => null), // 档案异常不拖垮首页；按未设置模式处理
       ]);
       setData({
-        athlete,
+        athlete: athleteState.athlete,
+        athleteConfigured: athleteState.configured,
         daily,
         monthly,
-        recent: all.slice(0, 6),
+        recent,
         aiFtpUpdate,
         coachMode: prof?.coach_mode ?? null,
       });
-      setHealthRows(all);
+      setHealthRows(health);
       setConfigured(cfg.configured);
     } catch (e) {
       console.warn('仪表盘加载失败:', e);
-      setData({ athlete: ATHLETE, daily: [], monthly: [], recent: [], aiFtpUpdate: null, coachMode: null });
+      setData({
+        athlete: ATHLETE,
+        athleteConfigured: false,
+        daily: [],
+        monthly: [],
+        recent: [],
+        aiFtpUpdate: null,
+        coachMode: null,
+      });
       setHealthRows([]);
     }
   }, []);
@@ -116,22 +135,35 @@ export default function HomeScreen() {
 
   const last = data && data.daily.length ? data.daily[data.daily.length - 1] : null;
   const today = localDay();
-  // 最近训练行日期按本地日历日展示（双口径统一，与训练列表/报告标题同源同口径）
-  const dateLabels = useRideDateLabels((data?.recent ?? []).map((r) => r.file_name));
-  // 业余模式健康瓦片：近 7 天活动的本地日标签（多取 1 天余量覆盖时区边界），
-  // 标签未解析完成时回退存储日（与下方 trainedToday 同款回退）
-  const healthCandidates = (healthRows ?? []).filter((r) => r.date >= addDaysStr(today, -8));
-  const healthLabels = useRideDateLabels(healthCandidates.map((r) => r.file_name));
-  const healthSummary = summarizeWeeklyActivity(
-    healthCandidates.map((r) => ({
-      date: healthLabels.get(r.file_name) ?? r.date,
-      duration_sec: r.duration_sec,
-      intensity_factor: r.intensity_factor,
-      tss: r.tss,
-      category: r.category,
-    })),
-    today,
-  );
+  const isAmateur = data?.coachMode === 'amateur';
+  // 最近训练行日期按本地日历日展示（双口径统一，与训练列表/报告标题同源同口径）；
+  // 业余模式下把健康瓦片候选文件名合并进同一次标签解析（避免两条 hook 重复读 records）
+  const healthCandidates = isAmateur
+    ? healthRows.filter((r) => r.date >= addDaysStr(today, -9))
+    : [];
+  const labelNames = [
+    ...new Set([
+      ...(data?.recent ?? []).map((r) => r.file_name),
+      ...healthCandidates.map((r) => r.file_name),
+    ]),
+  ];
+  const dateLabels = useRideDateLabels(labelNames);
+  // 业余模式健康瓦片：读档失败/未校准 FTP 时不采信 IF（按保守口径估计）
+  const healthSummary = isAmateur
+    ? summarizeWeeklyActivity(
+        healthCandidates.map((r) => ({
+          date: dateLabels.get(r.file_name) ?? r.date,
+          duration_sec: r.duration_sec,
+          intensity_factor: r.intensity_factor,
+          tss: r.tss,
+          category: r.category,
+          power_flagged: r.power_flagged,
+        })),
+        today,
+        7,
+        { powerTrusted: data?.athleteConfigured !== false },
+      )
+    : null;
   // 今天是否已练（今日建议卡免扰档输入）：最近几行里有本地日=今天的骑行即算；
   // 行级本地日的唯一瞬间源是 records 首帧（dateLabels 正是它的换算），标签未解析
   // 完成时回退存储 UTC 日比对（§24 展示层同款回退）
@@ -162,6 +194,10 @@ export default function HomeScreen() {
 
       {/* AI 调整披露条（U1 收尾④：当前版来自会话调整时显示摘要 + 撤销入口） */}
       <PlanAdjustBanner />
+
+      {/* 业余模式健康活动量瓦片（WHO 150–300min/周）：作为首要成功指标排在负荷仪表盘之前；
+          standard/未设置不显示，避免与 CTL/TSS 口径叠加噪声 */}
+      {isAmateur && healthSummary && <WeeklyActivityTile summary={healthSummary} />}
 
       <View style={styles.titleRow}>
         <Text style={styles.title}>{t('dash.title')}</Text>
@@ -211,9 +247,6 @@ export default function HomeScreen() {
         currentFtp={data?.athlete.ftp_watts ?? null}
         onChanged={load}
       />
-
-      {/* 业余模式健康活动量瓦片（WHO 150–300min/周；standard/未设置不显示，避免叠加噪声） */}
-      {data?.coachMode === 'amateur' && <WeeklyActivityTile summary={healthSummary} />}
 
       {/* FTP 科学估算面板（展开时渲染，采纳写回后经 onApplied 刷新 hero） */}
       {ftpOpen && <FtpEstimatePanel onApplied={load} />}

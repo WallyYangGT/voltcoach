@@ -16,6 +16,7 @@ const base = {
   equivalent_min: 300,
   target_min: 150,
   extra_min: 300,
+  power_trusted: true,
 };
 
 describe('WeeklyActivityTile', () => {
@@ -24,9 +25,11 @@ describe('WeeklyActivityTile', () => {
     expect(screen.getByText('近 7 天健康活动量')).toBeTruthy();
     expect(screen.getByText('已达成')).toBeTruthy();
     expect(screen.getByText('目标 150 分钟 · 额外收益线 300 分钟')).toBeTruthy();
-    expect(screen.getByText('含高强度 90 分钟（已按 2 倍折算）')).toBeTruthy();
+    expect(screen.getByText('高强度原始 90 分钟（等效 180 分钟中等）')).toBeTruthy();
     expect(screen.getByText('另有轻松骑 30 分钟未计入')).toBeTruthy();
-    expect(screen.getByTestId('weekly-activity-value')).toBeTruthy();
+    expect(screen.getByTestId('weekly-activity-value')).toHaveTextContent(
+      '300 分钟（中等强度等效）',
+    );
   });
 
   it('未达成目标：不显示已达成；无高强度/轻松分钟时不渲染对应行', async () => {
@@ -36,8 +39,29 @@ describe('WeeklyActivityTile', () => {
       />,
     );
     expect(screen.queryByText('已达成')).toBeNull();
-    expect(screen.queryByText(/含高强度/)).toBeNull();
+    expect(screen.queryByText(/高强度原始/)).toBeNull();
     expect(screen.queryByText(/另有轻松骑/)).toBeNull();
+    expect(screen.getByTestId('weekly-activity-value')).toHaveTextContent(
+      '60 分钟（中等强度等效）',
+    );
     expect(screen.getByText('目标 150 分钟 · 额外收益线 300 分钟')).toBeTruthy();
+  });
+
+  it('149 分钟未达成、150 分钟达成（边界）', async () => {
+    const under = await renderWithProviders(
+      <WeeklyActivityTile summary={{ ...base, moderate_min: 149, vigorous_min: 0, light_min: 0, equivalent_min: 149 }} />,
+    );
+    expect(under.queryByText('已达成')).toBeNull();
+    const at = await renderWithProviders(
+      <WeeklyActivityTile summary={{ ...base, moderate_min: 150, vigorous_min: 0, light_min: 0, equivalent_min: 150 }} />,
+    );
+    expect(at.getByText('已达成')).toBeTruthy();
+  });
+
+  it('FTP 未校准：显示估计口径披露', async () => {
+    const screen = await renderWithProviders(
+      <WeeklyActivityTile summary={{ ...base, power_trusted: false }} />,
+    );
+    expect(screen.getByText('FTP 未校准：功率强度按保守口径估算，校准后更准确')).toBeTruthy();
   });
 });

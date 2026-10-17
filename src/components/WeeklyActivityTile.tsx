@@ -36,10 +36,15 @@ export function WeeklyActivityTile({ summary }: { summary: WeeklyActivitySummary
         {t('dash.who.target', { target: summary.target_min, extra: summary.extra_min })}
       </Text>
       {summary.vigorous_min > 0 && (
-        <Text style={styles.meta}>{t('dash.who.vigorous', { min: summary.vigorous_min })}</Text>
+        <Text style={styles.meta}>
+          {t('dash.who.vigorous', { min: summary.vigorous_min, equiv: summary.vigorous_min * 2 })}
+        </Text>
       )}
       {summary.light_min > 0 && (
         <Text style={styles.meta}>{t('dash.who.light', { min: summary.light_min })}</Text>
+      )}
+      {!summary.power_trusted && (
+        <Text style={styles.meta}>{t('dash.who.uncalibrated')}</Text>
       )}
       <Text style={styles.note}>{t('dash.who.note')}</Text>
     </View>
