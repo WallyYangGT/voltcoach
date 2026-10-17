@@ -160,13 +160,52 @@ export const AI_CONFIG: AiConfig = {
 // Agentic 工具调用参数（M3 src/ai / src/tools）
 export const AGENTIC = {
   max_rounds: 8, // 最大工具调用轮数，超出后强制模型直接作答（M5 扩到 8：估算→更新 FTP→重算数次训练→汇总作答）
-  tool_result_max_chars: 16000, // 单个工具结果截断上限（超出附"（结果已截断）"标记）；2026-10 由 4000 放宽 4×——start_sec/end_sec 窄窗逐秒核对在 4000 下也不可用（60s 全秒窗约 7k 字符），16k ≈ 4-8k tokens，BYOK 模型上下文可承受（roadmap 截断放宽项）
+  tool_result_max_chars: 16000, // 单个工具结果上限（超出走 compactJsonToLimit 结构化降级为合法 JSON，不再是尾部硬切）；2026-10 由 4000 放宽 4×——start_sec/end_sec 窄窗逐秒核对在 4000 下也不可用（60s 全秒窗约 7k 字符），16k ≈ 4-8k tokens，BYOK 模型上下文可承受
   records_max_points: 600, // get_activity_records 时序抽稀点数上限
   list_limit: 50, // list_activities 返回条数上限
   form_max_days: 120, // get_form_series 天数上限
   monthly_max: 24, // get_monthly_summary 月数上限
   simulate_max_days: 60, // simulate_form 推演天数上限（紧凑数组输出不超截断线）
+  // agent 循环内累积消息（含逐轮重发的 tool 结果）的请求体预算：超限把更旧轮的
+  // tool 结果降为占位 JSON（compactAgentHistory），防 8 轮 × 16k 字符全量重发
+  // （架构评审 E1：最坏 ~128k 字符的历史复利）。首条 prompt 与最近几轮原样保留。
+  agent_history_max_chars: 32000,
 };
+
+// ============ 上下文装配预算（E1 完整解，2026-10-17；字符口径与 tool_result_max_chars 一致） ============
+// 单位是字符（≈ token 的 2-4 倍），不做 tokenizer 依赖。预算超限时的降级次序见
+// src/prompts/context.ts 的 assembleBudgetedSections（优先级低/声明 optional 的段先丢，
+// 可截段走 degrade() 按边界截断；数据 JSON 段不可截断）。
+export const CONTEXT_BUDGET = {
+  /** 单次请求 prompt 软上限（不含工具 schema 的常量成本） */
+  request_max_chars: 70000,
+  /** 对话系统段上限（技能/档案/记忆/摘要都在其内） */
+  system_max_chars: 56000,
+  /** 报告基础 prompt（createReportDraft 冻结落库前）上限 */
+  report_base_max_chars: 56000,
+  /** 报告基础段 + agentic 指引 + 记忆段的总量上限 */
+  report_total_max_chars: 66000,
+  /** 专业知识库段上限（zh 实测 ~14.6k / en ~40k，en 仍完整；未来新增技能的增长闸门） */
+  skills_max_chars: 44000,
+  /** follow_up 内联报告正文上限（超出走 compactReportForPrompt 首末章瘦身） */
+  report_inline_max_chars: 16000,
+  /** follow_up 训练 summary JSON 上限；超出第 1 轮即直接降 headline（不再区分轮次） */
+  summary_json_max_chars: 6000,
+  /** 注入记忆条数上限（db 层 listMemories 取全量有效记忆，rankMemories 在此预算内挑选） */
+  memory_top_k: 12,
+  /** 注入记忆段字符预算（12 条 × ~500 字全满约 6k，预算兜住组合爆炸） */
+  memory_max_chars: 4000,
+  /** 对话窗口保留的最近轮数（1 轮 = 一次用户提问 + 一次教练回答） */
+  history_recent_turns: 6,
+  /** 对话窗口保留的最近历史字符上限（与轮数取更严者；最新一轮永远保留） */
+  history_recent_chars: 12000,
+  /** 模型滚动摘要的输出上限（超出截断，摘要只是定位性回顾不需要全文） */
+  chat_summary_output_max_chars: 1200,
+  /** 被挤出窗口的旧消息体量达到该字符数才值得调一次模型摘要（否则用确定性 digest，零成本） */
+  chat_summary_trigger_chars: 4000,
+  /** 摘要调用的输入消息体量上限（逐条截 1500 字后再总截，防摘要请求本身爆炸） */
+  chat_summary_input_max_chars: 16000,
+} as const;
 
 // 未来负荷推演风险阈值（M3 src/planning）
 export const FORM_SIMULATION = {
