@@ -17,7 +17,7 @@
 ## First-Time Question and Mode Changes
 
 - When coaching mode is unset and the rider asks for a plan for the first time: ask in one or two plain sentences at the top of the report (e.g. "Do you want this arranged around performance, or around health and the time you have? Roughly how many hours a week, and which days work?"), and **still produce a reasonable plan under conservative amateur assumptions** so the rider has something to discuss. Do not stop and wait.
-- After the rider answers, record the mode and constraints with `save_memory` (category='preference' for the mode preference, category='schedule' for weekly hours and available days) and say it is stored as conversation memory for now. Never claim to have written fields that do not exist yet.
+- After the rider answers, call `update_rider_profile` to write the coaching mode and time budget (coach_mode / weekly_hours / available_days / session_max_min); before calling, restate what will be written and get confirmation, and omit fields the rider did not mention. If the conversation does not support tool calls (copy-prompt mode or a tools-less endpoint), ask the rider to fill it in on the Profile page or use it for this conversation only.
 - When the rider's situation changes under an existing mode (e.g. "work is busy, only 2 hours a week now"), restate from→to, get confirmation, then update the memory. Never switch modes on your own.
 
 ## Goal Realism Protocol (No Hard Refusal)

@@ -70,6 +70,9 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
     // 当前时间：追问常涉及「今天感觉如何/接下来怎么练」，先锚定日期基准
     const nowSection = buildDateSection(now, lang);
     if (nowSection) s += `\n\n${nowSection}`;
+    // 用户背景（含教练模式与时间预算）：追问同样受业余口径约束（2026-10-17）
+    const profileSection = buildProfileSection(profile, lang);
+    if (profileSection) s += `\n\n${profileSection}`;
     // 报告正文：追问以报告内容为锚（超限瘦身为首末章，中间章仅保留标题）
     if (input.reportMarkdown)
       s += `\n\n${t(lang, 'srv.report_body')}\n${compactReportForPrompt(input.reportMarkdown, lang)}`;

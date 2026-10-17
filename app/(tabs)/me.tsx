@@ -19,9 +19,10 @@ import {
 } from '@/ai/providerPresets';
 import { SyncCard } from '@/components/SyncCard';
 import { KeepAliveCard } from '@/components/KeepAliveCard';
+import { CoachProfileControls } from '@/components/CoachProfileControls';
 import type { FormSnapshot } from '@/core/form';
 import { localDay } from '@/core/local-day';
-import type { AthleteParams } from '@/core/settings';
+import type { AthleteParams, CoachMode, WeeklyHoursTier } from '@/core/settings';
 import { computeForm, getAiConfig, getAthleteState, getProfile, rebuildDossierQuietly, setAiConfig, setAthlete, setProfile } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
@@ -45,6 +46,11 @@ export default function MeScreen() {
   const [weight, setWeight] = useState('');
   const [identity, setIdentity] = useState('');
   const [goal, setGoal] = useState('');
+  // 教练模式与时间预算（业余教练模式 P2；随档案一起保存）
+  const [coachMode, setCoachMode] = useState<CoachMode | null>(null);
+  const [weeklyHours, setWeeklyHours] = useState<WeeklyHoursTier | null>(null);
+  const [availableDays, setAvailableDays] = useState<number[]>([]);
+  const [sessionMax, setSessionMax] = useState('');
   const [savedFlash, setSavedFlash] = useState<'athlete' | 'profile' | 'ai' | null>(null);
   // 「已保存 ✓」flash 的定时器：组件卸载时清理（否则卸载后 setState）
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -89,6 +95,10 @@ export default function MeScreen() {
       setWeight(String(state.athlete.weight_kg));
       setIdentity(prof.identity);
       setGoal(prof.goal);
+      setCoachMode(prof.coach_mode ?? null);
+      setWeeklyHours(prof.weekly_hours ?? null);
+      setAvailableDays(prof.available_days ?? []);
+      setSessionMax(prof.session_max_min == null ? '' : String(prof.session_max_min));
       if (!aiDraftLoadedRef.current) {
         aiDraftLoadedRef.current = true;
         // AI 表单草稿从生效值重灌（key 回显明文，口径同 Web 版本地单用户应用）
@@ -135,13 +145,30 @@ export default function MeScreen() {
   const saveProfile = async () => {
     setSavingProfile(true);
     try {
-      await setProfile({ identity, goal }, lang);
+      await setProfile(
+        {
+          identity,
+          goal,
+          coach_mode: coachMode,
+          weekly_hours: weeklyHours,
+          available_days: availableDays,
+          session_max_min: sessionMax.trim() === '' ? null : Number(sessionMax),
+        },
+        lang,
+      );
       flashSaved('profile');
     } catch (e) {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
     } finally {
       setSavingProfile(false);
     }
+  };
+
+  /** 可骑日多选（升序存储由 core/profile 校验层保证） */
+  const toggleDay = (day: number) => {
+    setAvailableDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort((a, b) => a - b),
+    );
   };
 
   // AI 服务配置保存：key 清空 = 清除密钥（退化为复制提示词模式，旧版同语义）
@@ -300,6 +327,16 @@ export default function MeScreen() {
           onChangeText={setGoal}
           placeholder={t('set.goal.placeholder')}
           style={styles.input}
+        />
+        <CoachProfileControls
+          coachMode={coachMode}
+          weeklyHours={weeklyHours}
+          availableDays={availableDays}
+          sessionMax={sessionMax}
+          onCoachModeChange={setCoachMode}
+          onWeeklyHoursChange={setWeeklyHours}
+          onToggleDay={toggleDay}
+          onSessionMaxChange={setSessionMax}
         />
         <View style={styles.saveRow}>
           <Button

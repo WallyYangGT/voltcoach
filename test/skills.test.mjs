@@ -75,9 +75,9 @@ test('业余教练技能：关键口径钉死 + zh/en 成对', () => {
   const en = SKILL_FILES.en.find((f) => f.name === '10-amateur-coach.en.md');
   assert.ok(zh, '缺少 10-amateur-coach.md');
   assert.ok(en, '缺少 10-amateur-coach.en.md');
-  // P1 不承诺尚不存在的工具（前向工具引用只能随 P2 一起加回来）
-  assert.ok(!zh.content.includes('update_rider_profile'));
-  assert.ok(!en.content.includes('update_rider_profile'));
+  // P2 起模式与时间预算写入结构化档案（工具真实存在）
+  assert.ok(zh.content.includes('update_rider_profile'));
+  assert.ok(en.content.includes('update_rider_profile'));
   // 关键行为：两维取交集、健康锚点、目标阶梯分窗、首次询问不阻塞、
   // 活动日长骑是上限、记忆兜底、入门不做全力测试、质量课 ≤2
   for (const phrase of [
@@ -86,7 +86,7 @@ test('业余教练技能：关键口径钉死 + zh/en 成对', () => {
     '12 周分两个 6 周计划窗落地',
     '不要停下来等回答',
     '60–75% 是上限而非目标',
-    'save_memory',
+    'update_rider_profile',
     '不引导新手做 20 分钟全力测试',
     '周质量课建议 ≤2',
   ]) {
@@ -98,7 +98,7 @@ test('业余教练技能：关键口径钉死 + zh/en 成对', () => {
     'Deliver the 12 weeks as two 6-week plan windows',
     'Do not stop and wait',
     'is a ceiling, not a target',
-    'save_memory',
+    'update_rider_profile',
     'Never push beginners into a 20-minute all-out test',
     'about 2 or fewer',
   ]) {

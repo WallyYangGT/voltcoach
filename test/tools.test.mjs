@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 const { toolDefs } = await import('../src/tools/defs.ts');
 const { createExecuteTool } = await import('../src/tools/execute.ts');
 const { AGENTIC } = await import('../src/core/settings.ts');
+const { emptyProfile, normalizeProfilePatch } = await import('../src/core/profile.ts');
 
 /** 内存版 ToolIo（最小数据集，按需覆写） */
 function fakeIo(overrides = {}) {
@@ -39,7 +40,18 @@ function fakeIo(overrides = {}) {
     recentFormDaily: async (days) => [{ date: '2026-03-25', tss: 100, ctl: 50, atl: 45, tsb: 5, _days: days }],
     monthlySummary: async (months) => [{ month: '2026-03', tss: 900, _months: months }],
     getAthleteState: async () => ({ athlete: { ftp_watts: 210, max_hr: 190, weight_kg: 65 }, configured: true }),
-    getProfile: async () => ({ identity: '上班族骑手', goal: '200km 骑游' }),
+    getProfile: async () => ({
+      identity: '上班族骑手',
+      goal: '200km 骑游',
+      ...(io._profile ?? {}),
+    }),
+    setRiderProfile: async (partial, lang) => {
+      const current =
+        io._profile ??
+        normalizeProfilePatch(emptyProfile(), { identity: '上班族骑手', goal: '200km 骑游' });
+      io._profile = normalizeProfilePatch(current, partial, lang);
+      return io._profile;
+    },
     cyclingSummariesSince: async () => [],
     computeForm: async (date) => {
       io._formDate = date; // 供断言缺省起点用的「今天」口径
@@ -78,11 +90,11 @@ function fakeIo(overrides = {}) {
   return io;
 }
 
-test('toolDefs：18 个工具、双语描述、schema 关键字段', () => {
+test('toolDefs：19 个工具、双语描述、schema 关键字段', () => {
   const zh = toolDefs('zh');
-  assert.equal(zh.length, 18);
+  assert.equal(zh.length, 19);
   const names = zh.map((d) => d.function.name);
-  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'get_dossier', 'get_training_plan', 'update_training_plan', 'adjust_plan_sessions', 'set_power_flag', 'recalibrate_activity_power', 'update_ftp', 'reanalyze_activity']) {
+  for (const n of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'update_rider_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'save_memory', 'get_dossier', 'get_training_plan', 'update_training_plan', 'adjust_plan_sessions', 'set_power_flag', 'recalibrate_activity_power', 'update_ftp', 'reanalyze_activity']) {
     assert.ok(names.includes(n), n);
   }
   assert.equal(zh.every((d) => d.type === 'function'), true);
@@ -180,13 +192,59 @@ test('get_form_series / get_monthly_summary：days/months 传透', async () => {
   assert.equal(monthly.summary[0]._months, 12);
 });
 
-test('get_athlete_profile：骑手参数 + 身份目标', async () => {
+test('get_athlete_profile：骑手参数 + 身份目标 + 教练模式/时间预算字段', async () => {
   const exec = createExecuteTool(fakeIo(), { lang: 'zh' });
   const p = JSON.parse(await exec('get_athlete_profile', {}));
   assert.deepEqual(p.athlete, { ftp_watts: 210, max_hr: 190, weight_kg: 65 });
   assert.equal(p.athlete_configured, true);
   assert.equal(p.identity, '上班族骑手');
   assert.equal(p.goal, '200km 骑游');
+  // 未设置时显式 null/[]（模型据 coach_mode_configured 决定是否首次询问）
+  assert.equal(p.coach_mode, null);
+  assert.equal(p.coach_mode_configured, false);
+  assert.equal(p.weekly_hours, null);
+  assert.deepEqual(p.available_days, []);
+  assert.equal(p.session_max_min, null);
+});
+
+test('update_rider_profile：仅对话放行、至少一项、白名单字段、校验错误兜 {error}', async () => {
+  const io = fakeIo();
+  // 报告生成场景（无 chat 标记）拒绝
+  const reportExec = createExecuteTool(io, { lang: 'zh', source: 'plan' });
+  const denied = JSON.parse(await reportExec('update_rider_profile', { coach_mode: 'amateur' }));
+  assert.match(denied.error, /只能在对话中修改/);
+
+  const exec = createExecuteTool(io, { lang: 'zh', chat: true });
+  const empty = JSON.parse(await exec('update_rider_profile', {}));
+  assert.match(empty.error, /至少提供一项/);
+  // 未知字段被白名单丢弃 → 等同空
+  const unknown = JSON.parse(await exec('update_rider_profile', { foo: 1 }));
+  assert.match(unknown.error, /至少提供一项/);
+
+  const ok = JSON.parse(
+    await exec('update_rider_profile', {
+      coach_mode: 'amateur',
+      weekly_hours: '3to5',
+      available_days: [1, 3, 3, 7],
+      session_max_min: 90,
+    }),
+  );
+  assert.equal(ok.ok, true);
+  assert.equal(ok.coach_mode, 'amateur');
+  assert.equal(ok.weekly_hours, '3to5');
+  assert.deepEqual(ok.available_days, [1, 3, 7]);
+  assert.equal(ok.session_max_min, 90);
+  // 回读一致
+  const read = JSON.parse(await exec('get_athlete_profile', {}));
+  assert.equal(read.coach_mode, 'amateur');
+  assert.equal(read.coach_mode_configured, true);
+  assert.equal(read.weekly_hours, '3to5');
+  assert.deepEqual(read.available_days, [1, 3, 7]);
+  assert.equal(read.session_max_min, 90);
+
+  // 枚举非法经 core/profile 抛双语 Error，工具层兜为 {error}
+  const bad = JSON.parse(await exec('update_rider_profile', { weekly_hours: '2h' }));
+  assert.match(bad.error, /weekly_hours 取值非法/);
 });
 
 test('estimate_ftp：数据不足时返回 insufficient 结构（不报错）', async () => {
