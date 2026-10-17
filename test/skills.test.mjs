@@ -54,7 +54,7 @@ test('buildSkillsSection 拼装专业知识库段（标题降为三级）', () =
   assert.match(section, /### 技能乙\n\n内容乙/);
 });
 
-test('内嵌 skills/ 目录默认加载九个技能且跳过 _README（zh）', () => {
+test('内嵌 skills/ 目录默认加载十个技能且跳过 _README（zh）', () => {
   const titles = buildSkillsSection('zh');
   assert.match(titles, /Coggan 功率训练体系/);
   assert.match(titles, /TrainingPeaks 负荷模型（CTL \/ ATL \/ TSB）/);
@@ -65,8 +65,9 @@ test('内嵌 skills/ 目录默认加载九个技能且跳过 _README（zh）', (
   assert.match(titles, /周期化训练计划：输出约定与执行对比/);
   assert.match(titles, /### 骑手水平分级与教练校准/);
   assert.match(titles, /### 户外骑行安全与路线选择/);
+  assert.match(titles, /### 业余教练模式（时间预算与健康导向）/);
   assert.doesNotMatch(titles, /_README/);
-  assert.equal(SKILL_FILES.zh.length, 9);
+  assert.equal(SKILL_FILES.zh.length, 10);
 });
 
 test('内嵌英文技能：.en.md 归英文，zh 不混入英文技能', () => {
@@ -78,7 +79,8 @@ test('内嵌英文技能：.en.md 归英文，zh 不混入英文技能', () => {
   assert.match(en, /Periodized Training Plans: Output Contract and Execution Review/);
   assert.match(en, /### Rider Level Calibration/);
   assert.match(en, /### Outdoor Ride Safety and Route Selection/);
-  assert.equal(SKILL_FILES.en.length, 9);
+  assert.match(en, /### Amateur Coaching Mode \(Time Budget and Health-First\)/);
+  assert.equal(SKILL_FILES.en.length, 10);
   for (const f of SKILL_FILES.zh) assert.ok(!f.name.endsWith('.en.md'));
   for (const f of SKILL_FILES.en) assert.ok(f.name.endsWith('.en.md'));
 });

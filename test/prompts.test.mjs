@@ -103,7 +103,10 @@ test('周期规划/减量/对比提示词：数据段与固化问题齐全', () 
   assert.match(plan, /## 逐月训练汇总（按 UTC 日历日切分月份，清晨骑行计入前一日）/);
   assert.match(plan, /## 近期 CTL\/ATL\/TSB 走势（逐周取样，每天 0 点值；日期为 UTC 日历日，清晨骑行计入前一日）/);
   assert.match(plan, /## 近期训练清单/);
-  assert.match(plan, /5\. 中期（4-8 周）应侧重什么能力短板/);
+  assert.match(plan, /5\. 中期（4-8 周）应侧重什么方向？/);
+  // 业余教练口径（2026-10-17）：CTL 维持合法 + 强度按可用锚点表达
+  assert.match(plan, /CTL 维持平稳即可，不必强行增长/);
+  assert.match(plan, /按用户可用的锚点用功率区间\/%FTP 或 %最大心率\/体感表达/);
 
   const taper = buildTaperPrompt(
     { raceDate: '2026-04-20', daysLeft: 25, form: { ctl: 50, atl: 45, tsb: 5 }, formSeries, recentActivities: recent },
@@ -619,6 +622,9 @@ test('周期规划提示词：既有计划处理段 + plan-json 输出格式段�
   assert.match(zh, /```plan-json/); // 示例骨架围栏
   assert.match(zh, /一天至多一课/);
   assert.match(zh, /减量周/);
+  // 业余模式课表约束（2026-10-17）：按可用时间排、不凑满一周、强度双锚点
+  assert.match(zh, /按每周可用时间与可用日排课，不必凑满一周/);
+  assert.match(zh, /%HRmax\/体感表达/);
   const en = buildPlanPrompt(data, ATHLETE, null, null, 'en', new Date('2026-03-26T10:00:00'));
   assert.match(en, /## Handling an Existing Plan/);
   assert.match(en, /## Plan Output Format \(mandatory\)/);
