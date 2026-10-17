@@ -496,6 +496,8 @@ export interface ActivityListItem {
   np: number | null;
   avg_power: number | null;
   intensity_factor: number | null;
+  /** 功率被标记不可信（from list 查询；旧调用方缺省视为 false） */
+  power_flagged?: boolean;
 }
 
 /** 列表查询上限单源（listActivities 默认值与记录页触顶提示共用，防两处漂移） */
@@ -515,9 +517,10 @@ export async function listActivities(n: number = ACTIVITY_LIST_LIMIT): Promise<A
     np: number | null;
     avg_power: number | null;
     intensity_factor: number | null;
+    power_flagged: number | null;
   }>(
     `SELECT file_name, date, sport, category, duration_sec, distance_km, elevation_gain_m,
-            tss, np, avg_power, intensity_factor
+            tss, np, avg_power, intensity_factor, power_flagged
      FROM activities ORDER BY date DESC LIMIT ?`,
     n,
   );
@@ -533,7 +536,10 @@ export async function listActivities(n: number = ACTIVITY_LIST_LIMIT): Promise<A
     tss: r.tss == null ? null : Math.round(r.tss),
     np: r.np == null ? null : Math.round(r.np),
     avg_power: r.avg_power == null ? null : Math.round(r.avg_power),
-    intensity_factor: r.intensity_factor == null ? null : r1(r.intensity_factor),
+    // IF 保留库内 2 位精度：健康活动量等判定依赖 0.9/0.55 阈值，取整到 1 位会把
+    // 0.85–0.89 误判为高强度（code-review P1-1）
+    intensity_factor: r.intensity_factor,
+    power_flagged: !!r.power_flagged,
   }));
 }
 
@@ -556,9 +562,10 @@ export async function listActivitiesInRange(fromDay: string, toDay: string): Pro
     np: number | null;
     avg_power: number | null;
     intensity_factor: number | null;
+    power_flagged: number | null;
   }>(
     `SELECT file_name, date, sport, category, duration_sec, distance_km, elevation_gain_m,
-            tss, np, avg_power, intensity_factor
+            tss, np, avg_power, intensity_factor, power_flagged
      FROM activities WHERE date >= ? AND date <= ? ORDER BY date DESC`,
     fromDay,
     toDay,
@@ -575,7 +582,8 @@ export async function listActivitiesInRange(fromDay: string, toDay: string): Pro
     tss: r.tss == null ? null : Math.round(r.tss),
     np: r.np == null ? null : Math.round(r.np),
     avg_power: r.avg_power == null ? null : Math.round(r.avg_power),
-    intensity_factor: r.intensity_factor == null ? null : r1(r.intensity_factor),
+    intensity_factor: r.intensity_factor, // 保留 2 位精度（健康活动量阈值判定用）
+    power_flagged: !!r.power_flagged,
   }));
 }
 

@@ -53,7 +53,7 @@
 
 ## Communication
 
-- Moderate intensity means a pace at which full conversation is possible (roughly Z2 / 68–75% HRmax); per WHO, one vigorous minute counts as two moderate minutes. Apply this conversion when citing the 150–300 min/week health target.
+- Moderate intensity means a pace from full conversation through short sentences (roughly Z2–Z3 / IF 0.55–0.9; about 68–85% HRmax); tempo riding counts as moderate 1:1. Vigorous work (above threshold) counts as two moderate minutes per WHO. Apply this conversion when citing the 150–300 min/week health target.
 - Every recommendation states which day, how long, at what intensity, and how to judge that intensity; explain any term in plain language the first time it appears.
 - Give 2–3 recommendations in priority order; say explicitly that doing only the first one this week is fine.
 - Answer the rider's actual question first ("how many times can I ride this week", "is this goal realistic"), then discuss data details.
