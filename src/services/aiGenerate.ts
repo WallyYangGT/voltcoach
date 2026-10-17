@@ -122,15 +122,18 @@ async function requireAiConfig(lang: Lang): Promise<AiConfig & { api_key: string
   return { ...config, api_key: config.api_key };
 }
 
+/** 单轮 reasoning 累计上限（与 agent 循环的尾部上限一致）：仅 UI 展示，不落库、不打日志 */
+const REASONING_ACC_CHARS = 2000;
+
 /**
  * callAiMaybeAgentic（对标 server.js 同名函数）：agentic 开启走 runAgentLoop
  * （工具 schema 与执行器按语言装配，source 作为 save_memory 的场景标记），
  * 关闭走单轮 callAI。执行结果仅打日志，用户只见最终正文（口径同旧版）。
  * onRetry：传输层自动重试回调（透传到 UI 进度：长请求等了几分钟后被网关掐断时，
  * 用户需要知道"正在自动重试"而不是看着一个不动的转圈）。
- * signal/onProgress/onActivity：取消信号、增量正文上抛、工具调用动态（2026-10
- * 增量落库 + 取消）。生成链路传输一律流式（agentic 循环走 incremental，单轮走
- * forceStream），流式失败各有降级梯子兜底。
+ * signal/onProgress/onActivity：取消信号、增量正文上抛、生成阶段事件（2026-10
+ * 增量落库 + 取消 + 生成过程可视化）。生成链路传输一律流式（agentic 循环走
+ * incremental，单轮走 forceStream），流式失败各有降级梯子兜底。
  */
 async function callAiMaybeAgentic(
   config: AiConfig & { api_key: string },
@@ -143,8 +146,8 @@ async function callAiMaybeAgentic(
     onRetry?: (nextAttempt: number, errMsg: string) => void;
     signal?: AbortSignal;
     onProgress?: (partial: string) => void;
-    /** 工具调用动态（开始/完成/降级），编排层写进 GenProgress.activity 供 UI 轮询展示 */
-    onActivity?: (note: string) => void;
+    /** 生成过程阶段事件（思考/工具/正文/压缩），编排层写进 GenProgress 供 UI 轮询展示 */
+    onActivity?: (ev: GenActivityEvent) => void;
   },
 ): Promise<string> {
   const fetchImpl = await loadDefaultFetch();
@@ -155,31 +158,74 @@ async function callAiMaybeAgentic(
       signal: opts.signal,
       incremental: true,
       onProgress: opts.onProgress,
-      onToolStart: (name) => opts.onActivity?.(t(opts.lang, 'ai.toolRunning', { name })),
+      // 每轮请求前切「模型思考中」：填上工具执行完到下一轮正文到达之间的静默间隔
+      onRoundStart: () =>
+        opts.onActivity?.({ phase: 'thinking', label: t(opts.lang, 'ai.thinking') }),
+      // 推理模型：把当前轮 reasoning 尾部交给 UI 单行滚动展示（不落库、不打日志）
+      onReasoning: (thinking) =>
+        opts.onActivity?.({ phase: 'thinking', label: t(opts.lang, 'ai.thinking'), thinking }),
+      // 本轮首个正文分片：切「生成中」，不再受 bestContent 长度门控影响
+      onContentStart: () =>
+        opts.onActivity?.({ phase: 'streaming', label: t(opts.lang, 'ai.generating') }),
+      // 模型刚开始流式产出 tool_calls 就亮放大镜（早于本地工具执行，避免毫秒级闪过）
+      onToolCallStream: (name) =>
+        opts.onActivity?.({
+          phase: 'tool',
+          label: t(opts.lang, 'ai.toolRunning', { name }),
+        }),
+      onToolStart: (name) =>
+        opts.onActivity?.({
+          phase: 'tool',
+          label: t(opts.lang, 'ai.toolRunning', { name }),
+        }),
       onToolCall: (name, _args, result) => {
         // 只打工具名与结果长度：args 可能携带 save_memory 的用户个人事实，不落 logcat
         const chars = typeof result === 'string' ? result.length : 0;
         console.log(`[AI tool] ${name} → ${chars} 字符`);
-        opts.onActivity?.(t(opts.lang, 'ai.toolDone', { name, chars }));
+        opts.onActivity?.({
+          phase: 'tool_done',
+          label: t(opts.lang, 'ai.toolDone', { name, chars }),
+        });
       },
       onDegrade: (errMsg) => {
         console.warn(`[AI] 模型不支持 tools，已降级为单轮调用（${errMsg}）`);
-        opts.onActivity?.(t(opts.lang, 'ai.degraded'));
+        opts.onActivity?.({ phase: 'thinking', label: t(opts.lang, 'ai.degraded') });
       },
     });
   }
   let acc = '';
+  let reasoning = '';
+  let streamingStarted = false;
+  opts.onActivity?.({ phase: 'thinking', label: t(opts.lang, 'ai.thinking') });
   return callAI(fetchImpl, config, messages, {
     lang: opts.lang,
-    onRetry: opts.onRetry,
+    // 传输级重试是同一轮的新请求：累计状态全部复位，防旧 reasoning/正文重复拼接
+    onRetry: (attempt, errMsg) => {
+      reasoning = '';
+      acc = '';
+      streamingStarted = false;
+      opts.onRetry?.(attempt, errMsg);
+    },
     signal: opts.signal,
     forceStream: true,
-    onChunk: opts.onProgress
-      ? (delta) => {
-          acc += delta;
-          opts.onProgress?.(acc);
-        }
-      : undefined,
+    onChunk: (delta) => {
+      if (!streamingStarted) {
+        streamingStarted = true;
+        opts.onActivity?.({ phase: 'streaming', label: t(opts.lang, 'ai.generating') });
+      }
+      acc += delta;
+      opts.onProgress?.(acc);
+    },
+    onReasoningChunk: (delta) => {
+      // 正文已开始后不再累计/上抛思考态（少数端点会交错下发 reasoning）
+      if (streamingStarted) return;
+      reasoning = (reasoning + delta).slice(-REASONING_ACC_CHARS);
+      opts.onActivity?.({
+        phase: 'thinking',
+        label: t(opts.lang, 'ai.thinking'),
+        thinking: reasoning,
+      });
+    },
   });
 }
 
@@ -327,20 +373,58 @@ const runningChats = new Set<string>();
 const reportAborts = new Map<number, AbortController>();
 const chatAborts = new Map<string, AbortController>();
 
-/** 生成进度（进程内）：传输级自动重试的现场信息 + 工具调用动态，UI 轮询时同步读取展示 */
+/**
+ * 生成阶段（2026-10 生成过程可视化）：UI 据此渲染状态行图标与动效。
+ * thinking = 等待模型/推理中（reasoning 有则滚动展示）；tool = 模型产出 tool_calls
+ * 或工具执行中；tool_done = 单个工具完成（短暂）；streaming = 正文正在流式输出；
+ * compacting = 滚动摘要压缩中。
+ */
+export type GenPhase = 'thinking' | 'streaming' | 'tool' | 'tool_done' | 'compacting';
+
+/** 编排层 → 进度 Map 的结构化事件（label 已按语言本地化，thinking 为本轮累计文本） */
+export interface GenActivityEvent {
+  phase: GenPhase;
+  label: string;
+  thinking?: string;
+}
+
+/** 生成进度（进程内）：传输级自动重试现场 + 当前阶段/工具/思考正文，UI 轮询时同步读取展示 */
 export interface GenProgress {
   attempt: number; // 下一次尝试的序号（2 = 首次响应异常、正在重试）
   note: string; // 上一次失败的原因（原文，便于诊断网关/网络问题）
-  /** 当前动作提示（「正在调用 X…」/「✓ X · N 字符」/降级提示），瞬态不落库 */
+  /** 当前阶段（缺省按 thinking 渲染；只关心 activity 的旧消费方保持兼容） */
+  phase?: GenPhase;
+  /** 当前动作提示（「模型思考中…」/「正在调用 X…」/「✓ X · N 字符」），瞬态不落库 */
   activity?: string;
+  /** 推理模型当前轮的思考正文（尾部截断，仅内存展示；不落库、不打日志） */
+  thinking?: string;
 }
 const reportProgress = new Map<number, GenProgress>();
 const chatProgress = new Map<string, GenProgress>();
 
-/** 写活动提示：保留既有重试进度字段，只换 activity（轮询读的是同一 Map） */
-function setActivity<K>(map: Map<K, GenProgress>, key: K, activity: string) {
+/** 思考正文在内存/UI 的尾部上限：只保留最新片段，防长思考无界占用与 ticker 过宽 */
+const THINKING_TAIL_CHARS = 320;
+
+/** 合并式进度更新：保留既有 attempt/note，未提供的字段沿用旧值（显式 undefined 可清空） */
+function patchProgress<K>(map: Map<K, GenProgress>, key: K, patch: Partial<GenProgress>) {
   const prev = map.get(key);
-  map.set(key, { attempt: prev?.attempt ?? 0, note: prev?.note ?? '', activity });
+  const thinking = patch.thinking != null ? patch.thinking.slice(-THINKING_TAIL_CHARS) : undefined;
+  map.set(key, {
+    attempt: prev?.attempt ?? 0,
+    note: prev?.note ?? '',
+    ...prev,
+    ...patch,
+    ...(thinking !== undefined ? { thinking } : {}),
+  });
+}
+
+/** 写结构化活动提示：phase/activity/thinking 一起更新，thinking 缺省即清空（防跨阶段残留） */
+function setActivity<K>(map: Map<K, GenProgress>, key: K, ev: GenActivityEvent) {
+  patchProgress(map, key, {
+    phase: ev.phase,
+    activity: ev.label,
+    thinking: ev.thinking,
+  });
 }
 
 /** 报告生成是否正在进行（会话详情页的恢复判断用） */
@@ -381,6 +465,13 @@ export function getChatProgress(chatId: number, messageId: number): GenProgress 
 export async function generateReport(reportId: number, lang: Lang = 'zh'): Promise<{ started: boolean }> {
   if (runningReports.has(reportId)) return { started: false }; // 同一报告不重复 fire
   runningReports.add(reportId);
+  // 初始阶段：占位行可能先被 UI 看到（读 prompt/保活/摘要前），先给「模型思考中」
+  reportProgress.set(reportId, {
+    attempt: 0,
+    note: '',
+    phase: 'thinking',
+    activity: t(lang, 'ai.thinking'),
+  });
   const ctrl = new AbortController();
   reportAborts.set(reportId, ctrl);
   // 保活句柄：acquire 之前的 fast-fail 路径（未配对 acquire）下保持 null，
@@ -463,14 +554,19 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
         lang,
         signal: ctrl.signal,
         onRetry: (attempt, errMsg) => {
-          const prev = reportProgress.get(reportId);
-          reportProgress.set(reportId, { attempt, note: errMsg, activity: prev?.activity });
+          patchProgress(reportProgress, reportId, {
+            attempt,
+            note: errMsg,
+            phase: 'thinking',
+            activity: t(lang, 'ai.thinking'),
+            thinking: undefined, // 重试是新一轮请求，旧的思考正文不再成立
+          });
           console.warn(`[AI] 报告 #${reportId} 响应异常，自动重试（第 ${attempt} 次）：${errMsg}`);
         },
         onProgress: (partial) => {
           void flushPartial(partial).catch((e) => console.warn('[AI] 增量落库失败（不影响生成）:', e));
         },
-        onActivity: (note) => setActivity(reportProgress, reportId, note),
+        onActivity: (ev) => setActivity(reportProgress, reportId, ev),
       },
     );
     await pendingFlush.catch(() => {}); // 在途节流写先落地（code-review P2-2）
@@ -829,6 +925,13 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
   const key = `${chatId}:${messageId}`;
   if (runningChats.has(key)) return { started: false }; // 同一消息不重复 fire
   runningChats.add(key);
+  // 初始阶段：占位消息可能先被 UI 看到（读历史/摘要在先），先给「模型思考中」
+  chatProgress.set(key, {
+    attempt: 0,
+    note: '',
+    phase: 'thinking',
+    activity: t(lang, 'ai.thinking'),
+  });
   const ctrl = new AbortController();
   chatAborts.set(key, ctrl);
   // 保活句柄：口径同 generateReport（fast-fail 不闪通知、finally 只释放自己的句柄）
@@ -879,7 +982,8 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
       windowed.digest,
       lang,
       ctrl.signal,
-      (note) => setActivity(chatProgress, key, note),
+      (note) =>
+        setActivity(chatProgress, key, { phase: 'compacting', label: note }),
     );
     // 系统段预算 = 请求总预算 - 原样历史 - 摘要段（摘要已含在系统段里，这里一起扣）
     const historyChars =
@@ -912,14 +1016,19 @@ export async function runChatGeneration(chatId: number, messageId: number, lang:
         chat: true, // 对话类调用：update_training_plan 等写类工具据此放行
         signal: ctrl.signal,
         onRetry: (attempt, errMsg) => {
-          const prev = chatProgress.get(key);
-          chatProgress.set(key, { attempt, note: errMsg, activity: prev?.activity });
+          patchProgress(chatProgress, key, {
+            attempt,
+            note: errMsg,
+            phase: 'thinking',
+            activity: t(lang, 'ai.thinking'),
+            thinking: undefined, // 重试是新一轮请求，旧的思考正文不再成立
+          });
           console.warn(`[AI chat] ${key} 响应异常，自动重试（第 ${attempt} 次）：${errMsg}`);
         },
         onProgress: (partial) => {
           void flushPartial(partial).catch((e) => console.warn('[AI chat] 增量落库失败（不影响生成）:', e));
         },
-        onActivity: (note) => setActivity(chatProgress, key, note),
+        onActivity: (ev) => setActivity(chatProgress, key, ev),
       },
     );
     await pendingFlush.catch(() => {}); // 在途节流写先落地（code-review P2-2）

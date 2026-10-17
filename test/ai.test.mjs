@@ -878,3 +878,178 @@ test('runAgentLoop（E1）：请求体压缩更旧轮 tool 结果，最近轮与
     assert.ok(sent.some((m) => m.role === 'tool' && m.tool_call_id === id), id);
   }
 });
+
+// ---------------- 2026-10 生成过程可视化：reasoning 旁路 / 工具名首现 / 轮次事件 ----------------
+
+test('requestChatCompletion: reasoning 帧旁路透传且不进入正文（reasoning_content/reasoning 字符串两形态）', async () => {
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '先看负荷' } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ delta: { reasoning: '再查数据' } }] }) + '\n\n',
+    // 对象形态（部分聚合网关）忽略：只接字符串
+    'data: ' + JSON.stringify({ choices: [{ delta: { reasoning: { text: '对象形态忽略' } } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: '最终回答' } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const reasoning = [];
+  const chunks = [];
+  const text = await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, {
+    onStreamChunk: (d) => chunks.push(d),
+    onStreamReasoning: (d) => reasoning.push(d),
+  });
+  assert.equal(text, '最终回答'); // reasoning 不拼入正文
+  assert.deepEqual(reasoning, ['先看负荷', '再查数据']);
+  assert.deepEqual(chunks, ['最终回答']);
+});
+
+test('requestChatCompletion: 流式 tool_calls 首现工具名只通知一次（整段帧兜底同口径）', async () => {
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'get_form_series' } }] } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"days":14}' } }] } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const names = [];
+  const res = await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, {
+    onStreamChunk: () => {},
+    onStreamToolCall: (n) => names.push(n),
+  });
+  assert.equal(res.tool_calls[0].function.name, 'get_form_series');
+  assert.deepEqual(names, ['get_form_series']); // 第二帧只有 arguments，不重复通知
+});
+
+test('requestChatCompletion: 整段 message 帧携带 tool_calls 也通知首工具名', async () => {
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ message: { content: null, tool_calls: [{ id: 'c1', type: 'function', function: { name: 'x', arguments: '{}' } }] } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const names = [];
+  await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, {
+    onStreamChunk: () => {},
+    onStreamToolCall: (n) => names.push(n),
+  });
+  assert.deepEqual(names, ['x']);
+});
+
+test('runAgentLoop: 轮次/思考/工具/正文事件顺序（工具轮无正文不触发 contentStart）', async () => {
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    if (calls === 1) {
+      // 第 1 轮：先推理，再流式产出工具调用（无正文）
+      return sseResponse([
+        { choices: [{ delta: { reasoning_content: '先取数据' } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'get_form_series' } }] } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"days":14}' } }] } }] },
+      ]);
+    }
+    // 第 2 轮：推理后开始吐正文
+    return sseResponse([
+      { choices: [{ delta: { reasoning_content: '数据到了，开始写' } }] },
+      { choices: [{ delta: { content: '最终报告正文' } }] },
+    ]);
+  };
+  const events = [];
+  const text = await runAgentLoop(f, CFG, [{ role: 'user', content: '问' }], FAKE_TOOLS, async () => '{}', {
+    timeoutMs: 5000,
+    incremental: true,
+    onRoundStart: (r) => events.push(`round:${r}`),
+    onReasoning: (t) => events.push(`reasoning:${t}`),
+    onContentStart: (r) => events.push(`content:${r}`),
+    onToolCallStream: (n) => events.push(`toolStream:${n}`),
+    onToolStart: (n) => events.push(`toolStart:${n}`),
+    onToolCall: (n) => events.push(`toolCall:${n}`),
+  });
+  assert.equal(text, '最终报告正文');
+  assert.deepEqual(events, [
+    'round:1',
+    'reasoning:先取数据',
+    'toolStream:get_form_series',
+    'toolStart:get_form_series',
+    'toolCall:get_form_series',
+    'round:2',
+    'reasoning:数据到了，开始写',
+    'content:2',
+  ]);
+});
+
+test('requestChatCompletion: reasoning 帧不置 sawDelta，末尾整段 message.content 只下发一次', async () => {
+  // code-review P2-5：reasoning 帧不能把「整段 message 兜底」关掉（否则正文丢失）；
+  // 也不能让正文重复（sawDelta 的既有互斥口径）
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '思考一下' } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ message: { content: '唯一正文' } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const chunks = [];
+  const reasoning = [];
+  const text = await requestChatCompletion(f, 'http://m/v1', 'k', { stream: true }, {
+    onStreamChunk: (d) => chunks.push(d),
+    onStreamReasoning: (d) => reasoning.push(d),
+  });
+  assert.equal(text, '唯一正文');
+  assert.deepEqual(chunks, ['唯一正文']); // 只下发一次
+  assert.deepEqual(reasoning, ['思考一下']);
+});
+
+test('callAI: 流式 reasoning 旁路回调且不进入返回值', async () => {
+  // code-review P2-5：覆盖 callAI 的 onReasoningChunk 接线与 stall 重置包装分支
+  const f = sseFetch([
+    'data: ' + JSON.stringify({ choices: [{ delta: { reasoning_content: '先想一想' } }] }) + '\n\n',
+    'data: ' + JSON.stringify({ choices: [{ delta: { content: '最终回答' } }] }) + '\n\n',
+    'data: [DONE]\n\n',
+  ]);
+  const reasoning = [];
+  const chunks = [];
+  const text = await callAI(f, { ...CFG, stream: true }, '提示词', {
+    timeoutMs: 5000,
+    onChunk: (d) => chunks.push(d),
+    onReasoningChunk: (d) => reasoning.push(d),
+  });
+  assert.equal(text, '最终回答');
+  assert.deepEqual(reasoning, ['先想一想']);
+  assert.deepEqual(chunks, ['最终回答']);
+});
+
+test('runAgentLoop: 降级提示在最后一次轮次事件之后发出（不被 thinking 覆盖）', async () => {
+  // code-review P2-2：顺序必须是 beginRound → onDegrade；反了会被 1.5s 轮询下的
+  //「模型思考中」覆盖，用户永远看不到降级提示
+  const f = jsonFetch((_body, idx) => {
+    if (idx === 0) return { status: 400, body: 'stream+tools unsupported' };
+    if (idx === 1) return { status: 400, body: 'tools unsupported' };
+    return msg('降级回答');
+  });
+  const events = [];
+  const text = await runAgentLoop(f, CFG, [{ role: 'user', content: '问' }], FAKE_TOOLS, async () => '{}', {
+    timeoutMs: 5000,
+    incremental: true,
+    onRoundStart: (r) => events.push(`round:${r}`),
+    onDegrade: () => events.push('degrade'),
+  });
+  assert.equal(text, '降级回答');
+  assert.deepEqual(events, ['round:1', 'round:1', 'round:1', 'degrade']);
+  assert.equal(events.at(-1), 'degrade');
+});
+
+test('runAgentLoop: 传输级自动重试重置本轮 reasoning 累计（不带旧思考进新请求）', async () => {
+  // code-review P2-3：首轮只回 reasoning + [DONE]（空正文 → 可重试），重试再回
+  // reasoning + 正文；onReasoning 第二次必须是「新思考」而不是「旧思考新思考」
+  let calls = 0;
+  const f = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return sseResponse([{ choices: [{ delta: { reasoning_content: '旧思考' } }] }]);
+    }
+    return sseResponse([
+      { choices: [{ delta: { reasoning_content: '新思考' } }] },
+      { choices: [{ delta: { content: '最终回答' } }] },
+    ]);
+  };
+  const reasoning = [];
+  const text = await runAgentLoop(f, CFG, [{ role: 'user', content: '问' }], FAKE_TOOLS, async () => '{}', {
+    timeoutMs: 5000,
+    incremental: true,
+    onReasoning: (t) => reasoning.push(t),
+  });
+  assert.equal(text, '最终回答');
+  assert.equal(calls, 2); // 首次空正文 → 自动重试一次
+  assert.deepEqual(reasoning, ['旧思考', '新思考']); // 若未复位会变成「旧思考新思考」
+});
