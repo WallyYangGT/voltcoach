@@ -27,7 +27,7 @@ test('快路径：总量不超预算时零损耗拼接', () => {
   assert.equal(r.chars, 8);
 });
 
-test('输出按 priority 升序排列（与传入顺序无关）', () => {
+test('输出保持传入顺序（priority 只决定丢弃/降级次序）', () => {
   const r = assembleBudgetedSections(
     [
       { id: 'late', text: 'LOW', priority: 9 },
@@ -36,7 +36,7 @@ test('输出按 priority 升序排列（与传入顺序无关）', () => {
     100,
     NOTE,
   );
-  assert.equal(r.text, 'HIGH\n\nLOW');
+  assert.equal(r.text, 'LOW\n\nHIGH');
 });
 
 test('超预算：先丢 priority 最大且 optional 的段', () => {

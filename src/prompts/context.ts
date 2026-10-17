@@ -70,16 +70,16 @@ export function truncateTextBlock(text: string, maxChars: number, omissionNote: 
  *    每段允许的预算 = 当前总预算 - 其余段（含已降级段）的当前长度，
  *    降级后重算总量；无 degrade 可降则接受超预算（数据 JSON 宁超不破）。
  *
- * 返回文本按 priority 升序（同分按 id）排列——调用方传参顺序即输出顺序。
+ * 返回文本**保持传入顺序**（提示词段落有固有的阅读顺序：角色→口径→数据→问题）；
+ * priority 只决定丢弃/降级的先后，不参与输出排序。
  */
 export function assembleBudgetedSections(
   sections: PromptSection[],
   totalMaxChars: number,
   omissionNote: string,
 ): AssembleResult {
-  const order = [...sections].sort((a, b) =>
-    a.priority !== b.priority ? a.priority - b.priority : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
-  );
+  // 输出顺序 = 传入顺序；丢弃/降级按 priority 决定（见下方 byDropOrder/byTrimOrder）
+  const order = [...sections];
   const join = (texts: (string | null)[]) => texts.filter((t) => t != null).join('\n\n');
 
   // 快路径：全量不超预算

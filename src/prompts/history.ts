@@ -26,11 +26,11 @@ export interface WindowOptions {
   digestMaxChars?: number;
 }
 
-export interface WindowedHistory {
+export interface WindowedHistory<T extends HistoryMessage = HistoryMessage> {
   /** 保留在请求里的最近消息（可能为空数组——首条消息就超预算时也保留最新一轮，见实现） */
-  recent: HistoryMessage[];
+  recent: T[];
   /** 被挤出窗口的旧消息（模型滚动摘要 / digest 的输入；按时间正序） */
-  omitted: HistoryMessage[];
+  omitted: T[];
   /** 确定性兜底摘要：旧消息的逐条要点（每条截断 + 全局截断），omitted 为空时为 null */
   digest: string | null;
 }
@@ -69,7 +69,10 @@ function toTurns(messages: HistoryMessage[]): HistoryMessage[][] {
  * 窗口化对话历史：保留最近 recentTurns 轮且总量 ≤ recentChars（超限从最旧轮起丢，
  * 至少保留最后一轮）。omitted 非空时生成确定性 digest（首条用户消息=会话锚点必含）。
  */
-export function windowChatHistory(messages: HistoryMessage[], opts: WindowOptions): WindowedHistory {
+export function windowChatHistory<T extends HistoryMessage>(
+  messages: T[],
+  opts: WindowOptions,
+): WindowedHistory<T> {
   const perMessage = opts.digestPerMessageChars ?? 200;
   const digestMax = opts.digestMaxChars ?? 2000;
   const turns = toTurns(messages);
