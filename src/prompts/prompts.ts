@@ -97,7 +97,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
 - 用户要求调整计划时，按改动规模选工具：少量课次（顺延一节课/换课/改时长/删插课）用 adjust_plan_sessions 逐课次提交，周期重规划或大面积重排才用 update_training_plan 整体重发；两者都会做确定性合理性校验（质量课间隔/休息日/减量周节奏），不通过会返回具体原因——如实向用户解释原因并给出合规的替代方案，不要口头承诺绕过校验的改法；
 - 确认落实协议：调用调整工具前，必须先向用户复述具体变更（哪天什么课 from→to 改成什么；目标日已有课时要说明是交换还是替换），获得用户肯定答复后方可调用，不要抢跑直接改计划；
 - 调整被接受后向用户复述关键变化（动了哪些课次）；其余遵循直接对话口径（务实简洁、结合训练库数据）。
-- 业余/健康导向（或档案教练模式为业余）：以用户每周可用时间与可用日为第一约束；目标明显超出时间预算时先给「目标阶梯」（先 12 周有氧基础与习惯、6 周检查点），不硬拒；忙季允许每周 2 次维持，不逼用户加量。`,
+- 业余/健康导向（或档案教练模式为业余）：以用户每周可用时间与可用日为第一约束；目标明显超出时间预算时先给「目标阶梯」（先 12 周有氧基础与习惯、6 周检查点），不硬拒；忙季允许每周 2 次维持，不逼用户加量。细节见知识库中的业余教练技能。`,
 
     'mem.head': `## 用户记忆`,
     'mem.rules_head': `规则：`,
@@ -135,7 +135,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'profile.head': `## 用户背景与训练目标`,
     'profile.identity': `身份：{v}`,
     'profile.goal': `训练目标：{v}`,
-    'profile.tail': `请结合上述身份与目标评估训练安排的可行性与侧重点（如时间预算、目标赛事/能力提升方向）。若身份或目标显示时间受限、健康导向或不追求成绩，按「业余教练模式」口径处理：以用户期望与可用时间为主导，成功定义包含健康与习惯，不把负荷增长当作义务。`,
+    'profile.tail': `请结合上述身份与目标评估训练安排的可行性与侧重点（如时间预算、目标赛事/能力提升方向）。若用户明确健康导向或不追求成绩（或档案中教练模式为业余），按「业余教练模式」口径处理；仅凭「上班族」等身份线索不要自动归入业余口径。`,
 
     'answer.head': `## 请回答`,
     'seg.omitted': `...（中间省略 {n} 段）`,
@@ -167,34 +167,34 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
 生成新计划前，先用 get_training_plan 查看当前训练计划：
 - 存在有效期内的计划：默认按续订处理（顺延周期、结合近期执行情况调整），并在回答开头说明是「续订」还是「替换」及差异要点；用户明确要求重开时才整体替换；
 - 存在已过期计划：参考其结构生成新周期，说明与旧计划的关键差异；
-- 没有计划：直接生成。`,
+- 没有计划：直接生成。若教练模式未配置，先按「业余教练模式」技能询问一句（按成绩还是按健康与可用时间安排），并同时给出保守的可执行计划，不要停下来等回答。`,
     'sec.plan.output': `## 计划输出格式（硬性要求）
 
 除正文解读外，你必须在回答**最末尾**输出一个 \`\`\`plan-json 围栏 JSON 块，承载结构化计划——App 会对它做确定性校验并落库为可执行课表（首页计划卡与计划页消费）；格式不合规、日期越界、一天多课会被整体拒收：
 
 - 计划级：valid_from / valid_to（YYYY-MM-DD，跨度 3–42 天且必须覆盖未来，典型为本周一起 4 周）、goal（一句话目标声明）；
-- 逐课次 sessions：**一天至多一课**，字段 date（YYYY-MM-DD，须在有效期内）、type（rest / recovery / endurance / long / sweet_spot / threshold / vo2max）、duration_min（分钟整数 10–600，rest 课传 null）、intensity（强度区间描述如 "95–105% FTP"，可 null）、tss（可省略，App 按课型×时长估算）、note（课表要点，可 null）；
+- 逐课次 sessions：**一天至多一课**，字段 date（YYYY-MM-DD，须在有效期内）、type（rest / recovery / endurance / long / sweet_spot / threshold / vo2max）、duration_min（分钟整数 10–600，rest 课传 null）、intensity（强度区间描述如 "95–105% FTP" 或 "%HRmax 70–80% / RPE 6"，可 null）、tss（可省略，App 按课型×时长估算）、note（课表要点，可 null）；
 - 合理性阈值会被校验：同刺激质量课（sweet_spot/threshold/vo2max）间隔 ≥48h（日期上至少隔一天）、每个覆盖 ≥5 天的自然周须有休息日（显式 rest 课或整日无课）、每 3–4 周须有一个减量周（周 TSS 降至窗内最大周的 70% 以下）——宁可保守也不要输出踩线安排；
-- 业余模式（用户时间受限或明确健康导向）：按每周可用时间与可用日排课，不必凑满一周；单课不超过用户设定的时长上限；强度可用 %FTP，也可用 %HRmax/体感表达（按用户实际可用的锚点）；
+- 业余模式（用户时间受限或明确健康导向）：按每周可用时间与可用日排课，不必凑满一周；单课尽量不超过用户设定的时长上限（超出只提示，不拒绝）；周质量课建议 ≤2（超出只提示）；强度可用 %FTP，也可用 %HRmax/体感表达（按用户实际可用的锚点）；
 - 示例骨架：`,
     'sec.plan.output_schema': `\`\`\`plan-json
 {"valid_from":"2026-10-19","valid_to":"2026-11-15","goal":"基础期：有氧量与踏频稳定性","sessions":[{"date":"2026-10-19","type":"rest","duration_min":null,"intensity":null,"tss":0,"note":"休息日"},{"date":"2026-10-21","type":"threshold","duration_min":75,"intensity":"95–105% FTP","tss":85,"note":"3×12min 阈值，组间 5min"}]}
 \`\`\``,
-    'plan.q.0': `评价最近的 CTL 走势：体能是在增长、停滞还是下滑？增速是否安全（每周 CTL 增幅不宜超过 5–7 点，约 5–10%；低基数骑手按相对口径执行）？若用户是业余/健康导向（时间受限、不追求成绩），CTL 维持平稳即可，不必强行增长。`,
+    'plan.q.0': `评价最近的 CTL 走势：体能是在增长、停滞还是下滑？增速是否安全（每周 CTL 增幅不宜超过 5–7 点，约 5–10%；低基数骑手按相对口径执行）？若用户明确健康导向/不追求成绩，CTL 维持平稳即可，不必强行增长；时间受限但有成绩目标的，在可用时间内安排最优负荷，不盲目追增幅。`,
     'plan.q.1': `当前 TSB 与疲劳状态如何？近期是否需要安排减量恢复？`,
     'plan.q.2': `从月汇总的强度分布类型（polarized / pyramidal / sweet_spot）看，目前的强度结构是否合理？`,
     'plan.q.3': `下一周应安排什么强度结构？请给出逐日训练建议（类型、时长、目标强度——按用户可用的锚点用功率区间/%FTP 或 %最大心率/体感表达）。`,
     'plan.q.4': `中期（4-8 周）应侧重什么方向？竞技/提升目标看能力短板，健康/习惯目标看可持续性与有氧基础；依据峰功率曲线、间歇数据或骑行频率说明。`,
 
-    'sec.taper.race': `## 比赛信息`,
-    'sec.taper.race_line': `比赛日期：{date}（距今 {days} 天）`,
+    'sec.taper.race': `## 比赛/活动信息`,
+    'sec.taper.race_line': `比赛/活动日期：{date}（距今 {days} 天）`,
     'sec.taper.form': `## 当前状态（今日 CTL/ATL/TSB）`,
     'sec.taper.trend': `## 近期 CTL/ATL/TSB 走势（逐周取样；日期为 UTC 日历日，清晨骑行计入前一日）`,
     'sec.taper.recent': `## 近期训练清单`,
-    'taper.q.0': `以比赛日 TSB 达到 +5 ~ +15（新鲜但不掉体能）为目标，当前 TSB 与目标差距多大？`,
-    'taper.q.1': `给出从今天到比赛日的逐日减量计划：每天训练类型、时长、强度（%FTP），说明减量幅度与依据。`,
+    'taper.q.0': `以比赛日 TSB 达到 +5 ~ +15（新鲜但不掉体能）为目标，当前 TSB 与目标差距多大？若用户是业余/健康导向（完成活动而非竞速），按「活动日」口径：该 TSB 只作参考，重点是新鲜、留有余量，不追名次/配速。`,
+    'taper.q.1': `给出从今天到目标日的逐日减量计划：每天训练类型、时长、强度（按用户可用锚点用 %FTP 或 %HRmax/体感表达；无功率数据时不要虚构瓦数），说明减量幅度与依据。`,
     'taper.q.2': `减量期间应保留多少高强度（强度保留 vs 纯休息）以避免体能流失？`,
-    'taper.q.3': `赛前最后 48 小时的具体安排建议（含预热/ opener 训练）。`,
+    'taper.q.3': `最后 48 小时的具体安排建议（opener 可保留 2–3 组短促唤醒；业余/活动日口径不安排冲刺演练或踩点）。`,
     'taper.q.4': `指出当前数据中的风险点（如疲劳过深、CTL 太低、近期训练结构问题）。`,
 
     'sec.compare.a': `## 训练 A（{date}）`,
@@ -269,7 +269,7 @@ You are in the "training plan" conversation, answering questions about and adjus
 - When the user asks for an adjustment, pick the tool by scope: a few sessions (shift one session / swap / change duration / remove / insert) go through adjust_plan_sessions; full replanning or large-scale reshuffles use update_training_plan to resend everything; both run deterministic sanity checks (quality-session spacing / rest days / recovery-week rhythm) and return concrete reasons on failure — explain them honestly and offer a compliant alternative; never promise changes that bypass the checks;
 - Confirmation protocol: before calling either adjustment tool, restate the concrete change to the user (which day, what changes from→to what; when the target day has a session, state swap vs replacement) and call only after the user agrees — never modify the plan preemptively;
 - After an accepted adjustment, recap the key changes (which sessions moved); otherwise follow the direct-conversation style (pragmatic, concise, grounded in library data).
-- Amateur/health-oriented (or when the profile's coaching mode is amateur): the rider's weekly hours and available days are the first constraint; when a goal clearly exceeds the time budget, offer a goal ladder first (12 weeks of aerobic base and consistency, a 6-week checkpoint) instead of refusing; a busy season may stay at two sessions per week — do not push more load.`,
+- Amateur/health-oriented (or when the profile's coaching mode is amateur): the rider's weekly hours and available days are the first constraint; when a goal clearly exceeds the time budget, offer a goal ladder first (12 weeks of aerobic base and consistency, a 6-week checkpoint) instead of refusing; a busy season may stay at two sessions per week — do not push more load. See the Amateur Coaching Mode skill for details.`,
 
     'mem.head': `## User Memory`,
     'mem.rules_head': `Rules:`,
@@ -307,7 +307,7 @@ You are in the "training plan" conversation, answering questions about and adjus
     'profile.head': `## User Background & Training Goals`,
     'profile.identity': `Identity: {v}`,
     'profile.goal': `Training goal: {v}`,
-    'profile.tail': `Assess the feasibility and priorities of the training plan in light of the identity and goals above (e.g. time budget, target races, capability direction). If the identity or goal indicates limited time, health orientation, or no performance ambition, follow the Amateur Coaching Mode: let the rider's expectations and available time lead, treat health and consistency as part of success, and do not treat rising load as an obligation.`,
+    'profile.tail': `Assess the feasibility and priorities of the training plan in light of the identity and goals above (e.g. time budget, target races, capability direction). If the rider explicitly wants health rather than performance (or the profile's coaching mode is amateur), follow Amateur Coaching Mode; do not infer amateur status from identity cues such as "office worker" alone.`,
 
     'answer.head': `## Please Answer`,
     'seg.omitted': `...({n} segments omitted in the middle)`,
@@ -339,34 +339,34 @@ The user has categorized this record as **{cat}**. Interpret it accordingly; if 
 Before generating a new plan, fetch the current training plan with get_training_plan:
 - If a plan is currently valid: treat this as a renewal by default (extend the cycle, adjust based on recent execution), and state at the top of your answer whether this is a "renewal" or a "replacement" and the key differences; replace wholesale only when the user explicitly asks to start over;
 - If only an expired plan exists: use its structure as a reference for the new cycle and state the key differences;
-- No plan: generate directly.`,
+- No plan: generate directly. If coaching mode is unset, first ask one question per the Amateur Coaching Mode skill (performance-oriented vs health/time-oriented) and still provide a conservative executable plan — do not stop and wait.`,
     'sec.plan.output': `## Plan Output Format (mandatory)
 
 Besides the narrative analysis, you MUST end your answer with a \`\`\`plan-json fenced JSON block carrying the structured plan — the app validates it deterministically and stores it as the executable plan (consumed by the home plan card and the plan page); malformed output, out-of-window dates, or multiple sessions on one day get the whole block rejected:
 
 - Plan level: valid_from / valid_to (YYYY-MM-DD, span 3–42 days and must cover the future; typically 4 weeks from Monday), goal (one-sentence objective);
-- Per session: **at most one session per day**, fields date (YYYY-MM-DD, within the window), type (rest / recovery / endurance / long / sweet_spot / threshold / vo2max), duration_min (integer minutes 10–600, null for rest), intensity (zone description like "95–105% FTP", may be null), tss (optional; the app estimates it from type × duration), note (session key points, may be null);
+- Per session: **at most one session per day**, fields date (YYYY-MM-DD, within the window), type (rest / recovery / endurance / long / sweet_spot / threshold / vo2max), duration_min (integer minutes 10–600, null for rest), intensity (zone description like "95–105% FTP" or "%HRmax 70–80% / RPE 6", may be null), tss (optional; the app estimates it from type × duration), note (session key points, may be null);
 - Sanity thresholds are enforced: same-stimulus quality sessions (sweet_spot/threshold/vo2max) ≥48h apart (at least one day between dates), every calendar week covering ≥5 days must include a rest day (an explicit rest session or a day with no session), every 3–4 weeks must contain a recovery week (weekly TSS below 70% of the window's max week) — stay conservative rather than borderline;
-- Amateur mode (limited time or explicitly health-oriented): schedule within the rider's weekly hours and available days; there is no need to fill the week; never exceed the rider's per-session time cap; intensity may use %FTP, or %HRmax/perceived effort when that is the rider's available anchor;
+- Amateur mode (limited time or explicitly health-oriented): schedule within the rider's weekly hours and available days; there is no need to fill the week; try not to exceed the rider's per-session cap (flag overruns, never refuse); keep weekly quality sessions at about 2 or fewer (flag overruns); intensity may use %FTP, or %HRmax/perceived effort when that is the rider's available anchor;
 - Example skeleton:`,
     'sec.plan.output_schema': `\`\`\`plan-json
 {"valid_from":"2026-10-19","valid_to":"2026-11-15","goal":"Base phase: aerobic volume and cadence stability","sessions":[{"date":"2026-10-19","type":"rest","duration_min":null,"intensity":null,"tss":0,"note":"Rest day"},{"date":"2026-10-21","type":"threshold","duration_min":75,"intensity":"95–105% FTP","tss":85,"note":"3×12min threshold, 5min recovery"}]}
 \`\`\``,
-    'plan.q.0': `Assess the recent CTL trend: is fitness growing, plateauing, or declining? Is the rate safe (weekly CTL increase should stay under 5–7 points, roughly 5–10%; low-base riders follow the relative rule)? If the rider is amateur/health-oriented (time-limited, no performance ambition), a flat CTL is fine — do not force growth.`,
+    'plan.q.0': `Assess the recent CTL trend: is fitness growing, plateauing, or declining? Is the rate safe (weekly CTL increase should stay under 5–7 points, roughly 5–10%; low-base riders follow the relative rule)? If the rider is explicitly health-oriented/no performance ambition, a flat CTL is fine; if time-limited but with a performance goal, arrange the best load within the available time without forcing growth.`,
     'plan.q.1': `What is the current TSB and fatigue state? Is a deload/recovery block needed soon?`,
     'plan.q.2': `Looking at the monthly intensity distribution type (polarized / pyramidal / sweet_spot), is the current intensity structure reasonable?`,
     'plan.q.3': `What intensity structure should next week have? Give day-by-day training suggestions (type, duration, target intensity — expressed as power zone/%FTP or %HRmax/perceived effort according to the rider's available anchor).`,
     'plan.q.4': `Over the medium term (4-8 weeks), which direction should be the focus? For performance goals, look at capability gaps; for health/habit goals, look at sustainability and aerobic base. Justify with the peak power curve, interval data, or riding frequency.`,
 
-    'sec.taper.race': `## Race Info`,
-    'sec.taper.race_line': `Race date: {date} ({days} days away)`,
+    'sec.taper.race': `## Race / Event Info`,
+    'sec.taper.race_line': `Race/event date: {date} ({days} days away)`,
     'sec.taper.form': `## Current Status (today's CTL/ATL/TSB)`,
     'sec.taper.trend': `## Recent CTL/ATL/TSB Trend (weekly sampling; dates are UTC calendar days, early-morning sessions count toward the previous day)`,
     'sec.taper.recent': `## Recent Activity List`,
-    'taper.q.0': `The goal is a race-day TSB of +5 to +15 (fresh but fit). How far is current TSB from the target?`,
-    'taper.q.1': `Give a day-by-day taper plan from today to race day: type, duration, intensity (%FTP) per day, with the reduction rationale.`,
+    'taper.q.0': `The goal is a race-day TSB of +5 to +15 (fresh but fit). How far is current TSB from the target? If the rider is amateur/health-oriented (finishing an event rather than racing), use the "event day" framing: that TSB is reference only — freshness and reserve matter more than placing or pace.`,
+    'taper.q.1': `Give a day-by-day taper plan from today to the goal day: type, duration, intensity per day (use %FTP or %HRmax/perceived effort according to the rider's available anchor; never invent watts without power data), with the reduction rationale.`,
     'taper.q.2': `How much high-intensity work should be kept during the taper (intensity preservation vs pure rest) to avoid losing fitness?`,
-    'taper.q.3': `Concrete suggestions for the final 48 hours before the race (including warm-up / opener).`,
+    'taper.q.3': `Concrete suggestions for the final 48 hours (an opener may keep 2–3 short wake-up efforts; amateur/event-day framing skips sprint rehearsals or course scouting).`,
     'taper.q.4': `Point out risk factors in the current data (e.g. deep fatigue, CTL too low, recent training structure issues).`,
 
     'sec.compare.a': `## Workout A ({date})`,

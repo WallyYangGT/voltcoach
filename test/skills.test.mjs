@@ -70,6 +70,45 @@ test('内嵌 skills/ 目录默认加载十个技能且跳过 _README（zh）', (
   assert.equal(SKILL_FILES.zh.length, 10);
 });
 
+test('业余教练技能：关键口径钉死 + zh/en 成对', () => {
+  const zh = SKILL_FILES.zh.find((f) => f.name === '10-amateur-coach.md');
+  const en = SKILL_FILES.en.find((f) => f.name === '10-amateur-coach.en.md');
+  assert.ok(zh, '缺少 10-amateur-coach.md');
+  assert.ok(en, '缺少 10-amateur-coach.en.md');
+  // 关键行为：两维取交集、健康锚点、目标阶梯分窗、首次询问不阻塞、
+  // 活动日长骑是上限、记忆兜底、入门不做全力测试、质量课 ≤2
+  for (const phrase of [
+    '两维取交集',
+    '150–300 分钟',
+    '12 周分两个 6 周计划窗落地',
+    '不要停下来等回答',
+    '60–75% 是上限而非目标',
+    'save_memory',
+    '不引导新手做 20 分钟全力测试',
+    '周质量课建议 ≤2',
+  ]) {
+    assert.ok(zh.content.includes(phrase), `中文技能缺少「${phrase}」`);
+  }
+  for (const phrase of [
+    'the two dimensions **intersect**',
+    '150–300 minutes',
+    'Deliver the 12 weeks as two 6-week plan windows',
+    'Do not stop and wait',
+    'is a ceiling, not a target',
+    'save_memory',
+    'Never push beginners into a 20-minute all-out test',
+    'about 2 or fewer',
+  ]) {
+    assert.ok(en.content.includes(phrase), `英文技能缺少「${phrase}」`);
+  }
+  // zh/en 成对：每个 NN- 前缀的中文技能都有同名 .en.md（数量与配对同时校验）
+  const zhNums = SKILL_FILES.zh.map((f) => /^(\d\d)-/.exec(f.name)?.[1]).filter(Boolean).sort();
+  const enNums = SKILL_FILES.en.map((f) => /^(\d\d)-/.exec(f.name)?.[1]).filter(Boolean).sort();
+  assert.deepEqual(enNums, zhNums);
+  assert.equal(zhNums.length, SKILL_FILES.zh.length);
+  assert.equal(enNums.length, SKILL_FILES.en.length);
+});
+
 test('内嵌英文技能：.en.md 归英文，zh 不混入英文技能', () => {
   const en = buildSkillsSection('en');
   assert.match(en, /^## Knowledge Base/);

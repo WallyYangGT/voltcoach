@@ -28,7 +28,8 @@ const entry = (name, content) => `{ name: ${JSON.stringify(name)}, content: ${JS
 const zh = [];
 const en = [];
 for (const name of names) {
-  const content = fs.readFileSync(path.join(srcDir, name), 'utf8').trim();
+  // 换行归一化：源文件可能是 CRLF（工作区检出差异），生成物统一 LF 保证可复现
+  const content = fs.readFileSync(path.join(srcDir, name), 'utf8').replace(/\r\n/g, '\n').trim();
   if (!content) continue;
   if (name.endsWith('.en.md')) en.push(entry(name, content));
   else zh.push(entry(name, content));

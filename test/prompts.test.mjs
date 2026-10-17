@@ -88,7 +88,9 @@ test('复盘提示词：profile 段与 skills 段按需注入', () => {
   assert.match(p, /身份：上班族骑手/);
   assert.match(p, /训练目标：完成一场 200km 骑游/);
   assert.match(p, /## 专业知识库/);
-  // 全空 profile 不产生该段
+  // 业余口径按明确表态判定，不按「上班族」身份线索自动归类
+  assert.match(p, /若用户明确健康导向或不追求成绩/);
+  assert.match(p, /仅凭「上班族」等身份线索不要自动归入业余口径/);
   const p2 = buildReviewPrompt(sampleSummary(), ATHLETE, { identity: '', goal: '' }, null, 'zh', new Date());
   assert.doesNotMatch(p2, /用户背景与训练目标/);
   assert.equal(buildProfileSection(null), null);
@@ -112,8 +114,12 @@ test('周期规划/减量/对比提示词：数据段与固化问题齐全', () 
     { raceDate: '2026-04-20', daysLeft: 25, form: { ctl: 50, atl: 45, tsb: 5 }, formSeries, recentActivities: recent },
     ATHLETE, null, null, 'zh', new Date(),
   );
-  assert.match(taper, /## 比赛信息/);
-  assert.match(taper, /比赛日期：2026-04-20（距今 25 天）/);
+  assert.match(taper, /## 比赛\/活动信息/);
+  assert.match(taper, /比赛\/活动日期：2026-04-20（距今 25 天）/);
+  // 活动日口径：竞技 TSB 只作参考、强度按可用锚点、无竞赛细节
+  assert.match(taper, /按「活动日」口径：该 TSB 只作参考/);
+  assert.match(taper, /无功率数据时不要虚构瓦数/);
+  assert.match(taper, /不安排冲刺演练或踩点/);
   assert.match(taper, /## 当前状态（今日 CTL\/ATL\/TSB）/);
   assert.match(taper, /日期为 UTC 日历日，清晨骑行计入前一日/);
   assert.match(taper, /5\. 指出当前数据中的风险点/);
@@ -600,6 +606,9 @@ test('对话系统段（plan）：与 chat 同构（角色/口径/skills/profile
   assert.match(s, /训练计划」对话中/); // 计划会话专属指令
   assert.match(s, /get_training_plan/);
   assert.match(s, /update_training_plan/);
+  // 业余口径 bullet（2026-10-17）：可用时间为第一约束 + 目标阶梯
+  assert.match(s, /以用户每周可用时间与可用日为第一约束/);
+  assert.match(s, /先给「目标阶梯」/);
   assert.doesNotMatch(s, /训练分析报告：/); // 无 follow_up 的报告正文段
 });
 
@@ -622,13 +631,44 @@ test('周期规划提示词：既有计划处理段 + plan-json 输出格式段�
   assert.match(zh, /```plan-json/); // 示例骨架围栏
   assert.match(zh, /一天至多一课/);
   assert.match(zh, /减量周/);
-  // 业余模式课表约束（2026-10-17）：按可用时间排、不凑满一周、强度双锚点
+  // 业余模式课表约束（2026-10-17）：按可用时间排、不凑满一周、强度双锚点、超出只提示
   assert.match(zh, /按每周可用时间与可用日排课，不必凑满一周/);
   assert.match(zh, /%HRmax\/体感表达/);
+  assert.match(zh, /周质量课建议 ≤2（超出只提示）/);
+  assert.match(zh, /强度区间描述如 "95–105% FTP" 或 "%HRmax 70–80% \/ RPE 6"/);
+  // 首次生成计划且模式未配置：先问一句并同时给保守计划
+  assert.match(zh, /先按「业余教练模式」技能询问一句/);
+  assert.match(zh, /不要停下来等回答/);
   const en = buildPlanPrompt(data, ATHLETE, null, null, 'en', new Date('2026-03-26T10:00:00'));
   assert.match(en, /## Handling an Existing Plan/);
   assert.match(en, /## Plan Output Format \(mandatory\)/);
   assert.match(en, /at most one session per day/);
+  assert.match(en, /keep weekly quality sessions at about 2 or fewer/);
+  assert.match(en, /%HRmax 70–80% \/ RPE 6/);
+  assert.match(en, /do not stop and wait/);
+  // 英文 plan 问题同步业余口径（CTL 维持 / 方向而非短板 / 可用锚点）
+  assert.match(en, /a flat CTL is fine/);
+  assert.match(en, /which direction should be the focus/);
+  assert.match(en, /according to the rider's available anchor/);
+});
+
+test('英文业余口径：profile.tail 与 plan 会话指令同步', () => {
+  const p = buildReviewPrompt(
+    sampleSummary(),
+    ATHLETE,
+    { identity: 'office worker', goal: 'stay healthy' },
+    null,
+    'en',
+    new Date(),
+  );
+  assert.match(p, /follow Amateur Coaching Mode/);
+  assert.match(p, /do not infer amateur status from identity cues/);
+  const s = buildChatSystemSection(
+    { mode: 'plan', agentic: false, athlete: ATHLETE, profile: null, skills: null, memories: [], now: new Date() },
+    'en',
+  );
+  assert.match(s, /Amateur\/health-oriented/);
+  assert.match(s, /offer a goal ladder/);
 });
 
 test('英文复盘提示词：角色/口径/时间/问题全英', () => {
