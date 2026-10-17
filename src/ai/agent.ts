@@ -59,8 +59,10 @@ export async function callAI(
   fetchImpl: FetchLike,
   cfg: AiRuntimeConfig,
   promptOrMessages: string | AgentMessage[],
-  { onChunk, onHeartbeat, onRetry, timeoutMs, lang = 'zh', signal, forceStream }: {
+  { onChunk, onReasoningChunk, onHeartbeat, onRetry, timeoutMs, lang = 'zh', signal, forceStream }: {
     onChunk?: (delta: string) => void;
+    /** 流式 reasoning 增量（推理模型思考过程；不进入返回值） */
+    onReasoningChunk?: (delta: string) => void;
     onHeartbeat?: () => void;
     onRetry?: (nextAttempt: number, errMsg: string) => void;
     timeoutMs?: number;
@@ -117,6 +119,14 @@ export async function callAI(
         ? (delta) => {
             resetStall();
             onChunk?.(delta);
+          }
+        : undefined,
+      // 思考帧同样证明连接在流动：长思考模型（reasoning 阶段可能远久于 stall_ms）
+      // 不能因为还没吐正文就被空闲超时误杀（2026-10 生成过程可视化）
+      onStreamReasoning: useStream
+        ? (delta) => {
+            resetStall();
+            onReasoningChunk?.(delta);
           }
         : undefined,
     });
@@ -188,6 +198,21 @@ export interface AgentLoopOpts {
   onProgress?: (partial: string) => void;
   /** 工具开始执行时回调（UI「正在调用 X…」动态）；onToolCall 仍是完成时回调 */
   onToolStart?: (name: string) => void;
+  /**
+   * 每轮模型请求发出前回调（1 起，含降级重试与轮数耗尽强制作答轮）：
+   * UI 据此切回「模型思考中」——填上「工具执行完 → 下一轮正文到达」之间原本
+   * 完全静默的间隔（2026-10 生成过程可视化）。
+   */
+  onRoundStart?: (round: number) => void;
+  /** 本轮首个正文分片到达（流式；不受 bestContent 长度门控）→ UI 切「生成中」 */
+  onContentStart?: (round: number) => void;
+  /**
+   * 本轮累计 reasoning 文本（仅流式推理模型；agent 侧只保留尾部防无界增长）。
+   * 供 UI 单行滚动展示思考过程；不进入返回值、不落库。
+   */
+  onReasoning?: (thinking: string) => void;
+  /** 流式 tool_calls 首次拿到工具名（早于本地工具执行）→ UI 提前显示工具调用态 */
+  onToolCallStream?: (name: string) => void;
 }
 
 /**
@@ -201,7 +226,22 @@ export async function runAgentLoop(
   messages: AgentMessage[],
   tools: object[],
   executeTool: (name: string, args: Record<string, unknown>) => Promise<string> | string,
-  { onHeartbeat, onToolCall, onDegrade, onRetry, timeoutMs, lang = 'zh', signal, incremental, onProgress, onToolStart }: AgentLoopOpts = {},
+  {
+    onHeartbeat,
+    onToolCall,
+    onDegrade,
+    onRetry,
+    timeoutMs,
+    lang = 'zh',
+    signal,
+    incremental,
+    onProgress,
+    onToolStart,
+    onRoundStart,
+    onContentStart,
+    onReasoning,
+    onToolCallStream,
+  }: AgentLoopOpts = {},
 ): Promise<string> {
   if (!cfg.api_key) throw new Error(t(lang, 'ai.no_key'));
   const effectiveTimeoutMs = timeoutMs ?? cfg.timeout_ms;
@@ -234,6 +274,9 @@ export async function runAgentLoop(
   let bestContent: string | null = null;
   // 本轮流式累计正文（非流式轮恒为空串）；callOnce 闭包引用，每轮开头重置
   let roundContent = '';
+  // 本轮累计 reasoning（仅推理模型流式；只留尾部，UI 滚动展示用，不进入返回值）
+  let roundReasoning = '';
+  const REASONING_TAIL_CHARS = 2000;
 
   const buildRequest = (msgs: AgentMessage[], toolDefs?: object[]) => {
     const req: Record<string, unknown> = { model: cfg.model, messages: msgs, stream: streaming };
@@ -244,7 +287,7 @@ export async function runAgentLoop(
     }
     return req;
   };
-  const callOnce = (msgs: AgentMessage[], toolDefs?: object[]) =>
+  const callOnce = (msgs: AgentMessage[], toolDefs: object[] | undefined, roundNo: number) =>
     // E1：请求体发送副本经 compactAgentHistory 压更旧的工具结果（history 本身不动，
     // tool_calls/tool_call_id 配对完整），防 8 轮 × 16k 结果的全量重发复利
     requestChatCompletion(
@@ -257,10 +300,19 @@ export async function runAgentLoop(
       }), toolDefs),
       {
         signal: ctrl.signal,
-        onRetry,
+        // 传输级自动重试是同一轮的新请求：清掉旧尝试累计，防 reasoning 把旧思考带回来
+        // （请求层只在未吐正文时重试，roundContent 理论为空，重置是防御性口径）
+        onRetry: (attempt, errMsg) => {
+          roundContent = '';
+          roundReasoning = '';
+          onRetry?.(attempt, errMsg);
+        },
         lang,
         onStreamChunk: streaming
           ? (delta) => {
+              // 首个正文分片就切「生成中」：onProgress 只在超过 bestContent 时上抛，
+              // 若复用它会漏掉「最终轮开头已有字但还没超过中间轮过渡语」的窗口
+              if (roundContent === '') onContentStart?.(roundNo);
               roundContent += delta;
               if (bestContent == null || roundContent.length > bestContent.length) {
                 bestContent = roundContent;
@@ -268,8 +320,22 @@ export async function runAgentLoop(
               }
             }
           : undefined,
+        onStreamReasoning: streaming
+          ? (delta) => {
+              roundReasoning = (roundReasoning + delta).slice(-REASONING_TAIL_CHARS);
+              // 正文一旦开始就不再回退到思考态（少数端点会交错下发 reasoning）
+              if (roundContent === '') onReasoning?.(roundReasoning);
+            }
+          : undefined,
+        onStreamToolCall: streaming ? (name) => onToolCallStream?.(name) : undefined,
       },
     );
+  // 轮边界统一入口：清空本轮累计并通知 UI 进入「模型思考中」（含降级重试/强制作答轮）
+  const beginRound = (roundNo: number) => {
+    roundContent = '';
+    roundReasoning = '';
+    onRoundStart?.(roundNo);
+  };
 
   try {
     const history: AgentMessage[] = [...messages];
@@ -277,24 +343,28 @@ export async function runAgentLoop(
     for (let round = 0; round < maxRounds; round++) {
       // 轮边界检查取消：abort 落在工具执行/轮间时，不必等下一次 fetch 拒绝才停
       if (externallyCancelled) throw new AiCancelledError();
-      roundContent = '';
+      beginRound(round + 1);
       let msg: ChatMessage;
       try {
-        msg = (await callOnce(history, toolsActive ? tools : undefined)) as ChatMessage;
+        msg = (await callOnce(history, toolsActive ? tools : undefined, round + 1)) as ChatMessage;
       } catch (e) {
         if (externallyCancelled || e instanceof AiCancelledError) throw new AiCancelledError();
         if (toolsActive && streaming) {
           // 降级梯子第一级：流式轮失败（传输级或 4xx）→ 本轮降非流式重试（保工具），
           // 兼容不支持 stream+tools 组合的端点；streaming 已置 false，后续轮保持非流式
           streaming = false;
+          beginRound(round + 1);
           try {
-            msg = (await callOnce(history, toolsActive ? tools : undefined)) as ChatMessage;
+            msg = (await callOnce(history, toolsActive ? tools : undefined, round + 1)) as ChatMessage;
           } catch (e2) {
             if (toolsActive && round === 0 && e2 instanceof AiTransportError && e2.httpStatus === 400) {
-              // 第二级：非流式仍被 400 拒 → 模型/代理不支持 tools，弃工具降级单轮
-              onDegrade?.(e2 instanceof Error ? e2.message : String(e2));
+              // 第二级：非流式仍被 400 拒 → 模型/代理不支持 tools，弃工具降级单轮。
+              // 先 beginRound 再 onDegrade：轮次事件会把状态切回「模型思考中」，顺序反了
+              // 会把降级文案覆盖掉（1.5s 轮询下用户永远看不到提示）
               toolsActive = false;
-              msg = (await callOnce(history, undefined)) as ChatMessage;
+              beginRound(round + 1);
+              onDegrade?.(e2 instanceof Error ? e2.message : String(e2));
+              msg = (await callOnce(history, undefined, round + 1)) as ChatMessage;
             } else {
               throw e2;
             }
@@ -306,10 +376,12 @@ export async function runAgentLoop(
           e.httpStatus === 400
         ) {
           // 非 incremental（或已降非流式）路径的既有降级：带 tools 首轮被 400 拒绝
-          // → 模型/代理不支持 tools，降级单轮（类型化判定，不依赖错误消息文案）
-          onDegrade?.(e instanceof Error ? e.message : String(e));
+          // → 模型/代理不支持 tools，降级单轮（类型化判定，不依赖错误消息文案）。
+          // 同样先 beginRound 再写降级文案（防轮次事件覆盖提示）
           toolsActive = false;
-          msg = (await callOnce(history, undefined)) as ChatMessage;
+          beginRound(round + 1);
+          onDegrade?.(e instanceof Error ? e.message : String(e));
+          msg = (await callOnce(history, undefined, round + 1)) as ChatMessage;
         } else {
           throw e;
         }
@@ -355,7 +427,8 @@ export async function runAgentLoop(
       role: 'user',
       content: t(lang, 'ai.rounds_exhausted'),
     });
-    const finalMsg = (await callOnce(history, undefined)) as ChatMessage;
+    beginRound(maxRounds + 1);
+    const finalMsg = (await callOnce(history, undefined, maxRounds + 1)) as ChatMessage;
     if (finalMsg?.content) {
       // 强制作答轮同样参与最长正文比较
       if (bestContent == null || finalMsg.content.length > bestContent.length)

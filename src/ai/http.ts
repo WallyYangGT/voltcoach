@@ -170,15 +170,33 @@ function badBodyError(status: number, text: string, lang: Lang): AiTransportErro
  * 流式收尾校验终止标记（[DONE] 或 finish_reason，2026-10）：缺失即视为被中间层
  * 截断，抛不可重试错误——非流式时代空/破损正文由 parseMessageBody 兜住，流式化后
  * 同等完整性由该检查保证（防止截断正文静默落成 completed）。
+ *
+ * 推理模型（2026-10，生成过程可视化）：部分 OpenAI 兼容端点（DeepSeek/Kimi 等）在
+ * 正文前先流式下发 `delta.reasoning_content`（OpenRouter 系为 `delta.reasoning` 字符串）。
+ * 这里只做旁路透传（onStreamReasoning），**不拼入正文、不写入返回值**——思考过程是
+ * UI 的瞬态展示数据，不进报告/对话落库。`onStreamToolCall` 在流式 tool_calls 首现
+ * 工具名时提前通知一次，让 UI 在模型生成参数阶段就能显示「正在调用 X…」。
  */
 export async function requestChatCompletion(
   fetchImpl: FetchLike,
   baseUrl: string,
   apiKey: string,
   requestBody: object,
-  { signal, onStreamChunk, onRetry, lang = 'zh', retryDelayMs = RETRY_DELAY_MS }: {
+  {
+    signal,
+    onStreamChunk,
+    onStreamReasoning,
+    onStreamToolCall,
+    onRetry,
+    lang = 'zh',
+    retryDelayMs = RETRY_DELAY_MS,
+  }: {
     signal?: AbortSignal;
     onStreamChunk?: (delta: string) => void;
+    /** 流式推理增量（reasoning_content / reasoning 字符串形态）；不属于正文 */
+    onStreamReasoning?: (delta: string) => void;
+    /** 流式 tool_calls 首次拿到非空工具名时回调（UI 提前切工具调用态） */
+    onStreamToolCall?: (name: string) => void;
     /** 即将自动重试（nextAttempt 为下一次的序号，从 2 起） */
     onRetry?: (nextAttempt: number, errMsg: string) => void;
     lang?: Lang;
@@ -195,6 +213,8 @@ export async function requestChatCompletion(
       return await requestOnce(fetchImpl, baseUrl, apiKey, requestBody, {
         signal,
         onStreamChunk,
+        onStreamReasoning,
+        onStreamToolCall,
         lang,
         forceStream: attempt > 1 && canStreamRetry,
       });
@@ -232,9 +252,18 @@ async function requestOnce(
   baseUrl: string,
   apiKey: string,
   requestBody: object,
-  { signal, onStreamChunk, lang, forceStream = false }: {
+  {
+    signal,
+    onStreamChunk,
+    onStreamReasoning,
+    onStreamToolCall,
+    lang,
+    forceStream = false,
+  }: {
     signal?: AbortSignal;
     onStreamChunk?: (delta: string) => void;
+    onStreamReasoning?: (delta: string) => void;
+    onStreamToolCall?: (name: string) => void;
     lang: Lang;
     /** 强制走流式（传输级重试时打开：见 requestChatCompletion 的说明） */
     forceStream?: boolean;
@@ -304,6 +333,13 @@ async function requestOnce(
   // tool_calls 增量帧聚合（agent 循环流式化，2026-10）：按 index 分桶，id/name/arguments
   // 均为增量字段按分片拼接（OpenAI 兼容口径；name 通常首帧给全，拼接幂等）
   const toolAcc = new Map<number, { id: string; name: string; args: string }>();
+  // 工具名首现只通知一次（UI 提前显示「正在调用 X…」）；整段 message 兜底也复用该标志
+  let toolNameNotified = false;
+  const notifyToolName = (name: string | undefined) => {
+    if (toolNameNotified || !name) return;
+    toolNameNotified = true;
+    onStreamToolCall?.(name);
+  };
   const emit = (delta: string) => {
     fullText += delta;
     onStreamChunk?.(delta);
@@ -323,6 +359,10 @@ async function requestOnce(
       choices?: {
         delta?: {
           content?: string;
+          /** DeepSeek/Kimi 等推理模型：思考过程增量（与 content 并行、不属正文） */
+          reasoning_content?: string;
+          /** OpenRouter 系：reasoning 为字符串时才接（对象/数组形态忽略） */
+          reasoning?: unknown;
           tool_calls?: { index: number; id?: string; function?: { name?: string; arguments?: string } }[];
         };
         message?: ChatMessage;
@@ -338,6 +378,15 @@ async function requestOnce(
     if (obj.error) throw new AiTransportError(obj.error.message || JSON.stringify(obj.error), false);
     const choice = obj.choices?.[0];
     if (choice?.finish_reason) sawDone = true;
+    // 推理增量：只旁路回调，不拼正文、不置 sawDelta——部分端点会先发 reasoning 帧，
+    // 最后补一帧整段 message.content；置 sawDelta 会让上面的整段兜底被跳过（正文丢失）
+    const deltaReasoning =
+      typeof choice?.delta?.reasoning_content === 'string'
+        ? choice.delta.reasoning_content
+        : typeof choice?.delta?.reasoning === 'string'
+          ? choice.delta.reasoning
+          : '';
+    if (deltaReasoning) onStreamReasoning?.(deltaReasoning);
     // 兼容两种形态：增量 delta（标准流式）与整段 message（部分账号不真正流式）。
     // ⚠️ 两种形态互斥：见过增量就不再认整段帧——部分网关会在 delta 流末尾补一帧带
     // message 的收尾帧，若无条件取 message.content，正文会被拼成两遍（静默污染落库正文）。
@@ -357,6 +406,8 @@ async function requestOnce(
         if (tc.function?.arguments) slot.args += tc.function.arguments;
         toolAcc.set(tc.index, slot);
       }
+      // 名字可能跨帧拼出：拿到首个非空名称即通知（partial name 也会被后续执行阶段纠正）
+      for (const slot of toolAcc.values()) notifyToolName(slot.name);
       return;
     }
     // 整段 message 帧携带 tool_calls（无 delta 形态，与正文侧 wholeContent 同款兜底）：
@@ -364,6 +415,7 @@ async function requestOnce(
     const wholeTools = !sawDelta ? choice?.message?.tool_calls : undefined;
     if (wholeTools?.length) {
       sawDelta = true;
+      notifyToolName(wholeTools.find((tc) => tc.function?.name)?.function?.name);
       // 整段帧的 tool_calls 是完整有序数组（无增量 index 语义），按下标分桶
       wholeTools.forEach((tc, i) =>
         toolAcc.set(i, {
@@ -423,7 +475,10 @@ async function requestOnce(
     if (content) emit(content);
     // 带工具调用的整段兜底必须回原 message 对象——agent 循环依赖 tool_calls 结构，
     // 降级成纯字符串会丢掉工具调用（2026-10 流式化后：循环请求也走流式，会落到本分支）
-    if (msg.tool_calls?.length) return msg;
+    if (msg.tool_calls?.length) {
+      notifyToolName(msg.tool_calls.find((tc) => tc.function?.name)?.function?.name);
+      return msg;
+    }
     return onStreamChunk ? content : msg;
   }
   if (toolAcc.size > 0) {
