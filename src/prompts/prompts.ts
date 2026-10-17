@@ -21,7 +21,7 @@ import dayjs from 'dayjs';
 import 'dayjs/locale/zh-cn.js'; // ESM/Metro 双兼容需带 .js 后缀（旧版同款）
 
 // 本模块进 node:test（L1 层），导入须用相对 .ts 路径（Node 原生跑 TS 不解析 tsconfig paths）
-import { ATHLETE, HR_ZONES, POWER_ZONES, type AthleteParams } from '../core/settings.ts';
+import { ATHLETE, HR_ZONES, POWER_ZONES, type AthleteParams, type CoachMode, type WeeklyHoursTier } from '../core/settings.ts';
 import { PEAK_WINDOWS, type AthleteDossier } from '../core/dossier.ts';
 import type { Lang } from '../core/i18n.ts';
 import { localDayFromUtc } from '../core/local-day.ts';
@@ -67,7 +67,8 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'agentic.tool.get_activity_records': `- get_activity_records：按 file_name 取逐秒时序（功率/心率/踏频等），可用 start_sec/end_sec 只取时间窗片段`,
     'agentic.tool.get_form_series': `- get_form_series：最近 N 天逐日 CTL/ATL/TSB（疲劳与状态走势）`,
     'agentic.tool.get_monthly_summary': `- get_monthly_summary：逐月训练汇总（长期负荷趋势）`,
-    'agentic.tool.get_athlete_profile': `- get_athlete_profile：骑手参数（FTP/最大心率/体重）与用户身份、训练目标`,
+    'agentic.tool.get_athlete_profile': `- get_athlete_profile：骑手参数（FTP/最大心率/体重，含是否已校准）、用户身份/训练目标、教练模式与时间预算（每周可用时长档/可骑日，空=不限/单次上限）`,
+    'agentic.tool.update_rider_profile': `- update_rider_profile：更新教练模式与时间预算（coach_mode/weekly_hours/available_days/session_max_min）——⚠️ 调用前必须复述将写入的内容并获用户肯定答复；用户没提到的字段不要传`,
     'agentic.tool.estimate_ftp': `- estimate_ftp：基于历史骑行估算 FTP（含置信度）`,
     'agentic.tool.simulate_form': `- simulate_form：未来负荷推演——给出逐日计划 TSS，预测 CTL/ATL/TSB 走势与风险（"每周加练会怎样"、赛前减量评估）`,
     'agentic.tool.generate_workout': `- generate_workout：按目标（recovery/endurance/sweet_spot/threshold/vo2max）与可用时长生成单次课表（功率瓦特区间/组数/TSS 估算）`,
@@ -85,6 +86,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'agentic.rule.3': `4. 需要先调用工具时，中间轮只写简短过渡语；完整结论/报告正文留到不再调用工具的最后一轮一次性输出。`,
     'agentic.rule.4': `5. FTP 自动更新（update_ftp）：复盘或对话中发现功率-心率区间系统性错位、峰功率与当前 FTP 明显不符等数据偏移迹象时，主动跑 estimate_ftp；门槛满足（置信度足够且数据新鲜）即调用 update_ftp，无需等用户开口。更新成功后必须在回答中明确指出「FTP 已由 X 更新为 Y」及数据依据；被拒绝时向用户转述原因与数据收集建议。用户口头给出的 FTP 数值不要用本工具，引导其到「我的」页手动设置。`,
     'agentic.rule.5': `6. 重新分析（reanalyze_activity）：FTP 更新后可对受影响的训练（如作为估算依据的锚点骑行、用户关心的最近训练）调用，把分析结果对齐新参数；用户要求重新分析某次训练时同样调用。调用后在回答中说明关键指标的变化（旧→新）与对体能序列的影响。`,
+    'agentic.rule.6': `7. 骑手档案（update_rider_profile）：首次生成计划询问模式得到答复、或用户主动提出时间预算/诉求变化时，先复述将写入的内容（模式、每周时长档、可用日、单次上限）并获用户肯定答复后调用；不要自行切换模式。用户没提到的字段不要传（不修改）。`,
 
     'chat.followup': `请基于下面的训练分析报告与训练数据回答后续问题。要求：每次回答控制在 200 字以内；调用工具查询数据的过程不计入回答字数；必须引用本次训练中的具体数据细节（如 NP/IF、分区占比、心率漂移、峰功率、备注等）给出针对性指导，避免泛泛而谈；不要分点罗列。`,
     'chat.direct': `## 回答要求
@@ -97,7 +99,8 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
 - 用户要求调整计划时，按改动规模选工具：少量课次（顺延一节课/换课/改时长/删插课）用 adjust_plan_sessions 逐课次提交，周期重规划或大面积重排才用 update_training_plan 整体重发；两者都会做确定性合理性校验（质量课间隔/休息日/减量周节奏），不通过会返回具体原因——如实向用户解释原因并给出合规的替代方案，不要口头承诺绕过校验的改法；
 - 确认落实协议：调用调整工具前，必须先向用户复述具体变更（哪天什么课 from→to 改成什么；目标日已有课时要说明是交换还是替换），获得用户肯定答复后方可调用，不要抢跑直接改计划；
 - 调整被接受后向用户复述关键变化（动了哪些课次）；其余遵循直接对话口径（务实简洁、结合训练库数据）。
-- 业余/健康导向（或档案教练模式为业余）：以用户每周可用时间与可用日为第一约束；目标明显超出时间预算时先给「目标阶梯」（先 12 周有氧基础与习惯、6 周检查点），不硬拒；忙季允许每周 2 次维持，不逼用户加量。细节见知识库中的业余教练技能。`,
+- 业余/健康导向（或档案教练模式为业余）：以用户每周可用时间与可用日为第一约束；目标明显超出时间预算时先给「目标阶梯」（先 12 周有氧基础与习惯、6 周检查点），不硬拒；忙季允许每周 2 次维持，不逼用户加量。细节见知识库中的业余教练技能。
+- 首次生成计划时按业余教练技能询问模式并同时给保守计划；用户答复或提出时间预算/诉求变化时，先复述将写入的内容并获确认，再调用 update_rider_profile 写入——不要自行切换模式。`,
 
     'mem.head': `## 用户记忆`,
     'mem.rules_head': `规则：`,
@@ -135,6 +138,25 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'profile.head': `## 用户背景与训练目标`,
     'profile.identity': `身份：{v}`,
     'profile.goal': `训练目标：{v}`,
+    'profile.mode': `教练模式：{v}`,
+    'profile.mode.amateur': `业余（用户期望与可用时间主导；成功包含健康与习惯，维持是合法结果；目标不现实时给阶梯、忙季每周 2 次维持合法）`,
+    'profile.mode.standard': `系统训练（按能力与目标提升）`,
+    'profile.mode.unset': `教练模式：未设置（首次生成计划时先询问用户；在此之前按保守的业余口径给计划）`,
+    'profile.mode.unset.other': `教练模式：未设置`,
+    'profile.hours': `每周可用时间：{v}`,
+    'profile.hours.lt3': `<3 小时`,
+    'profile.hours.3to5': `3–5 小时`,
+    'profile.hours.5to8': `5–8 小时`,
+    'profile.hours.gt8': `8 小时以上`,
+    'profile.days': `可骑的日子：{v}`,
+    'profile.day.1': `周一`,
+    'profile.day.2': `周二`,
+    'profile.day.3': `周三`,
+    'profile.day.4': `周四`,
+    'profile.day.5': `周五`,
+    'profile.day.6': `周六`,
+    'profile.day.7': `周日`,
+    'profile.session_max': `单次时长上限：{n} 分钟`,
     'profile.tail': `请结合上述身份与目标评估训练安排的可行性与侧重点（如时间预算、目标赛事/能力提升方向）。若用户明确健康导向或不追求成绩（或档案中教练模式为业余），按「业余教练模式」口径处理；仅凭「上班族」等身份线索不要自动归入业余口径。`,
 
     'answer.head': `## 请回答`,
@@ -164,7 +186,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'sec.plan.recent': `## 近期训练清单`,
     'sec.plan.existing': `## 既有计划处理
 
-生成新计划前，先用 get_training_plan 查看当前训练计划：
+生成新计划前，先用 get_training_plan 查看当前训练计划，并用 get_athlete_profile 确认教练模式是否已配置（未配置时按业余教练技能先询问）：
 - 存在有效期内的计划：默认按续订处理（顺延周期、结合近期执行情况调整），并在回答开头说明是「续订」还是「替换」及差异要点；用户明确要求重开时才整体替换；
 - 存在已过期计划：参考其结构生成新周期，说明与旧计划的关键差异；
 - 没有计划：直接生成。若教练模式未配置，先按「业余教练模式」技能询问一句（按成绩还是按健康与可用时间安排），并同时给出保守的可执行计划，不要停下来等回答。`,
@@ -242,7 +264,8 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     'agentic.tool.get_activity_records': `- get_activity_records: per-second time series (power/HR/cadence etc.) by file_name, with start_sec/end_sec to fetch only a time window`,
     'agentic.tool.get_form_series': `- get_form_series: daily CTL/ATL/TSB for the last N days (fatigue and form trend)`,
     'agentic.tool.get_monthly_summary': `- get_monthly_summary: monthly training summary (long-term load trend)`,
-    'agentic.tool.get_athlete_profile': `- get_athlete_profile: athlete parameters (FTP/max HR/weight) plus user identity and training goals`,
+    'agentic.tool.get_athlete_profile': `- get_athlete_profile: athlete parameters (FTP/max HR/weight, including whether calibrated), user identity/goals, coaching mode, and time budget (weekly hours tier / available days, empty = unrestricted / per-session cap)`,
+    'agentic.tool.update_rider_profile': `- update_rider_profile: update coaching mode and time budget (coach_mode/weekly_hours/available_days/session_max_min) — ⚠️ restate exactly what will be written and get the rider's explicit agreement before calling; omit fields the rider did not mention`,
     'agentic.tool.estimate_ftp': `- estimate_ftp: estimate FTP from ride history (with confidence)`,
     'agentic.tool.simulate_form': `- simulate_form: future load simulation — give a daily plan TSS to predict the CTL/ATL/TSB trend and risks ("what if I add X weekly", taper evaluation)`,
     'agentic.tool.generate_workout': `- generate_workout: build a single workout by target (recovery/endurance/sweet_spot/threshold/vo2max) and available time (power watt ranges/sets/TSS estimate)`,
@@ -257,6 +280,7 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     'agentic.rule.3': `4. When tools are needed first, keep intermediate rounds to a short transition; write the full conclusion/report only in the final round, which makes no tool calls.`,
     'agentic.rule.4': `5. FTP auto-update (update_ftp): in reviews or chats, when you spot data-drift signs such as a systematic power-vs-HR zone mismatch or peak power clearly inconsistent with the current FTP, run estimate_ftp proactively; when the gate passes (enough confidence and fresh data) call update_ftp without waiting to be asked. After a successful update you MUST state explicitly in the answer that "FTP has been updated from X to Y" with the data basis; if refused, relay the reason and data-collection advice. Never pass user-quoted FTP numbers to this tool — direct the user to set it manually on the Profile page.`,
     'agentic.rule.5': `6. Re-analysis (reanalyze_activity): after an FTP update, call it for affected rides (e.g. the anchor ride behind the estimate, or recent rides the user cares about) to align their analysis with the new parameters; also call it when the user asks to re-analyze a workout. In the answer, explain the key metric changes (old → new) and the effect on the form series.`,
+    'agentic.rule.6': `7. Rider profile (update_rider_profile): when the rider answers the first-time mode question, or proactively reports a change in available time or goals, restate exactly what will be written (mode, weekly hours tier, available days, per-session cap), get explicit agreement, then call; never switch modes on your own. Omit fields the rider did not mention (leave unchanged).`,
 
     'chat.followup': `Answer follow-up questions based on the training analysis report and the training data below. Requirements: keep each answer within 200 characters; tool queries for data do not count toward the limit; cite concrete details from this workout (e.g. NP/IF, zone shares, HR drift, peak power, notes) for targeted guidance — avoid generic advice; do not use bullet lists.`,
     'chat.direct': `## Answer Requirements
@@ -269,7 +293,8 @@ You are in the "training plan" conversation, answering questions about and adjus
 - When the user asks for an adjustment, pick the tool by scope: a few sessions (shift one session / swap / change duration / remove / insert) go through adjust_plan_sessions; full replanning or large-scale reshuffles use update_training_plan to resend everything; both run deterministic sanity checks (quality-session spacing / rest days / recovery-week rhythm) and return concrete reasons on failure — explain them honestly and offer a compliant alternative; never promise changes that bypass the checks;
 - Confirmation protocol: before calling either adjustment tool, restate the concrete change to the user (which day, what changes from→to what; when the target day has a session, state swap vs replacement) and call only after the user agrees — never modify the plan preemptively;
 - After an accepted adjustment, recap the key changes (which sessions moved); otherwise follow the direct-conversation style (pragmatic, concise, grounded in library data).
-- Amateur/health-oriented (or when the profile's coaching mode is amateur): the rider's weekly hours and available days are the first constraint; when a goal clearly exceeds the time budget, offer a goal ladder first (12 weeks of aerobic base and consistency, a 6-week checkpoint) instead of refusing; a busy season may stay at two sessions per week — do not push more load. See the Amateur Coaching Mode skill for details.`,
+- Amateur/health-oriented (or when the profile's coaching mode is amateur): the rider's weekly hours and available days are the first constraint; when a goal clearly exceeds the time budget, offer a goal ladder first (12 weeks of aerobic base and consistency, a 6-week checkpoint) instead of refusing; a busy season may stay at two sessions per week — do not push more load. See the Amateur Coaching Mode skill for details.
+- On the first plan generation, ask the mode question per the Amateur Coaching Mode skill while still giving a conservative plan; when the rider answers or reports a change in available time/goals, restate what will be written, get confirmation, then call update_rider_profile — never switch modes on your own.`,
 
     'mem.head': `## User Memory`,
     'mem.rules_head': `Rules:`,
@@ -307,6 +332,25 @@ You are in the "training plan" conversation, answering questions about and adjus
     'profile.head': `## User Background & Training Goals`,
     'profile.identity': `Identity: {v}`,
     'profile.goal': `Training goal: {v}`,
+    'profile.mode': `Coaching mode: {v}`,
+    'profile.mode.amateur': `amateur (rider expectations and available time lead; success includes health and consistency, maintaining is a valid outcome; unrealistic goals get a goal ladder, and two sessions a week during a busy season is legitimate)`,
+    'profile.mode.standard': `systematic training (progression by capability and goals)`,
+    'profile.mode.unset': `Coaching mode: not set (ask the rider the first time a plan is generated; until then, plan under conservative amateur assumptions)`,
+    'profile.mode.unset.other': `Coaching mode: not set`,
+    'profile.hours': `Weekly available time: {v}`,
+    'profile.hours.lt3': `under 3 h`,
+    'profile.hours.3to5': `3–5 h`,
+    'profile.hours.5to8': `5–8 h`,
+    'profile.hours.gt8': `8 h+`,
+    'profile.days': `Available days: {v}`,
+    'profile.day.1': `Mon`,
+    'profile.day.2': `Tue`,
+    'profile.day.3': `Wed`,
+    'profile.day.4': `Thu`,
+    'profile.day.5': `Fri`,
+    'profile.day.6': `Sat`,
+    'profile.day.7': `Sun`,
+    'profile.session_max': `Per-session time cap: {n} min`,
     'profile.tail': `Assess the feasibility and priorities of the training plan in light of the identity and goals above (e.g. time budget, target races, capability direction). If the rider explicitly wants health rather than performance (or the profile's coaching mode is amateur), follow Amateur Coaching Mode; do not infer amateur status from identity cues such as "office worker" alone.`,
 
     'answer.head': `## Please Answer`,
@@ -336,7 +380,7 @@ The user has categorized this record as **{cat}**. Interpret it accordingly; if 
     'sec.plan.recent': `## Recent Activity List`,
     'sec.plan.existing': `## Handling an Existing Plan
 
-Before generating a new plan, fetch the current training plan with get_training_plan:
+Before generating a new plan, fetch the current plan with get_training_plan and check whether coaching mode is set with get_athlete_profile (if unset, ask first per the Amateur Coaching Mode skill):
 - If a plan is currently valid: treat this as a renewal by default (extend the cycle, adjust based on recent execution), and state at the top of your answer whether this is a "renewal" or a "replacement" and the key differences; replace wholesale only when the user explicitly asks to start over;
 - If only an expired plan exists: use its structure as a reference for the new cycle and state the key differences;
 - No plan: generate directly. If coaching mode is unset, first ask one question per the Amateur Coaching Mode skill (performance-oriented vs health/time-oriented) and still provide a conservative executable plan — do not stop and wait.`,
@@ -392,10 +436,18 @@ const TT = (lang: PromptLang, key: string, vars?: Record<string, string | number
 
 // ---------------- 公共片段 ----------------
 
-/** 提示词中的用户背景（identity/goal，来自训练库 settings 表 profile 行） */
+/** 提示词中的用户背景（身份/目标 + 教练模式与时间预算，来自训练库 settings 表 profile 行） */
 export interface PromptProfile {
   identity?: string;
   goal?: string;
+  /** 教练模式：null/缺省 = 未设置（首次生成计划时询问） */
+  coach_mode?: CoachMode | null;
+  /** 每周可用时间档（区间档） */
+  weekly_hours?: WeeklyHoursTier | null;
+  /** 可骑的星期编号 1–7（1=周一 … 7=周日） */
+  available_days?: number[];
+  /** 单次时长上限（分钟） */
+  session_max_min?: number | null;
 }
 
 /** 记忆段输入（db 层 listMemories() 输出的形状；category='strategy' 进策略权威段） */
@@ -493,6 +545,7 @@ export function buildAgenticSection(lang: PromptLang = 'zh'): string {
     'get_form_series',
     'get_monthly_summary',
     'get_athlete_profile',
+    'update_rider_profile',
     'estimate_ftp',
     'simulate_form',
     'generate_workout',
@@ -507,7 +560,7 @@ export function buildAgenticSection(lang: PromptLang = 'zh'): string {
   ]
     .map((name) => TT(lang, `agentic.tool.${name}`))
     .join('\n');
-  const rules = [0, 1, 2, 3, 4, 5].map((i) => TT(lang, `agentic.rule.${i}`)).join('\n');
+  const rules = [0, 1, 2, 3, 4, 5, 6].map((i) => TT(lang, `agentic.rule.${i}`)).join('\n');
   return `${TT(lang, 'agentic.head')}
 
 ${TT(lang, 'agentic.intro')}
@@ -707,7 +760,8 @@ ${lines.join('\n')}`;
  * （复制提示词兜底也注入——与旧 Web 版返回的提示词一致，知识段对粘贴场景同样有益）；
  * athlete 为生效骑手参数（buildMetricGlossary 用）；
  * now 为当前时刻（buildDateSection 用，非法时该段省略）；
- * dossierSection 为个人训练档案段（buildDossierSection 输出，可空）。
+ * dossierSection 为个人训练档案段（buildDossierSection 输出，可空）；
+ * profilePurpose 透传给 buildProfileSection（plan 场景空档案也渲染「未设置 + 先询问」）。
  */
 function assemble(
   athlete: AthleteParams,
@@ -718,6 +772,7 @@ function assemble(
   lang: PromptLang,
   now: Date | string | number | null,
   dossierSection: string | null = null,
+  profilePurpose: 'plan' | 'other' = 'other',
 ): string {
   return [
     lang === 'en' ? TEXT.en.role : ROLE,
@@ -725,7 +780,7 @@ function assemble(
     ...[
       buildDateSection(now, lang),
       skills,
-      buildProfileSection(profile, lang),
+      buildProfileSection(profile, lang, profilePurpose),
       dossierSection,
       ...dataSections,
     ].filter(Boolean),
@@ -735,16 +790,45 @@ function assemble(
 
 /**
  * 用户背景与训练目标段（设置页维护，存训练库 settings 表 profile 行）。
- * 未配置或两字段皆空时返回 null（不产生该段）。
+ * 2026-10-17 起含教练模式与时间预算（业余教练模式的结构化字段）。
+ * purpose='plan'（周期规划场景）：档案全空也渲染「教练模式：未设置 + 先询问」——
+ *   首次使用的用户正是空档案，不能只靠缺失字段让模型自己推断；其他场景全空返回 null。
+ * 未设置模式的措辞分场景：plan 带「先询问 + 保守业余」指令，其他场景只写中性的
+ * 「未设置」，避免把计划专用指令带进复盘/对比/减量/追问。
  */
-export function buildProfileSection(profile: PromptProfile | null, lang: PromptLang = 'zh'): string | null {
+export function buildProfileSection(
+  profile: PromptProfile | null,
+  lang: PromptLang = 'zh',
+  purpose: 'plan' | 'other' = 'other',
+): string | null {
   if (!profile) return null;
   const identity = String(profile.identity ?? '').trim();
   const goal = String(profile.goal ?? '').trim();
-  if (!identity && !goal) return null;
+  const days = Array.isArray(profile.available_days)
+    ? [...new Set(profile.available_days)].filter((d) => Number.isInteger(d) && d >= 1 && d <= 7).sort((a, b) => a - b)
+    : [];
+  const hours = profile.weekly_hours ?? null;
+  const mode = profile.coach_mode ?? null;
+  const sessionMax = profile.session_max_min ?? null;
+  const hasContent = !!(identity || goal || mode || hours || days.length || sessionMax != null);
+  if (!hasContent && purpose !== 'plan') return null;
+  // 计划场景的空档案：只给未设置模式 + 先询问（无身份目标可评估，不附 profile.tail）
+  if (!hasContent) return `${TT(lang, 'profile.head')}\n\n${TT(lang, 'profile.mode.unset')}`;
+
   const lines: string[] = [];
   if (identity) lines.push(TT(lang, 'profile.identity', { v: identity }));
   if (goal) lines.push(TT(lang, 'profile.goal', { v: goal }));
+  if (mode) {
+    lines.push(TT(lang, 'profile.mode', { v: TT(lang, `profile.mode.${mode}`) }));
+  } else {
+    lines.push(TT(lang, purpose === 'plan' ? 'profile.mode.unset' : 'profile.mode.unset.other'));
+  }
+  if (hours) lines.push(TT(lang, 'profile.hours', { v: TT(lang, `profile.hours.${hours}`) }));
+  if (days.length) {
+    const joiner = lang === 'en' ? ', ' : '、';
+    lines.push(TT(lang, 'profile.days', { v: days.map((d) => TT(lang, `profile.day.${d}`)).join(joiner) }));
+  }
+  if (sessionMax != null) lines.push(TT(lang, 'profile.session_max', { n: sessionMax }));
   return `${TT(lang, 'profile.head')}\n\n${lines.join('\n')}\n\n${TT(lang, 'profile.tail')}`;
 }
 
@@ -1084,6 +1168,7 @@ export function buildPlanPrompt(
     lang,
     now,
     dossierSection,
+    'plan',
   );
 }
 

@@ -87,13 +87,51 @@ test('复盘提示词：profile 段与 skills 段按需注入', () => {
   assert.match(p, /## 用户背景与训练目标/);
   assert.match(p, /身份：上班族骑手/);
   assert.match(p, /训练目标：完成一场 200km 骑游/);
+  // 教练模式未设置时明确写出（首次生成计划先询问）
+  assert.match(p, /教练模式：未设置/);
   assert.match(p, /## 专业知识库/);
   // 业余口径按明确表态判定，不按「上班族」身份线索自动归类
   assert.match(p, /若用户明确健康导向或不追求成绩/);
   assert.match(p, /仅凭「上班族」等身份线索不要自动归入业余口径/);
+  // 全空 profile 不产生该段
   const p2 = buildReviewPrompt(sampleSummary(), ATHLETE, { identity: '', goal: '' }, null, 'zh', new Date());
   assert.doesNotMatch(p2, /用户背景与训练目标/);
   assert.equal(buildProfileSection(null), null);
+});
+
+test('profile 段：教练模式与时间预算渲染（zh/en，可用日去重升序）', () => {
+  const profile = {
+    identity: '上班族',
+    goal: '保持健康',
+    coach_mode: 'amateur',
+    weekly_hours: '3to5',
+    available_days: [3, 1, 3, 7],
+    session_max_min: 90,
+  };
+  const zh = buildProfileSection(profile, 'zh');
+  assert.match(zh, /教练模式：业余/);
+  assert.match(zh, /每周可用时间：3–5 小时/);
+  assert.match(zh, /可骑的日子：周一、周三、周日/);
+  assert.match(zh, /单次时长上限：90 分钟/);
+  const en = buildProfileSection(profile, 'en');
+  assert.match(en, /Coaching mode: amateur/);
+  assert.match(en, /Weekly available time: 3–5 h/);
+  assert.match(en, /Available days: Mon, Wed, Sun/);
+  assert.match(en, /Per-session time cap: 90 min/);
+  // 只有教练字段、没有身份目标时同样成段
+  assert.match(buildProfileSection({ coach_mode: 'standard' }, 'zh'), /教练模式：系统训练/);
+  // 场景化：plan 全空也渲染「未设置 + 先询问」，其他场景全空返回 null、未设置措辞中性
+  const empty = { identity: '', goal: '' };
+  assert.equal(buildProfileSection(empty, 'zh', 'other'), null);
+  assert.match(buildProfileSection(empty, 'zh', 'plan'), /教练模式：未设置（首次生成计划时先询问用户/);
+  assert.match(
+    buildProfileSection({ identity: '上班族' }, 'zh', 'other'),
+    /教练模式：未设置\n/,
+  );
+  assert.doesNotMatch(
+    buildProfileSection({ identity: '上班族' }, 'zh', 'other'),
+    /首次生成计划时先询问/,
+  );
 });
 
 test('周期规划/减量/对比提示词：数据段与固化问题齐全', () => {
@@ -411,9 +449,9 @@ test('复盘提示词注入档案段（新末参，缺省不影响旧调用）',
   assert.ok(withDossier.indexOf('个人训练档案') < withDossier.indexOf('## 训练数据'));
 });
 
-test('agentic 工具指引段：17 个工具与 6 条规则（含 FTP 更新/重新分析/训练计划双工具）', () => {
+test('agentic 工具指引段：18 个工具与 7 条规则（save_memory 在记忆段交代，不单列）', () => {
   const s = buildAgenticSection('zh');
-  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'get_training_plan', 'update_training_plan', 'adjust_plan_sessions', 'set_power_flag', 'recalibrate_activity_power']) {
+  for (const name of ['list_activities', 'get_activity_summary', 'get_activity_records', 'get_form_series', 'get_monthly_summary', 'get_athlete_profile', 'update_rider_profile', 'estimate_ftp', 'simulate_form', 'generate_workout', 'update_ftp', 'reanalyze_activity', 'get_dossier', 'get_training_plan', 'update_training_plan', 'adjust_plan_sessions', 'set_power_flag', 'recalibrate_activity_power']) {
     assert.ok(s.includes(`- ${name}：`), name);
   }
   // update_training_plan 的「整体重发」约束须在指引段硬性出现（follow_up 不注 skills，
@@ -421,6 +459,8 @@ test('agentic 工具指引段：17 个工具与 6 条规则（含 FTP 更新/重
   // 确认落实协议（先复述获肯定答复）同为硬性出现（U1 收尾：局部调整不抢跑）
   assert.match(s, /必须整体重发全部课次/);
   assert.match(s, /获得用户肯定答复后方可调用/);
+  // 骑手档案写入同样要求先复述获确认（业余教练模式 P2）
+  assert.match(s, /7\. 骑手档案（update_rider_profile）/);
   assert.match(s, /1\. 只在上方预装数据不足以回答时才调用工具/);
   assert.match(s, /4\. 需要先调用工具时，中间轮只写简短过渡语/);
   // 新增规则：主动更新须在回答中指出旧值→新值；重新分析后说明指标变化
@@ -432,6 +472,7 @@ test('agentic 工具指引段：17 个工具与 6 条规则（含 FTP 更新/重
   assert.match(en, /5\. FTP auto-update/);
   assert.match(en, /"FTP has been updated from X to Y"/);
   assert.match(en, /6\. Re-analysis/);
+  assert.match(en, /7\. Rider profile \(update_rider_profile\)/);
   assert.match(en, /ALWAYS resend every session/);
   assert.match(en, /confirmation protocol/);
 });
@@ -471,9 +512,10 @@ test('对话系统段（follow_up）：快答指令 + 报告正文 + 训练数�
   assert.match(s, /## 数据查询与计算工具/); // agentic 开 → 工具指引
   assert.match(s, /## 用户记忆/); // agentic 开 → 记忆段
   assert.match(s, /#3, 伤病/);
+  assert.match(s, /用户背景与训练目标/); // 追问也受教练模式/时间预算约束（2026-10-17）
+  assert.match(s, /身份：上班族/);
   assert.doesNotMatch(s, /专业知识库/); // follow_up 不注 skills
   assert.doesNotMatch(s, /## 角色/); // 无角色段（快答场景）
-  assert.doesNotMatch(s, /用户背景与训练目标/); // 无 profile 段
 });
 
 test('compactReportForPrompt：短报告原样、长报告保首末章中间只留标题', () => {
@@ -638,6 +680,17 @@ test('对话系统段：agentic 关闭时无工具指引与记忆段', () => {
 test('周期规划提示词：既有计划处理段 + plan-json 输出格式段（双语，v2 计划载体）', () => {
   const data = { months: [], formSeries: [], recentActivities: [] };
   const zh = buildPlanPrompt(data, ATHLETE, null, null, 'zh', new Date('2026-03-26T10:00:00'));
+  // 空档案（首次使用）也必须拿到「教练模式未设置 + 先询问」的确定性信号
+  const emptyProfileZh = buildPlanPrompt(
+    data,
+    ATHLETE,
+    { identity: '', goal: '' },
+    null,
+    'zh',
+    new Date('2026-03-26T10:00:00'),
+  );
+  assert.match(emptyProfileZh, /教练模式：未设置（首次生成计划时先询问用户/);
+  assert.match(zh, /用 get_athlete_profile 确认教练模式是否已配置/);
   assert.match(zh, /## 既有计划处理/);
   assert.match(zh, /get_training_plan/);
   assert.match(zh, /「续订」还是「替换」/);

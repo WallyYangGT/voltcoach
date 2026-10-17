@@ -28,7 +28,22 @@ import { t, type Lang } from '@/core/i18n';
 import { isShortMemoryExpired, type MemoryScope } from '@/core/memory';
 import { localDay } from '@/core/local-day';
 import { monthlySummaryFromRows, type MonthlyItem, type MonthlyRow } from '@/core/monthly';
-import { ATHLETE, AI_CONFIG, FTP_ESTIMATION, PLAN_VALIDATION, type AiConfig, type AthleteParams } from '@/core/settings';
+import {
+  emptyProfile,
+  isProfileEmpty,
+  normalizeProfilePatch,
+  parseStoredProfile,
+  type RiderProfileData,
+  type RiderProfilePatch,
+} from '@/core/profile';
+import {
+  ATHLETE,
+  AI_CONFIG,
+  FTP_ESTIMATION,
+  PLAN_VALIDATION,
+  type AiConfig,
+  type AthleteParams,
+} from '@/core/settings';
 import type { PlanIssue, TrainingPlan } from '@/core/training-plan';
 import {
   DEFAULT_SYNC_STATE,
@@ -379,60 +394,46 @@ export async function setAthlete(
 
 // ---------------- 用户背景与训练目标（存 settings 表 profile 行，「我的」设置页维护） ----------------
 
-/** 用户背景与训练目标（identity 一句话身份 / goal 一段话目标） */
-export interface RiderProfile {
-  identity: string;
-  goal: string;
+/**
+ * 骑手档案：身份/目标 + 教练模式与时间预算（业余教练模式，2026-10-17，decisions §30）。
+ * 所有字段存 settings 表 profile JSON 行——**不加列、不动 SCHEMA_VERSION**（沿
+ * ai_ftp_update 快照先例；备份包随 settings 行整体迁移）。
+ */
+export interface RiderProfile extends RiderProfileData {
   /** 任一字段非空即视为已配置 */
   configured: boolean;
 }
 
-// 各字段长度上限：身份一句话、目标一段话
-const PROFILE_LIMITS = { identity: 100, goal: 500 } as const;
-
-/** 当前用户背景与训练目标；未配置时两字段为空字符串（行内容损坏时按未配置返回） */
+/** 当前骑手档案；未配置时各字段为空值（行内容损坏时按未配置返回） */
 export async function getProfile(): Promise<RiderProfile> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ value: string }>(
     `SELECT value FROM settings WHERE key = 'profile'`,
   );
-  let profile: RiderProfile = { identity: '', goal: '', configured: false };
+  let data = emptyProfile();
   if (row) {
     try {
-      const p = JSON.parse(row.value);
-      profile = {
-        identity: typeof p.identity === 'string' ? p.identity : '',
-        goal: typeof p.goal === 'string' ? p.goal : '',
-        configured: false,
-      };
+      data = parseStoredProfile(JSON.parse(row.value));
     } catch {
       // 行内容损坏时按未配置返回
     }
   }
-  return { ...profile, configured: !!(profile.identity || profile.goal) };
+  return { ...data, configured: !isProfileEmpty(data) };
 }
 
 /**
- * 更新用户背景与训练目标（允许只给部分字段）：校验 → 合并写库。
- * 两字段都为空时删除 profile 行（视为未配置）。非法值抛 Error（message 按 lang 双语）。
+ * 更新骑手档案（允许只给部分字段）：校验 → 合并写库（校验/合并规则在 core/profile
+ * 纯函数层，设置页与 AI 工具共用同一口径）。所有字段都为空时删除 profile 行。
+ * 非法值抛 Error（message 按 lang 双语）。
  */
 export async function setProfile(
-  partial: Partial<{ identity: string; goal: string }>,
+  partial: RiderProfilePatch,
   lang: Lang = 'zh',
 ): Promise<RiderProfile> {
   const current = await getProfile();
-  const merged = { identity: current.identity, goal: current.goal };
-  for (const key of Object.keys(PROFILE_LIMITS) as (keyof typeof PROFILE_LIMITS)[]) {
-    if (partial?.[key] == null) continue;
-    if (typeof partial[key] !== 'string')
-      throw new Error(t(lang, 'profile.type', { key }));
-    const v = (partial[key] as string).trim();
-    if (v.length > PROFILE_LIMITS[key])
-      throw new Error(t(lang, 'profile.too_long', { key, n: PROFILE_LIMITS[key] }));
-    merged[key] = v;
-  }
+  const merged = normalizeProfilePatch(current, partial, lang);
   const db = await getDb();
-  if (!merged.identity && !merged.goal) {
+  if (isProfileEmpty(merged)) {
     await db.runAsync(`DELETE FROM settings WHERE key = 'profile'`);
   } else {
     await db.runAsync(
@@ -441,7 +442,7 @@ export async function setProfile(
       JSON.stringify(merged),
     );
   }
-  return { ...merged, configured: !!(merged.identity || merged.goal) };
+  return { ...merged, configured: !isProfileEmpty(merged) };
 }
 
 // ---------------- 训练记录（M1：导入 / 列表 / 详情） ----------------

@@ -33,6 +33,7 @@ import {
   type TrainingPlan,
 } from '../core/training-plan.ts';
 import { applyPlanSessionOps } from '../core/plan-ops.ts';
+import type { RiderProfilePatch } from '../core/profile.ts';
 import {
   compactSummaryForPrompt,
   localizeTimestamps,
@@ -76,8 +77,10 @@ export interface ToolIo {
   monthlySummary(months: number): Promise<unknown[]>;
   /** 骑手参数生效值与是否已配置 */
   getAthleteState(): Promise<{ athlete: AthleteParams; configured: boolean }>;
-  /** 用户背景与训练目标 */
+  /** 用户背景与训练目标（含教练模式与时间预算） */
   getProfile(): Promise<PromptProfile>;
+  /** 更新骑手档案（校验/合并口径在 core/profile；非法值抛双语 Error，本层兜为 {error}） */
+  setRiderProfile(partial: RiderProfilePatch, lang: Lang): Promise<PromptProfile>;
   /** 最近 N 天骑行完整 summary（FTP 估算输入） */
   cyclingSummariesSince(days: number): Promise<CyclingRideInput[]>;
   /** 某日 CTL/ATL 快照；训练库为空返回 null */
@@ -214,8 +217,46 @@ const toolGetAthleteProfile: ToolImpl = async (_args, ctx, io) => {
       athlete_configured: configured,
       identity: profile.identity || null,
       goal: profile.goal || null,
+      coach_mode: profile.coach_mode ?? null,
+      coach_mode_configured: profile.coach_mode != null,
+      weekly_hours: profile.weekly_hours ?? null,
+      available_days: profile.available_days ?? [],
+      session_max_min: profile.session_max_min ?? null,
     },
     ctx?.lang || 'zh',
+  );
+};
+
+/**
+ * update_rider_profile：教练模式与时间预算的结构化写入口（业余教练模式，2026-10-17）。
+ * 只放行对话类调用（ctx.chat）——模式变更必须建立在对话确认之上，报告生成场景没有
+ * 用户答复可依；确认协议（先复述获肯定答复）在工具描述、chat.plan 与技能层约束。
+ */
+const toolUpdateRiderProfile: ToolImpl = async (args, ctx, io) => {
+  const lang = ctx?.lang || 'zh';
+  if (!ctx?.chat) return errResult(t(lang, 'profile.tool.chat_only'));
+  const keys = ['coach_mode', 'weekly_hours', 'available_days', 'session_max_min'] as const;
+  if (!keys.some((k) => args?.[k] !== undefined)) return errResult(t(lang, 'profile.tool.empty'));
+  const patch: RiderProfilePatch = {};
+  for (const k of keys) {
+    if (args?.[k] === undefined) continue;
+    let v = args[k];
+    // 清空语义（工具 schema 不能表达 null，用哨兵值）：空串清模式/时长档，0 清单次上限；
+    // 可用日的空数组本身就是「不限/清空」，直接交给 core/profile 校验。
+    if ((k === 'coach_mode' || k === 'weekly_hours') && v === '') v = null;
+    else if (k === 'session_max_min' && v === 0) v = null;
+    (patch as Record<string, unknown>)[k] = v;
+  }
+  const updated = await io.setRiderProfile(patch, lang);
+  return toResult(
+    {
+      ok: true,
+      coach_mode: updated.coach_mode ?? null,
+      weekly_hours: updated.weekly_hours ?? null,
+      available_days: updated.available_days ?? [],
+      session_max_min: updated.session_max_min ?? null,
+    },
+    lang,
   );
 };
 
@@ -518,6 +559,7 @@ const TOOL_IMPL: Record<string, ToolImpl> = {
   get_form_series: toolGetFormSeries,
   get_monthly_summary: toolGetMonthlySummary,
   get_athlete_profile: toolGetAthleteProfile,
+  update_rider_profile: toolUpdateRiderProfile,
   estimate_ftp: toolEstimateFtp,
   simulate_form: toolSimulateForm,
   generate_workout: toolGenerateWorkout,

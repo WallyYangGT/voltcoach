@@ -22,6 +22,18 @@ export const ATHLETE: AthleteParams = {
   weight_kg: 60,
 };
 
+// ============ 教练模式与骑手时间预算（业余教练模式，2026-10-17；decisions §30） ============
+// 08 水平校准（身体能承受多少）与本组字段（想要什么、有多少时间）正交。
+export type CoachMode = 'amateur' | 'standard';
+
+/** 每周可用时间档（区间档：防用户高估自己的时间；TrainerRoad volume tier 先例） */
+export const WEEKLY_HOURS_TIERS = ['lt3', '3to5', '5to8', 'gt8'] as const;
+export type WeeklyHoursTier = (typeof WEEKLY_HOURS_TIERS)[number];
+
+export const COACH_PROFILE_LIMITS = {
+  session_max_min: { min: 10, max: 600 }, // 与 plan 课次时长硬错区间同口径
+} as const;
+
 // ============ 功率分区（Coggan 7 区，按 FTP 百分比） ============
 export interface Zone {
   name: string;

@@ -19,9 +19,15 @@ import {
 } from '@/ai/providerPresets';
 import { SyncCard } from '@/components/SyncCard';
 import { KeepAliveCard } from '@/components/KeepAliveCard';
+import { CoachProfileControls } from '@/components/CoachProfileControls';
 import type { FormSnapshot } from '@/core/form';
 import { localDay } from '@/core/local-day';
-import type { AthleteParams } from '@/core/settings';
+import {
+  COACH_PROFILE_LIMITS,
+  type AthleteParams,
+  type CoachMode,
+  type WeeklyHoursTier,
+} from '@/core/settings';
 import { computeForm, getAiConfig, getAthleteState, getProfile, rebuildDossierQuietly, setAiConfig, setAthlete, setProfile } from '@/db';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
@@ -45,6 +51,11 @@ export default function MeScreen() {
   const [weight, setWeight] = useState('');
   const [identity, setIdentity] = useState('');
   const [goal, setGoal] = useState('');
+  // 教练模式与时间预算（业余教练模式 P2；随档案一起保存）
+  const [coachMode, setCoachMode] = useState<CoachMode | null>(null);
+  const [weeklyHours, setWeeklyHours] = useState<WeeklyHoursTier | null>(null);
+  const [availableDays, setAvailableDays] = useState<number[]>([]);
+  const [sessionMax, setSessionMax] = useState('');
   const [savedFlash, setSavedFlash] = useState<'athlete' | 'profile' | 'ai' | null>(null);
   // 「已保存 ✓」flash 的定时器：组件卸载时清理（否则卸载后 setState）
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -89,6 +100,10 @@ export default function MeScreen() {
       setWeight(String(state.athlete.weight_kg));
       setIdentity(prof.identity);
       setGoal(prof.goal);
+      setCoachMode(prof.coach_mode ?? null);
+      setWeeklyHours(prof.weekly_hours ?? null);
+      setAvailableDays(prof.available_days ?? []);
+      setSessionMax(prof.session_max_min == null ? '' : String(prof.session_max_min));
       if (!aiDraftLoadedRef.current) {
         aiDraftLoadedRef.current = true;
         // AI 表单草稿从生效值重灌（key 回显明文，口径同 Web 版本地单用户应用）
@@ -133,15 +148,46 @@ export default function MeScreen() {
   };
 
   const saveProfile = async () => {
+    // 单次上限在台账前先本地校验（避免把内部字段名透到 Alert）
+    const maxNum = sessionMax.trim() === '' ? null : Number(sessionMax);
+    const { min, max } = COACH_PROFILE_LIMITS.session_max_min;
+    if (maxNum != null && (!Number.isInteger(maxNum) || maxNum < min || maxNum > max)) {
+      Alert.alert(t('set.coach.session_max_invalid', { min, max }));
+      return;
+    }
     setSavingProfile(true);
     try {
-      await setProfile({ identity, goal }, lang);
+      const saved = await setProfile(
+        {
+          identity,
+          goal,
+          coach_mode: coachMode,
+          weekly_hours: weeklyHours,
+          available_days: availableDays,
+          session_max_min: maxNum,
+        },
+        lang,
+      );
+      // 只回显档案字段（不跑整页 load：避免冲掉骑手参数/AI 配置里未保存的草稿）
+      setIdentity(saved.identity);
+      setGoal(saved.goal);
+      setCoachMode(saved.coach_mode ?? null);
+      setWeeklyHours(saved.weekly_hours ?? null);
+      setAvailableDays(saved.available_days ?? []);
+      setSessionMax(saved.session_max_min == null ? '' : String(saved.session_max_min));
       flashSaved('profile');
     } catch (e) {
       Alert.alert(t('set.failed', { msg: e instanceof Error ? e.message : String(e) }));
     } finally {
       setSavingProfile(false);
     }
+  };
+
+  /** 可骑日多选（升序存储由 core/profile 校验层保证） */
+  const toggleDay = (day: number) => {
+    setAvailableDays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort((a, b) => a - b),
+    );
   };
 
   // AI 服务配置保存：key 清空 = 清除密钥（退化为复制提示词模式，旧版同语义）
@@ -300,6 +346,16 @@ export default function MeScreen() {
           onChangeText={setGoal}
           placeholder={t('set.goal.placeholder')}
           style={styles.input}
+        />
+        <CoachProfileControls
+          coachMode={coachMode}
+          weeklyHours={weeklyHours}
+          availableDays={availableDays}
+          sessionMax={sessionMax}
+          onCoachModeChange={setCoachMode}
+          onWeeklyHoursChange={setWeeklyHours}
+          onToggleDay={toggleDay}
+          onSessionMaxChange={setSessionMax}
         />
         <View style={styles.saveRow}>
           <Button
