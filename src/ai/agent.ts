@@ -24,6 +24,7 @@
 
 import { AGENTIC } from '../core/settings.ts';
 import { t, type Lang } from '../core/i18n.ts';
+import { compactAgentHistory } from './agent-history.ts';
 import {
   AiCancelledError,
   AiTransportError,
@@ -244,20 +245,31 @@ export async function runAgentLoop(
     return req;
   };
   const callOnce = (msgs: AgentMessage[], toolDefs?: object[]) =>
-    requestChatCompletion(fetchImpl, cfg.base_url, cfg.api_key, buildRequest(msgs, toolDefs), {
-      signal: ctrl.signal,
-      onRetry,
-      lang,
-      onStreamChunk: streaming
-        ? (delta) => {
-            roundContent += delta;
-            if (bestContent == null || roundContent.length > bestContent.length) {
-              bestContent = roundContent;
-              onProgress?.(bestContent);
+    // E1：请求体发送副本经 compactAgentHistory 压更旧的工具结果（history 本身不动，
+    // tool_calls/tool_call_id 配对完整），防 8 轮 × 16k 结果的全量重发复利
+    requestChatCompletion(
+      fetchImpl,
+      cfg.base_url,
+      cfg.api_key,
+      buildRequest(compactAgentHistory(msgs, {
+        maxChars: AGENTIC.agent_history_max_chars,
+        note: t(lang, 'ai.history_compacted'),
+      }), toolDefs),
+      {
+        signal: ctrl.signal,
+        onRetry,
+        lang,
+        onStreamChunk: streaming
+          ? (delta) => {
+              roundContent += delta;
+              if (bestContent == null || roundContent.length > bestContent.length) {
+                bestContent = roundContent;
+                onProgress?.(bestContent);
+              }
             }
-          }
-        : undefined,
-    });
+          : undefined,
+      },
+    );
 
   try {
     const history: AgentMessage[] = [...messages];

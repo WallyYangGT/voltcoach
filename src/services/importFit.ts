@@ -13,11 +13,12 @@
 
 import { File } from 'expo-file-system';
 import { rollLocalSnapshotQuietly } from '@/backup/export';
-import { analyzeFile, type Summary } from '@/core/analyze';
+import { analyzeFile, type SecRecord, type Summary } from '@/core/analyze';
 import { findDuplicateOf } from '@/core/dedupe';
 import { safeName } from '@/core/records';
 import { computeForm, getEffectiveAthlete, listActivityRideKeys, rebuildDossierQuietly, upsertActivity } from '@/db';
 import { saveRecords } from '@/records-store';
+import { enrichRideKeysForDedupe } from './dedupe';
 import { invalidateReportTitles } from './aiTitle';
 
 /** 单次导入结果（导入页逐文件进度展示） */
@@ -51,19 +52,26 @@ export async function importFitSource(uri: string, fileName: string): Promise<Im
 /**
  * 库内是否已有同一趟骑行（异名同指纹）：命中返回已有记录的文件名；
  * 同名行存在时返回 null（走 upsert 覆盖更新，口径见 core/dedupe.findDuplicateOf）。
+ * 2026-10 室内骑行：候选无有效距离时带上 records 首帧的起骑时刻，并给库内同日期的
+ * 无距离行补首帧（services/dedupe），核心判定才有足够强的室内指纹。
  */
-async function findExistingRide(fileName: string, summary: Summary): Promise<string | null> {
+async function findExistingRide(
+  fileName: string,
+  summary: Summary,
+  records: SecRecord[],
+): Promise<string | null> {
   const a = summary.activity;
+  const candidate = {
+    file_name: fileName,
+    date: a.date,
+    duration_sec: a.duration_sec ?? null,
+    distance_km: a.distance_km ?? null,
+    sport: a.sport ?? null,
+    start_at: records[0]?.timestamp ?? null,
+  };
   const rows = await listActivityRideKeys();
-  return findDuplicateOf(
-    {
-      file_name: fileName,
-      date: a.date,
-      duration_sec: a.duration_sec ?? null,
-      distance_km: a.distance_km ?? null,
-    },
-    rows,
-  );
+  const enriched = await enrichRideKeysForDedupe(rows, candidate);
+  return findDuplicateOf(candidate, enriched);
 }
 
 /**
@@ -86,7 +94,7 @@ export async function importFitBytes(bytes: Uint8Array, fileName: string): Promi
   });
 
   // 查重放在入库之前：命中即整体跳过（含 records 落盘与快照滚动，避免留下孤儿文件）
-  const duplicateOf = await findExistingRide(safe, summary);
+  const duplicateOf = await findExistingRide(safe, summary, records);
   if (duplicateOf) return { summary, duplicateOf };
 
   // 入库 + 注入当日 CTL/ATL/TSB（form 注入后的最终版再入库一次，口径与旧版一致）

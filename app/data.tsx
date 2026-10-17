@@ -26,10 +26,10 @@ import { findDuplicateGroups } from '@/core/dedupe';
 import { formatDuration } from '@/core/metrics';
 import { copyStoredRecord, deleteStoredRecord } from '@/records-store';
 import { invalidateReportTitles, useRideDateLabels } from '@/services/aiTitle';
+import { listRideKeysForDedupe } from '@/services/dedupe';
 import {
   SCHEMA_VERSION,
   deleteActivity,
-  listActivityRideKeys,
   mergeActivityExtras,
   retargetActivityRefs,
   type ActivityRideKey,
@@ -186,7 +186,12 @@ export default function DataScreen() {
       .catch((e) => {
         const retryable = e instanceof BackupError && (e.code === 'wrong_key' || e.code === 'passphrase_required');
         if (retryable) setDialogPass('');
-        else setPendingImport(null);
+        else {
+          setPendingImport(null);
+          // 非可重试失败可能发生在整库替换之后（如 records 落盘/迁移中途出错）：
+          // 起骑时刻缓存可能已陈旧，照样清掉——室内判重/标题都依赖它
+          invalidateReportTitles();
+        }
         Alert.alert(t('data.err.generic'), describeError(e));
       })
       .finally(() => {
@@ -225,11 +230,11 @@ export default function DataScreen() {
 
   // ---------------- 重复记录检查（M5） ----------------
 
-  /** 扫描：全表骑行键 → core/dedupe 分组，只留重复组。silent=true 时不弹「没有重复」（供失败后静默刷新用） */
+  /** 扫描：全表骑行键（无有效距离的室内行按需补起骑时刻）→ core/dedupe 分组，只留重复组。silent=true 时不弹「没有重复」（供失败后静默刷新用） */
   const scanDuplicates = async (silent = false) => {
     setScanning(true);
     try {
-      const rows = await listActivityRideKeys();
+      const rows = await listRideKeysForDedupe();
       const groups = findDuplicateGroups(rows).sort((a, b) => (a[0].date < b[0].date ? 1 : -1));
       setDupGroups(groups);
       if (!groups.length && !silent) Alert.alert(t('data.dupe.title'), t('data.dupe.none'));

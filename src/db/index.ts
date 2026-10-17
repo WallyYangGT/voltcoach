@@ -21,6 +21,11 @@ import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import * as SQLite from 'expo-sqlite';
 import type { Summary } from '@/core/analyze';
+import {
+  CHAT_SUMMARY_SHAPE,
+  parseChatSummary,
+  type ChatSummaryRecord,
+} from '@/core/chat-summary';
 import { buildDossier, type AthleteDossier } from '@/core/dossier';
 import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '@/core/form';
 import type { CyclingRideInput } from '@/core/ftp';
@@ -1319,6 +1324,7 @@ export async function createAiChat(
     AI_CHAT_KEEP,
     mode,
   );
+  await pruneOrphanChatSummaries(); // 被挤出对话的滚动摘要行一并清理
   return id;
 }
 
@@ -1484,7 +1490,63 @@ export async function deleteAiChat(id: number): Promise<number> {
   const db = await getDb();
   await db.runAsync(`DELETE FROM ai_chat_messages WHERE chat_id = ?`, id);
   const info = await db.runAsync(`DELETE FROM ai_chats WHERE id = ?`, id);
+  // 滚动摘要行随对话删除（settings KV，无外键；不删会成为孤儿行）
+  await db.runAsync(`DELETE FROM settings WHERE key = ?`, chatSummaryKey(id));
   return info.changes;
+}
+
+// ---------------- 对话滚动摘要（E1 上下文装配器，2026-10-17） ----------------
+// 存 settings 表 `chat_summary:<chatId>` JSON 行：**不加列、不动 SCHEMA_VERSION**
+// （沿 dossier/training_plan 的 settings KV 先例），备份整库拷贝透明携带。
+// 生命周期与 ai_chats 绑定：deleteAiChat 删行；createAiChat 滚动清理旧对话后
+// 按前缀清孤儿行（AUTOINCREMENT 不复用 id，残留行不会误配新对话，但收拾干净）。
+
+const CHAT_SUMMARY_KEY_PREFIX = 'chat_summary:';
+const chatSummaryKey = (chatId: number) => `${CHAT_SUMMARY_KEY_PREFIX}${chatId}`;
+
+/** 读取对话滚动摘要（行损坏/形状不符返回 null，下次成功摘要自愈覆盖） */
+export async function getChatSummary(chatId: number): Promise<ChatSummaryRecord | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`,
+    chatSummaryKey(chatId),
+  );
+  return parseChatSummary(row?.value);
+}
+
+/** 写入对话滚动摘要（up_to_message_id 为已覆盖的最后一条消息 id） */
+export async function saveChatSummary(
+  chatId: number,
+  summary: string,
+  upToMessageId: number,
+): Promise<void> {
+  const db = await getDb();
+  const entry: ChatSummaryRecord = {
+    shape: CHAT_SUMMARY_SHAPE,
+    up_to_message_id: upToMessageId,
+    summary,
+  };
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    chatSummaryKey(chatId),
+    JSON.stringify(entry),
+  );
+}
+
+/** 清理已不存在的对话留下的摘要行（createAiChat 滚动删除后调用；best-effort，失败不影响新建对话） */
+async function pruneOrphanChatSummaries(): Promise<void> {
+  try {
+    const db = await getDb();
+    await db.runAsync(
+      `DELETE FROM settings
+       WHERE key LIKE 'chat_summary:%'
+         AND CAST(substr(key, ?) AS INTEGER) NOT IN (SELECT id FROM ai_chats)`,
+      CHAT_SUMMARY_KEY_PREFIX.length + 1,
+    );
+  } catch (e) {
+    console.warn('清理孤儿对话摘要失败（不影响新建对话）:', e);
+  }
 }
 
 // ---------------- AI 记忆（ai_memories，带时间戳与取代链，M3） ----------------
@@ -1582,11 +1644,13 @@ export async function saveMemory(
 }
 
 /**
- * 最近 n 条「可注入」记忆（未被取代，且短期记忆未过失效线），id DESC，拼装时
- * 反转为时间正序。失效过滤在 JS 侧调 core/memory 的单一判定源（不在 SQL 里复制
- * 失效天数/次数规则）；表受 MEMORY_KEEP=100 约束，全量取回后过滤的代价可忽略。
+ * 全部「可注入」记忆（未被取代，且短期记忆未过失效线），id DESC。
+ * E1 起默认返回全量（≤MEMORY_KEEP=100），由编排层用 rankMemories 按相关度
+ * top-k 挑选；不再在这里截最近 30 条（旧口径会让高相关旧记忆永远进不了 prompt）。
+ * 失效过滤在 JS 侧调 core/memory 的单一判定源（不在 SQL 里复制失效天数/次数规则）；
+ * 表受 MEMORY_KEEP=100 约束，全量取回后过滤的代价可忽略。
  */
-export async function listMemories(n = 30): Promise<AiMemoryRow[]> {
+export async function listMemories(n = MEMORY_KEEP): Promise<AiMemoryRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<AiMemoryRow>(
     `SELECT id, content, category, source, scope, created_at

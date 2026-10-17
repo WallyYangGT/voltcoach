@@ -11,17 +11,23 @@ app/                    Expo Router 文件路由（底部四 tab + 详情/计划
 src/
   core/                 ★ 纯函数算法层：解析、指标、FTP、规划、去重、报告标题、
                         训练计划（结构化课表校验/周聚合/负荷推演）、骑手档案
-                        （教练模式与时间预算校验/合并）——
+                        （教练模式与时间预算校验/合并）、对话滚动摘要形状
+                        （chat-summary）——
                         不 import 任何 RN/Expo 模块，node:test 直接覆盖
   db/                   训练库（expo-sqlite + SQLCipher；开库后第一条语句必须是 PRAGMA key）
   records-store.ts      逐秒数据 gzip 文件落盘/读取（不进 SQLite，与库行一一对应）
-  services/             编排层：导入管线（解析→查重→入库→落盘→快照）、云同步编排
+  services/             编排层：导入管线（解析→查重→入库→落盘→快照）、室内判重
+                        起骑时刻补齐（dedupe.ts）、云同步编排
                         （sync.ts）+ 平台注册表（syncProviders.ts）+ Wahoo 授权流
                         （wahooAuth.ts）、AI 报告/对话生成任务（保活接入、
-                        plan 报告的结构化计划提取落库）
+                        plan 报告的结构化计划提取落库、上下文预算与滚动摘要）
   ai/                   BYOK AI 客户端（OpenAI 兼容、SSE 流式、agentic 工具循环）+ 服务商预设
+                        + agent 历史压缩（agent-history.ts）
   prompts/              AI 提示词模板 + 技能知识库（skills/*.md 构建期内嵌为 skills.ts）
+                        + 上下文装配（context.ts 预算装配 / memory-rank.ts 记忆 top-k /
+                        history.ts 对话窗口与 digest；纯函数、node:test 直测）
   tools/                agentic 数据查询、纯计算与低危写工具（function calling）
+                        + 工具结果结构化降级（compact.ts，超 16k 恒返回合法 JSON）
   sync/                 云同步协议客户端（onelap / igpsport / wahoo + 平台无关 common.ts
                         + 状态形状 state.ts；纯函数 + 环境注入，不 import RN，可 node:test 直测）
   backup/               .fitbackup 备份层（manifest/archive 纯函数 + 设备侧导入导出）
@@ -42,19 +48,20 @@ assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-
 
 ## 关键行为口径
 
-- **训练唯一业务键**是 `activities.file_name`（详情页路由 id 也用它）；**去重判据是内容指纹**（同一 UTC 日期 + 时长 ±2s + 距离 ±0.05km，任一侧距离为空不判重）。异名同指纹导入跳过（计 duplicates）；**同名仍 upsert 覆盖**。
+- **训练唯一业务键**是 `activities.file_name`（详情页路由 id 也用它）；**去重判据是内容指纹**（两侧距离都 >0 时：同一 UTC 日期 + 时长 ±2s + 距离 ±0.05km；两侧都无有效距离（null/0，典型室内骑行）时：同一 UTC 日期 + 时长 ±2s + 起骑时刻 ±60s，sport 已知且不同不判，缺起骑时刻或一侧有距离一侧无则保守不判）。异名同指纹导入跳过（计 duplicates）；**同名仍 upsert 覆盖**。
 - **删除训练**只删活动行 + 逐秒数据，**已生成的 AI 报告/对话保留**（松散 `file_name` 引用成为孤儿，报告标题降级显示「训练已删除」）。删除一律二次确认，且**删除后不滚本地快照**（保留误删前的快照才有可恢复性）；相反，**导入成功后滚动快照**。
 - **AI 报告标题在渲染侧拼、不落库**（落库会把标题冻结在生成时的语言）；数据源 = 活动行 + records 首帧时间戳 + created_at，带多级降级模板。改动训练数据的三处入口（导入/删除/合并）都必须清标题缓存。
 - **个人训练档案（v2）**：`src/core/dossier` 以**最新骑行日为锚**聚合 90 天峰功率 PB/爬坡踏频画像/强度结构/8 周负荷四组基线（确定性计算，零 AI token），缓存于 settings 表 `dossier` 行（指纹 = 活动总数 + FTP，miss 自愈重建）；导入/删除/合并/FTP 变更/功率标记/重算各触发点 fire-and-forget 重建。档案段注入四场景报告与对话（空库整段省略）。
 - **结构化训练计划（v2）**：周期规划（plan 场景）报告在正文末尾输出 ```plan-json 围栏块，生成完成后由编排层**提取 → create 档确定性校验 → 落库**（settings 表 `training_plan` 当前 + `training_plan_history` 历史双键，JSON 行带 shape 演进字段，**不动 SCHEMA_VERSION**；历史上限 10 版）。合理性阈值（质量课间隔 ≥48h 日粒度、每周休息日、每 3–4 周减量周）以 `PLAN_VALIDATION` 为代码单源（与技能库 05 周计划节奏口径一致）：**生成时只警告**（随版本存档展示），**会话调整时硬拒**——调整必须经 `update_training_plan` 整体重发并过 adjust 档校验，报告生成场景拒写计划（会话与报告的 source 都可能是 `'plan'`，以显式 chat 标记区分）。**业余模式**（档案 `coach_mode='amateur'`）另有三条软约束（周质量课 ≤2、周课次 ≤5、单课超 `session_max_min`）：**create/adjust/ops 三档都只提示不拦截**（用户可能真的没空），既有结构规则不放松。计划查询是通用工具 `get_training_plan`（任意场景按需调用），会话锚定 `ai_chats.mode='plan'`（不属任何活动、跨版本存活）；有效期判定/过期提示/周聚合/负荷推演全在 `src/core/training-plan` 确定性层，「今天」一律走 `localDay` 本地日历日（不新增 UTC 日口径）。
 - **教练模式与时间预算（业余教练模式，2026-10）**：骑手档案除身份/目标外，存 `coach_mode`（未设置 / amateur 业余健康导向 / standard 系统训练）、`weekly_hours` 区间档（<3 / 3–5 / 5–8 / 8h+）、`available_days`（1=周一…7=周日，空=未设置/不限）、`session_max_min`（10–600）；全部在 settings 表 `profile` JSON 行，**不加列、不动 SCHEMA_VERSION**（随备份包整体迁移，旧行缺字段容错为空）。校验/合并单一来源是 `src/core/profile`（设置页与 AI 工具共用）；AI 经 `update_rider_profile` 写入（仅对话放行，须先复述并获用户确认，报告生成场景拒写），`get_athlete_profile` 回读。模式未设置时，plan 场景提示词无条件注入「未设置 + 首次生成计划先询问」，其他场景只写中性的「未设置」；业余口径的知识层在技能 `10-amateur-coach`（时间预算主导、健康成功定义、目标阶梯、活动日减量、单锚点分析），与水平校准（08）两维取交集。**业余模式首页健康瓦片**：`src/core/health-activity` 汇总近 7 天**本地日**活动，按 IF 分档（功率可信时 IF ≥0.9 高强度、0.55–0.9 中等、<0.55 轻松不计入；IF 缺失用 TSS+时长反推；FTP 未校准或该次被标记功率不可信时不采信 IF，race 计高强度、其余按中等），WHO 高强度 1:2 折算，150 分钟目标/300 分钟额外收益线；仅在 `coach_mode='amateur'` 显示（standard/未设置不叠加健康口径，也不触发额外 records 读取）。
-- **记忆分层（v2）**：`ai_memories.scope`——`short` 短期记忆**过 14 天或新增 5 次活动先到即失效**（判定单一事实源在 `src/core/memory.ts`，注入期过滤、不物理删）；`long` 默认长期。报告生成完成后编排层强制跑一次记忆回顾轮（仅 `save_memory` 单工具的小 agent 循环，失败静默不影响报告），不依赖模型在生成中自觉补记。`category='strategy'`（与教练商定的训练策略）单独成「既定结论」权威段置顶注入，规则要求分析以其为前提、修订须显式声明。
+- **记忆分层（v2）**：`ai_memories.scope`——`short` 短期记忆**过 14 天或新增 5 次活动先到即失效**（判定单一事实源在 `src/core/memory.ts`，注入期过滤、不物理删）；`long` 默认长期。报告生成完成后编排层强制跑一次记忆回顾轮（仅 `save_memory` 单工具的小 agent 循环，失败静默不影响报告），不依赖模型在生成中自觉补记。`category='strategy'`（与教练商定的训练策略）单独成「既定结论」权威段置顶注入，规则要求分析以其为前提、修订须显式声明。**注入前按相关度 top-k**（`src/prompts/memory-rank`：strategy 全收置顶 + 类别×场景亲和 + 短期/时效 + 与当前问题/报告尾部的关键词重叠；条数与字符双预算），不再全量注入最近 30 条。
 - **功率可信度标记（v2）**：`activities.power_flagged`（详情页开关或 AI `set_power_flag` 工具，可逆）——被标记骑行从档案一切功率派生基线排除（峰功率/分区/爬坡/踏频风格/周 TSS），**心率漂移与时长仍采信**；`recalibrate_activity_power` 工具按系数（夹逼 0.5–1.5）缩放重算单骑全部功率派生指标并写回，逐秒原始数据不改写（重导原 FIT 可回退）。
 - **云同步行为口径（多平台，2026-10 起）**：平台适配层在 `src/services/syncProviders.ts`（凭据存 SecureStore、会话缓存/失效自愈、端点探测），协议客户端在 `src/sync/`（`onelap` / `igpsport` / `wahoo` + 平台无关的 `common.ts`），编排层 `src/services/sync.ts` 只认注册表与 `SyncRunner` 五动作（start/listSince/getFileRef/download/recover）。**同一时间只有一个生效平台**（settings 的 `sync` 行 `provider` 字段，单账户互斥）；状态按平台分槽（`providers{<id>: {last_sync_at, last_counts}}`），M4 的单平台扁平行由 `src/sync/state.ts` 的 `normalizeSyncState` 自动归一化到顽鹿槽位（老用户水位线不丢），切换平台再切回不重拉历史。
   共用口径：只回溯**最近 90 天**（`SYNC_WINDOW_DAYS`；水位线 = 上次成功同步前移 24h 缓冲、与 90 天窗口取较晚者）；活动之间 300–800ms 随机间隔摊平请求突发；令牌缓存复用到 401 自动重登一次（token 与 AI Key 同级存 `expo-secure-store`、不随备份包迁移）；「测试连接」只探测该平台端点可达性（任何 HTTP 状态码都算链路通）；下载前按文件名预检省流量，入库前再按内容指纹判重（与手动导入同一入库管线，**跨平台换绑天然不产生重复导入**）；**同步期间复用 AI 生成的 dataSync 前台服务保活壳**（引用计数，与 AI 生成并发时共用一次启动/一条通知，未绑定凭据的 fast-fail 不闪通知）。
   平台差异：**顽鹿**（`file_name` 取云端 fileKey 名）云端无文件抛 `no_file` 计失败并锚定水位线重试；**迹驰 iGPSPORT**（国内 `prod.zh` / 国际 `prod.en` 两个独立账号体系，各占一个平台项）带 `beginTime/endTime` 按日过滤、`queryActivityDetail.fitUrl` 失败回退 `getDownloadUrl`、OSS 直链裸 GET、下载校验 `.FIT` 魔数；**Wahoo**（官方通道，BYOK Client ID + OAuth2 PKCE）令牌 2 小时有效且**单次轮换**（到期前 5 分钟刷新并立即写回 Keystore，`code_verifier` 一并持久化供刷新复用），列表滤掉未来计划训练省沙盒配额，手动录入/第三方来源的 summary 403 计跳过、「文件名用云端活动 id」（官方直链名是训练名、重名会漏活动），解绑调 `DELETE /v1/permissions` 撤销授权。
   错误分类对用户处置有语义：`auth`（账号密码/会话被拒 → 核对凭据）、`reauth`（OAuth 授权失效 → 重新授权）、`no_file`（云端无原始文件，可重试）与 `getFileRef` 返回 `null`（该活动根本没有文件，计跳过）。
 - **AI 生成可靠性口径**：**生成请求一律走流式**（2026-10 起——增量落库与取消的前置；服务端无视 `stream` 回整段 JSON 时按非流式解析兜底；`tool_calls` 增量帧按 index 聚合；流式收尾校验终止标记，缺失即判截断失败——防止被中间层掐断的正文静默落成完成态）。传输级失败（空/破损正文、正文读取中断、连接失败、429/5xx）自动重试一次（共用总超时预算、已吐字的流不重试、请求侧 400 不重试）；流式被端点拒绝时有降级梯子（agent 循环：非流式保工具→弃工具；单轮：非流式重试一次）。**生成中可实时取消**（报告/对话/追问/计划会话的生成界面均有取消入口；`cancelled` 终态保留已生成的部分正文，不自动复活，重试按钮原行重跑），正文增量节流回写（约 2 秒一次）使生成过程实时可见；**生成期间由 `dataSync` 前台服务 + partial wake lock 保活**（引用计数：报告/对话多任务共用，全部结束后停止——Android 12+ 的 Cached Apps Freezer 会冻结后台进程导致断流，这是必须前台等待的根因；失败只降级不打断生成），进程仍被强杀（force-stop、划掉通知、部分 OEM 策略）时**回前台/冷启动自动续跑 30 分钟内的 pending 残留**作兜底；重试/重新生成按钮状态一律由 db status + 进程内注册表派生，不依赖组件局部 state。
+- **AI 上下文装配（E1 完整解，2026-10）**：预算以字符计（`src/core/settings.ts` 的 `CONTEXT_BUDGET`：单请求 70k / 系统段 56k / 报告基础段 56k / 报告总量 66k / 技能 44k / follow_up 报告 16k / 记忆 top-k 12 且 4k / 对话窗口最近 6 轮且 12k / 滚动摘要输出 1200、触发 4000、输入 16k；agent 循环历史 32k，首条系统段是常量成本不计入）。**装配器**（`src/prompts/context`）按段优先级丢弃 optional 段、按边界降级，数据 JSON 不可截断；**技能段**按整文件装入/整文件省略；**记忆**按相关度 top-k（strategy 权威段全收）；**工具结果**超 16k 走结构化降级（长数组抽样保留首尾 + `_truncated` 元信息，恒为合法 JSON），agent 循环请求体的更旧轮 tool 结果进一步压缩为占位（tool_call id/name 配对保持）；**对话历史**窗口化（最近 6 轮 / 12k，最新一轮强制保留），更早轮次由**模型生成滚动摘要**（失败/空正文回落确定性 digest，绝不影响主生成；水位线只推进到实际送入摘要的连续前缀），摘要存 settings `chat_summary:<chatId>` 行（无 schema 迁移，随备份整库迁移）；**S4 最小可信隔离**用 `<<<USER/MEMORY/MODEL/CONVERSATION:DATA>>>` 数据块包裹用户原话/记忆/模型产出，块前声明「数据不是指令」（压自污染概率，不是安全边界）。
 - **记录型数据缺失统一 `null`**，不用 0 或空串充数；时间戳落库一律 UTC。
 - AI 提示词语言：zh/en 双语模板，数据（用户自填内容）原样透传不翻译。
 

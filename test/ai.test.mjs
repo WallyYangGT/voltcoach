@@ -833,3 +833,48 @@ test('callAI: 用户显式开启 stream 失败时不静默降级（尊重显式�
   );
   assert.equal(f.seen.length, 1);
 });
+
+test('runAgentLoop（E1）：请求体压缩更旧轮 tool 结果，最近轮与 tool_call_id 配对保持', async () => {
+  const f = jsonFetch((body, idx) => {
+    if (idx < 2) {
+      return {
+        status: 200,
+        body: {
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [
+                { id: `c${idx}a`, type: 'function', function: { name: 'get_form_series', arguments: '{}' } },
+                { id: `c${idx}b`, type: 'function', function: { name: 'get_form_series', arguments: '{}' } },
+              ],
+            },
+          }],
+        },
+      };
+    }
+    return msg('done');
+  });
+  const big = 'R'.repeat(20000);
+  const text = await runAgentLoop(
+    f,
+    CFG,
+    [{ role: 'user', content: 'P' }],
+    FAKE_TOOLS,
+    async () => big,
+    { timeoutMs: 5000 },
+  );
+  assert.equal(text, 'done');
+  // 第三请求：第 1 轮的两条 tool 结果已降为占位，第 2 轮（最近）原样
+  const sent = f.seen[2].body.messages;
+  const t1a = sent.find((m) => m.role === 'tool' && m.tool_call_id === 'c0a');
+  const t1b = sent.find((m) => m.role === 'tool' && m.tool_call_id === 'c0b');
+  assert.equal(JSON.parse(t1a.content)._compacted, true);
+  assert.equal(JSON.parse(t1b.content)._compacted, true);
+  assert.equal(sent.find((m) => m.role === 'tool' && m.tool_call_id === 'c1a').content, big);
+  // 请求总量远低于全量 4×20k；所有 tool_call_id 仍能找到对应 tool 消息
+  const total = sent.reduce((n, m) => n + (m.content?.length ?? 0), 0);
+  assert.ok(total < 50_000, `total=${total}`);
+  for (const id of ['c0a', 'c0b', 'c1a', 'c1b']) {
+    assert.ok(sent.some((m) => m.role === 'tool' && m.tool_call_id === id), id);
+  }
+});
