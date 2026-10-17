@@ -19,7 +19,7 @@
  */
 
 import type { AthleteParams } from '../core/settings.ts';
-import { AGENTIC, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from '../core/settings.ts';
+import { AGENTIC, AMATEUR_FORM_SIMULATION, FTP_ESTIMATION, FORM_SIMULATION, WORKOUT_TEMPLATES } from '../core/settings.ts';
 import { estimateFtpFromHistory, type CyclingRideInput } from '../core/ftp.ts';
 import { t, type Lang } from '../core/i18n.ts';
 import { localDay, localDayFromUtc } from '../core/local-day.ts';
@@ -293,11 +293,14 @@ const toolSimulateForm: ToolImpl = async (args, ctx, io) => {
     startCtl = cur?.ctl ?? 0;
     startAtl = cur?.atl ?? 0;
   }
+  // 档案读取失败按标准阈值继续推演（纯计算工具不因档案异常失败）
+  const profile = await io.getProfile().catch(() => null);
   const { projection, risk_flags, end_form } = simulateForm({
     startCtl,
     startAtl,
     plan: clean,
-    cfg: FORM_SIMULATION,
+    // 与计划页同口径：业余模式用放宽后的推演阈值（对话里的 what-if 不再按训练者标尺报风险）
+    cfg: profile?.coach_mode === 'amateur' ? AMATEUR_FORM_SIMULATION : FORM_SIMULATION,
     lang,
   });
   return toResult({ start: { ctl: startCtl, atl: startAtl }, projection, risk_flags, end_form }, lang);
@@ -440,7 +443,11 @@ const toolGetTrainingPlan: ToolImpl = async (_args, ctx, io) => {
 const toolUpdateTrainingPlan: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
   if (!ctx?.chat) return errResult(t(lang, 'tp.tool.report_source'));
-  const v = validateTrainingPlan(args?.plan, localDay(), 'adjust', lang);
+  const profile = await io.getProfile();
+  const v = validateTrainingPlan(args?.plan, localDay(), 'adjust', lang, {
+    coachMode: profile.coach_mode,
+    sessionMaxMin: profile.session_max_min,
+  });
   if (!v.ok || !v.plan) return errResult(v.errors.join('；'));
   if (v.violations.length) {
     return toResult(
@@ -457,7 +464,7 @@ const toolUpdateTrainingPlan: ToolImpl = async (args, ctx, io) => {
   const versionsTotal = await io.savePlanVersion(v.plan, {
     origin: 'adjust',
     change_note: note,
-    warnings: [],
+    warnings: v.warnings,
   });
   return toResult(
     {
@@ -467,6 +474,7 @@ const toolUpdateTrainingPlan: ToolImpl = async (args, ctx, io) => {
       valid_to: v.plan.valid_to,
       sessions: v.plan.sessions.length,
       note,
+      warnings: v.warnings.map((i) => formatPlanIssue(i, lang)),
     },
     lang,
   );
@@ -484,7 +492,11 @@ const toolAdjustPlanSessions: ToolImpl = async (args, ctx, io) => {
   if (!ctx?.chat) return errResult(t(lang, 'tp.tool.report_source'));
   const stored = await io.getTrainingPlan();
   if (!stored) return errResult(t(lang, 'tp.tool.no_plan'));
-  const r = applyPlanSessionOps(stored.plan, args?.ops, localDay(), lang);
+  const profile = await io.getProfile();
+  const r = applyPlanSessionOps(stored.plan, args?.ops, localDay(), lang, {
+    coachMode: profile.coach_mode,
+    sessionMaxMin: profile.session_max_min,
+  });
   if (!r.ok || !r.plan) {
     if (r.errors.length) return errResult(r.errors.join('；'));
     return toResult(
@@ -502,7 +514,7 @@ const toolAdjustPlanSessions: ToolImpl = async (args, ctx, io) => {
   const versionsTotal = await io.savePlanVersion(adjusted, {
     origin: 'adjust',
     change_note: note,
-    warnings: [],
+    warnings: r.warnings,
   });
   return toResult(
     {
@@ -513,6 +525,7 @@ const toolAdjustPlanSessions: ToolImpl = async (args, ctx, io) => {
       valid_to: adjusted.valid_to,
       sessions: adjusted.sessions.length,
       note,
+      warnings: r.warnings.map((i) => formatPlanIssue(i, lang)),
     },
     lang,
   );

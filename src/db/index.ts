@@ -1624,8 +1624,10 @@ export async function deleteMemory(id: number): Promise<number> {
 
 // ---------------- 个人训练档案（settings 表 dossier 行，v2） ----------------
 
-/** 档案缓存行结构：dossier + 指纹（活动总数 + FTP）+ 结构版本（Dossier 字段演进时递增，旧结构直接重建，防深层取值崩掉报告生成链路——code-review P2-4） */
-const DOSSIER_CACHE_SHAPE = 1;
+/** 档案缓存行结构：dossier + 指纹（活动总数 + FTP）+ 结构版本（Dossier 字段演进时递增，旧结构直接重建，防深层取值崩掉报告生成链路——code-review P2-4）
+ * v2（2026-10-17）：intensity_structure 增加 hr_zone_pct（业余单锚点降级）——旧缓存没
+ * 这个字段，不升版会让新心率结构行在下次数据变更前一直缺失。 */
+const DOSSIER_CACHE_SHAPE = 2;
 interface DossierCacheEntry {
   shape: number;
   dossier: AthleteDossier;
@@ -1773,7 +1775,7 @@ export interface StoredPlan {
   origin: 'generate' | 'adjust'; // 周期规划生成 / 会话调整
   source_report_id: number | null; // generate：来源 plan 报告 id（计划页「查看生成报告」跳转）
   change_note: string | null; // adjust：模型给出的变更说明
-  warnings: PlanIssue[]; // 入库时的合理性提示（adjust 档恒为空）
+  warnings: PlanIssue[]; // 入库时的合理性提示（create 档 R1–R3；业余软约束三档都可能有）
 }
 
 /** 当前计划行（热键只放当前版本，历史走独立冷键隔离读放大） */

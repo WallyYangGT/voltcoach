@@ -10,7 +10,12 @@
  */
 
 import { t, type Lang } from '../core/i18n.ts';
-import { FORM_SIMULATION, WORKOUT_TEMPLATES, type WorkoutTemplate } from '../core/settings.ts';
+import {
+  FORM_SIMULATION,
+  WORKOUT_TEMPLATES,
+  WORKOUT_TEMPLATES_SHORT,
+  type WorkoutTemplate,
+} from '../core/settings.ts';
 
 const r1 = (x: number) => Math.round(x * 10) / 10;
 
@@ -146,7 +151,8 @@ export interface WorkoutResult {
  * 单次课表生成。
  * target 课表类型（WORKOUT_TEMPLATES 的 key）；durationMinutes 可用总时长（分钟）；
  * tsb 当前 TSB——低于 tsbRecovery 阈值时自动降级为恢复课；
- * templates/tsbRecovery 缺省用 settings 出厂值。
+ * templates/tsbRecovery 缺省用 settings 出厂值；shortTemplates 为短课回退模板
+ * （标准模板装不下时使用，业余模式 30–45 分钟也能上一次质量课）。
  */
 export function generateWorkout({
   target,
@@ -154,6 +160,7 @@ export function generateWorkout({
   ftpWatts,
   tsb = null,
   templates = WORKOUT_TEMPLATES,
+  shortTemplates = WORKOUT_TEMPLATES_SHORT,
   tsbRecovery = FORM_SIMULATION.tsb_recovery,
   lang = 'zh',
 }: {
@@ -162,6 +169,7 @@ export function generateWorkout({
   ftpWatts: number;
   tsb?: number | null;
   templates?: Record<string, WorkoutTemplate>;
+  shortTemplates?: Partial<Record<string, WorkoutTemplate>>;
   tsbRecovery?: number;
   lang?: Lang;
 }): WorkoutResult {
@@ -196,23 +204,53 @@ export function generateWorkout({
   }
 
   // 间歇课：热身 → 主组（组数夹在模板范围内，单组时长由可用时长推算）→ 冷身
-  const avail = dur - tpl.warmup_min! - tpl.cooldown_min!;
-  let chosen: { reps: number; setMin: number; restMin: number } | null = null;
-  for (let reps = tpl.reps![1]; reps >= tpl.reps![0]; reps--) {
-    // rest_min 为 null 时组间休息与单组等时（如 VO2max）
-    let setMin: number;
-    if (tpl.rest_min == null) {
-      setMin = Math.floor(avail / (2 * reps - 1)); // r 组 + (r-1) 次等时休息
-    } else {
-      setMin = Math.floor((avail - (reps - 1) * tpl.rest_min) / reps);
+  /** 按给定模板尝试排课；装不下返回 null */
+  const pickIntervals = (t: WorkoutTemplate) => {
+    const avail = dur - t.warmup_min! - t.cooldown_min!;
+    for (let reps = t.reps![1]; reps >= t.reps![0]; reps--) {
+      // rest_min 为 null 时组间休息与单组等时（如 VO2max）
+      let setMin: number;
+      if (t.rest_min == null) {
+        setMin = Math.floor(avail / (2 * reps - 1)); // r 组 + (r-1) 次等时休息
+      } else {
+        setMin = Math.floor((avail - (reps - 1) * t.rest_min) / reps);
+      }
+      setMin = Math.min(setMin, t.set!.max_min);
+      if (setMin >= t.set!.min_min) return { reps, setMin, restMin: t.rest_min ?? setMin };
     }
-    setMin = Math.min(setMin, tpl.set!.max_min);
-    if (setMin >= tpl.set!.min_min) {
-      chosen = { reps, setMin, restMin: tpl.rest_min ?? setMin };
-      break;
+    return null;
+  };
+  let chosenTpl = tpl;
+  let chosen = pickIntervals(tpl);
+  if (!chosen) {
+    // 标准模板装不下 → 回退短课版（业余模式短时长质量课；仍装不下才报错）
+    const short = shortTemplates[key];
+    if (short) {
+      const c = pickIntervals(short);
+      if (c) {
+        chosen = c;
+        chosenTpl = short;
+        notes.push(t(lang, 'plan.short_fallback', { label: short.label }));
+      }
     }
   }
   if (!chosen) {
+    // 短课也装不下时给出短课的最小总时长（比标准模板的报错更贴近用户实际可选项）
+    const short = shortTemplates[key];
+    if (short) {
+      const reps = short.reps![0];
+      const rest = short.rest_min == null ? short.set!.min_min * (reps - 1) : short.rest_min * (reps - 1);
+      const minTotal = short.warmup_min! + reps * short.set!.min_min + rest + short.cooldown_min!;
+      return {
+        error: t(lang, 'plan.too_short_short', { dur, min: minTotal, label: short.label }),
+        target: key,
+        label: tpl.label,
+        duration_minutes: dur,
+        estimated_tss: 0,
+        notes,
+      };
+    }
+    // 内置甜区/阈值/VO2max 均有短课模板，此分支仅在自定义模板缺失短课版时可达（防御）
     return {
       error: t(lang, 'plan.too_short', {
         dur,
@@ -233,23 +271,23 @@ export function generateWorkout({
   const { reps, setMin, restMin } = chosen;
   const mainMin = reps * setMin + (reps - 1) * restMin;
   // 剩余时长并入冷身，保证各段合计 = 总时长
-  const cooldownMin = dur - tpl.warmup_min! - mainMin;
+  const cooldownMin = dur - chosenTpl.warmup_min! - mainMin;
 
   const tss =
-    segTss(tpl.warmup_min!, LOW.if) +
-    reps * segTss(setMin, tpl.set!.if) +
+    segTss(chosenTpl.warmup_min!, LOW.if) +
+    reps * segTss(setMin, chosenTpl.set!.if) +
     (reps - 1) * segTss(restMin, LOW.if) +
     segTss(cooldownMin, LOW.if);
 
   return {
     target: key,
-    label: tpl.label,
+    label: chosenTpl.label,
     duration_minutes: dur,
-    warmup: { minutes: tpl.warmup_min!, power_watts: toWatts(LOW.pct, ftpWatts) },
+    warmup: { minutes: chosenTpl.warmup_min!, power_watts: toWatts(LOW.pct, ftpWatts) },
     main_sets: {
       reps,
       set_minutes: setMin,
-      power_watts: toWatts(tpl.set!.pct, ftpWatts),
+      power_watts: toWatts(chosenTpl.set!.pct, ftpWatts),
       rest_minutes: restMin,
       rest_power_watts: toWatts(LOW.pct, ftpWatts),
     },

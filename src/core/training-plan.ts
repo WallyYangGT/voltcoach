@@ -2,7 +2,8 @@
  * training-plan.ts — 结构化训练计划核心层（纯函数，无 IO，v2 训练计划载体）。
  *
  * 职责：AI 报告 ```plan-json 数据块的提取、课次 TSS 回填、格式与合理性双档校验
- * （create=周期规划生成，合理性仅警示；adjust=会话调整，合理性硬拒）、有效期判定、
+ * （create=周期规划生成，合理性仅警示；adjust/ops=会话调整，结构规则硬拒；业余模式
+ * 新增的周质量课/周课次/单课超时软约束三档都只警示）、有效期判定、
  * 周视图切片与长期周聚合、基于 planning.simulateForm 的负荷推演。
  *
  * 口径：
@@ -15,9 +16,8 @@
  */
 
 import { t, type Lang } from './i18n.ts';
-import { PLAN_VALIDATION } from './settings.ts';
+import { AMATEUR_FORM_SIMULATION, FORM_SIMULATION, PLAN_AMATEUR_LIMITS, PLAN_VALIDATION, type CoachMode } from './settings.ts';
 import { simulateForm, type PlanDay, type SimRiskFlag } from '../planning/planning.ts';
-
 // ---------------- 类型 ----------------
 
 export const PLAN_SESSION_TYPES = [
@@ -65,8 +65,22 @@ export interface TrainingPlan {
 
 /** 合理性提示（结构化存库，渲染侧经 formatPlanIssue 按语言拼） */
 export interface PlanIssue {
-  code: 'quality_gap' | 'no_rest' | 'no_recovery';
+  code:
+    | 'quality_gap'
+    | 'no_rest'
+    | 'no_recovery'
+    | 'amateur_quality_cap'
+    | 'amateur_session_len'
+    | 'amateur_week_sessions';
   vars: Record<string, string | number>;
+}
+
+/** 校验选项：业余模式下新增约束只提示不拦截（既有结构规则不放松） */
+export interface PlanValidationOptions {
+  /** 教练模式（amateur 时启用业余约束提示） */
+  coachMode?: CoachMode | null;
+  /** 用户单次时长上限（分钟；超出只提示） */
+  sessionMaxMin?: number | null;
 }
 
 /** 合理性提示 → 展示文案（语言在渲染时决定，不冻结在生成时） */
@@ -151,9 +165,9 @@ export interface PlanValidationResult {
   plan: TrainingPlan | null;
   /** 格式硬错（两档都拒，一次性消息） */
   errors: string[];
-  /** create 档合理性提示（存库展示，不拒收）；adjust 档恒为空 */
+  /** 合理性提示（存库展示，不拒收）：create 档为 R1–R3；业余软约束三档都进这里 */
   warnings: PlanIssue[];
-  /** adjust 档合理性违规（硬拒）；create 档恒为空 */
+  /** adjust/ops 档 R1–R3 违规（硬拒）；业余软约束不进此处 */
   violations: PlanIssue[];
 }
 
@@ -164,6 +178,8 @@ export interface PlanValidationResult {
  * - 合理性（05 技能阈值，PLAN_VALIDATION 单源）：质量课间隔、休息日保留、减量周节奏；
  *   create 档记入 warnings（生成整份重生成代价高，降级为提示），adjust/ops 档记入
  *   violations（会话调整逐次校验，不合理直接拒绝并说明理由）。
+ *   业余模式软约束（options.coachMode='amateur'）：周质量课上限/周课次软上限/单课
+ *   超时上限三档都只进 warnings，不阻断落库（用户可能真的没空）。
  * 拒收判定：`!result.ok || (mode !== 'create' && result.violations.length > 0)`。
  *
  * mode 'ops'（课次级局部调整专用）：与 adjust 同为硬拒档，差异仅一处——豁免
@@ -177,6 +193,7 @@ export function validateTrainingPlan(
   today: string,
   mode: 'create' | 'adjust' | 'ops',
   lang: Lang = 'zh',
+  options: PlanValidationOptions = {},
 ): PlanValidationResult {
   const errors: string[] = [];
   const warnings: PlanIssue[] = [];
@@ -323,6 +340,42 @@ export function validateTrainingPlan(
       if (!win.some((w) => w.tss <= max * PLAN_VALIDATION.recovery_week_ratio))
         flag({ code: 'no_recovery', vars: { a: win[0].week_start, n } });
     }
+
+    // R4 业余模式软约束（2026-10-17，decisions §30）：**create/adjust/ops 三档都只
+    // 进 warnings、不进 violations**——用户可能真的没空，不逼用户放弃爱好；既有
+    // R1–R3 结构规则不放松。提示随计划版本存档展示，不阻断落库。
+    if (options.coachMode === 'amateur') {
+      const byWeek = new Map<string, { sessions: number; quality: number }>();
+      for (const s of resolved) {
+        if (s.type === 'rest') continue;
+        const wk = weekStartOf(s.date);
+        const cur = byWeek.get(wk) ?? { sessions: 0, quality: 0 };
+        cur.sessions += 1;
+        if (QUALITY_TYPES.includes(s.type)) cur.quality += 1;
+        byWeek.set(wk, cur);
+      }
+      for (const [wk, v] of byWeek) {
+        if (v.quality > PLAN_AMATEUR_LIMITS.weekly_quality_max)
+          warnings.push({
+            code: 'amateur_quality_cap',
+            vars: { week: wk, n: v.quality, max: PLAN_AMATEUR_LIMITS.weekly_quality_max },
+          });
+        if (v.sessions > PLAN_AMATEUR_LIMITS.weekly_sessions_max)
+          warnings.push({
+            code: 'amateur_week_sessions',
+            vars: { week: wk, n: v.sessions, max: PLAN_AMATEUR_LIMITS.weekly_sessions_max },
+          });
+      }
+      if (options.sessionMaxMin != null) {
+        for (const s of resolved) {
+          if (s.type !== 'rest' && s.duration_min != null && s.duration_min > options.sessionMaxMin)
+            warnings.push({
+              code: 'amateur_session_len',
+              vars: { date: s.date, n: s.duration_min, max: options.sessionMaxMin },
+            });
+        }
+      }
+    }
   }
 
   return {
@@ -425,13 +478,16 @@ export interface PlanFormProjection {
 
 /**
  * 计划负荷推演（展示用不阻断）：按计划窗逐日展开 TSS（无课日为 0），
- * 复用 simulateForm 的 CTL/ATL 递推与风险阈值标注（FORM_SIMULATION 单源）。
+ * 复用 simulateForm 的 CTL/ATL 递推与风险阈值标注（FORM_SIMULATION 单源；
+ * 业余模式用放宽后的 AMATEUR_FORM_SIMULATION——低负荷骑手的正常波动不该被
+ * 训练者标尺标成风险）。
  */
 export function projectPlanForm(
   plan: TrainingPlan,
   startCtl: number,
   startAtl: number,
   lang: Lang = 'zh',
+  opts: { amateur?: boolean } = {},
 ): PlanFormProjection {
   const days: PlanDay[] = [];
   const resolved = resolvePlanTss(plan.sessions);
@@ -439,6 +495,12 @@ export function projectPlanForm(
     const s = resolved.find((x) => x.date === d);
     days.push({ date: d, tss: s?.tss ?? 0 });
   }
-  const sim = simulateForm({ startCtl, startAtl, plan: days, lang });
+  const sim = simulateForm({
+    startCtl,
+    startAtl,
+    plan: days,
+    cfg: opts.amateur ? AMATEUR_FORM_SIMULATION : FORM_SIMULATION,
+    lang,
+  });
   return { risk_flags: sim.risk_flags, end_form: sim.end_form };
 }

@@ -26,6 +26,8 @@ import {
 } from '../src/core/training-plan.ts';
 import { localDay } from '../src/core/local-day.ts';
 
+const { AMATEUR_FORM_SIMULATION, FORM_SIMULATION } = await import('../src/core/settings.ts');
+
 const TODAY = '2026-10-13'; // 周二
 
 /** 课次夹具（缺省：60 分钟有氧耐力课） */
@@ -385,6 +387,18 @@ test('projectPlanForm: 高负荷计划触发 TSB 持续过低旗标，轻负荷�
   );
   assert.ok(heavy.risk_flags.some((f) => f.type === 'tsb_low_sustained'));
   assert.ok(heavy.end_form && heavy.end_form.tsb < -30);
+  // 业余模式：推演递推数值不变，阈值放宽（旗标只减不增）
+  const amateur = projectPlanForm(
+    { valid_from: '2026-10-12', valid_to: '2026-10-25', goal: 'g', sessions: heavyDays },
+    50,
+    50,
+    'zh',
+    { amateur: true },
+  );
+  assert.deepEqual(amateur.end_form, heavy.end_form);
+  assert.ok(amateur.risk_flags.length <= heavy.risk_flags.length);
+  assert.ok(AMATEUR_FORM_SIMULATION.tsb_low < FORM_SIMULATION.tsb_low);
+  assert.ok(AMATEUR_FORM_SIMULATION.ctl_ramp_pct > FORM_SIMULATION.ctl_ramp_pct);
 
   const lightDays = [0, 3, 6, 9, 12].map((k) => session(addDaysStr('2026-10-12', k), 'recovery', 45));
   const light = projectPlanForm(
@@ -393,6 +407,17 @@ test('projectPlanForm: 高负荷计划触发 TSB 持续过低旗标，轻负荷�
     50,
   );
   assert.equal(light.risk_flags.length, 0);
+
+  // 阈值差异的可判定场景：起始 ATL 100 / CTL 50，连续 14 天 90 TSS →
+  // TSB 连续约 13 天 < -30（标准档触发），但只有约 5 天 < -40（业余档不触发）
+  const steadyDays = Array.from({ length: 14 }, (_, k) =>
+    session(addDaysStr('2026-10-12', k), 'endurance', 60, { tss: 90 }),
+  );
+  const steadyPlan = { valid_from: '2026-10-12', valid_to: '2026-10-25', goal: 'g', sessions: steadyDays };
+  const steadyStd = projectPlanForm(steadyPlan, 50, 100);
+  const steadyAm = projectPlanForm(steadyPlan, 50, 100, 'zh', { amateur: true });
+  assert.ok(steadyStd.risk_flags.some((f) => f.type === 'tsb_low_sustained'));
+  assert.equal(steadyAm.risk_flags.some((f) => f.type === 'tsb_low_sustained'), false);
 });
 
 test('formatPlanIssue: 合理性提示按语言渲染', () => {
@@ -466,4 +491,66 @@ test('locatePlanVersion: 当前版/历史版/未知锚 三分支，版本号与�
   });
   assert.equal(locatePlanVersion(current, history, '2026-09-01T00:00:00.000Z'), null); // 已裁出历史
   assert.equal(locatePlanVersion(null, [], '2026-10-13T08:00:00.000Z'), null); // 无当前版
+});
+
+// ---------------- 业余模式软约束（2026-10-17，decisions §30） ----------------
+
+/** 2 周计划：第 1 周 3 节质量课（>2）+ 3 节 90 分钟课（>60 上限）；结构规则本身合规 */
+const AMATEUR_PLAN = {
+  valid_from: '2026-10-19',
+  valid_to: '2026-11-01',
+  goal: '业余测试',
+  sessions: [
+    { date: '2026-10-19', type: 'threshold', duration_min: 90, intensity: '95–105% FTP', tss: null, note: null },
+    { date: '2026-10-20', type: 'endurance', duration_min: 60, intensity: null, tss: null, note: null },
+    { date: '2026-10-21', type: 'sweet_spot', duration_min: 90, intensity: null, tss: null, note: null },
+    { date: '2026-10-22', type: 'endurance', duration_min: 60, intensity: null, tss: null, note: null },
+    { date: '2026-10-23', type: 'threshold', duration_min: 90, intensity: null, tss: null, note: null },
+    { date: '2026-10-24', type: 'endurance', duration_min: 60, intensity: null, tss: null, note: null },
+    { date: '2026-10-25', type: 'rest', duration_min: null, intensity: null, tss: 0, note: null },
+    { date: '2026-10-26', type: 'endurance', duration_min: 60, intensity: null, tss: null, note: null },
+    { date: '2026-10-28', type: 'recovery', duration_min: 45, intensity: null, tss: null, note: null },
+    { date: '2026-10-30', type: 'endurance', duration_min: 60, intensity: null, tss: null, note: null },
+    { date: '2026-10-31', type: 'rest', duration_min: null, intensity: null, tss: 0, note: null },
+  ],
+};
+
+test('业余软约束：周质量课/单课超时只进 warnings，adjust 也不拒收', () => {
+  const opts = { coachMode: 'amateur', sessionMaxMin: 60 };
+  const create = validateTrainingPlan(AMATEUR_PLAN, '2026-10-19', 'create', 'zh', opts);
+  assert.equal(create.ok, true);
+  assert.equal(create.violations.length, 0);
+  assert.equal(create.warnings.filter((w) => w.code === 'amateur_quality_cap').length, 1);
+  assert.equal(create.warnings.filter((w) => w.code === 'amateur_session_len').length, 3);
+  // 第 1 周 6 节课（1 个休息日）> 软上限 5 → 周课次提示（该分支独立于「无休息日」硬规则）
+  assert.equal(create.warnings.filter((w) => w.code === 'amateur_week_sessions').length, 1);
+  // adjust 档：结构规则无违规 → violations 为空；业余软约束仍是 warnings（只提示不拦截）
+  const adjust = validateTrainingPlan(AMATEUR_PLAN, '2026-10-19', 'adjust', 'zh', opts);
+  assert.equal(adjust.ok, true);
+  assert.equal(adjust.violations.length, 0);
+  assert.equal(adjust.warnings.length, 5);
+  // 标准模式不产生业余软约束
+  const standard = validateTrainingPlan(AMATEUR_PLAN, '2026-10-19', 'create', 'zh', {
+    coachMode: 'standard',
+    sessionMaxMin: 60,
+  });
+  assert.equal(standard.warnings.length, 0);
+  // 未设单次上限时只剩质量课与周课次提示
+  const noCap = validateTrainingPlan(AMATEUR_PLAN, '2026-10-19', 'create', 'zh', {
+    coachMode: 'amateur',
+  });
+  assert.equal(noCap.warnings.length, 2);
+});
+
+test('业余软约束文案：中文/英文可渲染且带「仅提示」口径', () => {
+  const zh = formatPlanIssue(
+    { code: 'amateur_quality_cap', vars: { week: '2026-10-19', n: 3, max: 2 } },
+    'zh',
+  );
+  assert.match(zh, /业余模式建议 ≤2；仅提示，不拦截/);
+  const en = formatPlanIssue(
+    { code: 'amateur_session_len', vars: { date: '2026-10-19', n: 90, max: 60 } },
+    'en',
+  );
+  assert.match(en, /advisory only/);
 });

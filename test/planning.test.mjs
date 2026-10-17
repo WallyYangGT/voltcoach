@@ -94,10 +94,50 @@ test('generateWorkout：TSB 过低自动降级为恢复课并写 notes', () => {
   assert.deepEqual(w2.notes, []);
 });
 
-test('generateWorkout：未知类型与时长不足返回 error（不抛异常）', () => {
+test('generateWorkout：标准课装不下时回退短课版；短课也装不下才报错', () => {
   const bad = generateWorkout({ target: 'sprint', durationMinutes: 60, ftpWatts: 200, tsb: null, templates: WORKOUT_TEMPLATES, tsbRecovery: FORM_SIMULATION.tsb_recovery });
   assert.match(bad.error, /未知课表类型: sprint（可选: recovery\/endurance\/sweet_spot\/threshold\/vo2max）/);
+  // 30 分钟：标准阈值课（热身 15 + 2×10 + 冷身 10）装不下 → 短课版（热身 8 + 2×7 + 组间 3 + 冷身 5）
   const short = generateWorkout({ target: 'threshold', durationMinutes: 30, ftpWatts: 200, tsb: null, templates: WORKOUT_TEMPLATES, tsbRecovery: FORM_SIMULATION.tsb_recovery });
-  // avail = 30-25 = 5，连 2×10 都装不下
-  assert.match(short.error, /30 分钟装不下 阈值 课表（热身 15 \+ 至少 2×10 分钟主组 \+ 冷身 10）/);
+  assert.equal(short.error, undefined);
+  assert.match(short.label, /短课/);
+  assert.equal(short.main_sets?.reps, 2);
+  assert.equal(short.main_sets?.set_minutes, 7);
+  assert.equal(short.warmup?.minutes, 8);
+  assert.ok(short.notes.some((n) => /短课版本/.test(n)));
+  // 10 分钟连短课版（8 + 6 + 5 = 19）都装不下 → 报短课最小成课时长
+  const tooShort = generateWorkout({ target: 'threshold', durationMinutes: 10, ftpWatts: 200, tsb: null, templates: WORKOUT_TEMPLATES, tsbRecovery: FORM_SIMULATION.tsb_recovery });
+  assert.match(tooShort.error, /10 分钟连短课版也装不下（阈值（短课）最少约 19 分钟）/);
+  assert.equal(short.estimated_tss, 30); // 8min 热身 + 2×7min 阈值 + 3min 组间 + 5min 冷身
+  assert.equal(
+    short.warmup.minutes +
+      short.main_sets.reps * short.main_sets.set_minutes +
+      (short.main_sets.reps - 1) * short.main_sets.rest_minutes +
+      short.cooldown.minutes,
+    30,
+  );
+
+  // 短课成课边界：甜区 19 分钟可成课；VO2max 最少 23 分钟（20 分钟仍报错）
+  const s19 = generateWorkout({ target: 'sweet_spot', durationMinutes: 19, ftpWatts: 200, tsb: null, templates: WORKOUT_TEMPLATES, tsbRecovery: FORM_SIMULATION.tsb_recovery });
+  assert.equal(s19.error, undefined);
+  assert.match(s19.label, /短课/);
+  assert.equal(
+    s19.warmup.minutes +
+      s19.main_sets.reps * s19.main_sets.set_minutes +
+      (s19.main_sets.reps - 1) * s19.main_sets.rest_minutes +
+      s19.cooldown.minutes,
+    19,
+  );
+  const v20 = generateWorkout({ target: 'vo2max', durationMinutes: 20, ftpWatts: 200, tsb: null, templates: WORKOUT_TEMPLATES, tsbRecovery: FORM_SIMULATION.tsb_recovery });
+  assert.match(v20.error, /最少约 23 分钟/);
+  const v23 = generateWorkout({ target: 'vo2max', durationMinutes: 23, ftpWatts: 200, tsb: null, templates: WORKOUT_TEMPLATES, tsbRecovery: FORM_SIMULATION.tsb_recovery });
+  assert.equal(v23.error, undefined);
+  assert.match(v23.label, /短课/);
+  assert.equal(
+    v23.warmup.minutes +
+      v23.main_sets.reps * v23.main_sets.set_minutes +
+      (v23.main_sets.reps - 1) * v23.main_sets.rest_minutes +
+      v23.cooldown.minutes,
+    23,
+  );
 });

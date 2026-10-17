@@ -48,6 +48,8 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'plan.tsb_recovery': '当前 TSB {tsb} 低于 {thr}，身体未恢复，自动降级为恢复骑',
     'plan.unknown_type': '未知课表类型: {target}（可选: {opts}）',
     'plan.too_short': '{dur} 分钟装不下 {label} 课表（热身 {w} + 至少 {reps}×{min} 分钟主组 + 冷身 {c}），请增加时长或换低时长课表',
+    'plan.too_short_short': '{dur} 分钟连短课版也装不下（{label}最少约 {min} 分钟），请增加时长或改有氧/恢复课',
+    'plan.short_fallback': '可用时长不足标准课表，已改用短课版本：{label}',
     'sim.tsb_low': 'TSB 连续 {days} 天低于 {thr}，深度疲劳风险',
     'sim.ctl_ramp': 'CTL 周增幅 {pct}% 超过 {thr}%，过度训练风险',
     // ---- 结构化训练计划（src/core/training-plan，v2 训练计划载体） ----
@@ -69,6 +71,9 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'tp.warn.quality_gap': '{a} 与 {b} 两节质量课仅隔 {n} 天（质量课间隔需 ≥48h，至少隔一天）',
     'tp.warn.no_rest': '{range}（一整周）没有休息日',
     'tp.warn.no_recovery': '{a} 起连续 {n} 周没有减量周（周计划 TSS 均高于最大周的 70%）',
+    'tp.warn.amateur_quality_cap': '{week} 这一周有 {n} 节质量课（业余模式建议 ≤{max}；仅提示，不拦截）',
+    'tp.warn.amateur_session_len': '{date} 的课 {n} 分钟，超过你设定的单次上限 {max} 分钟（仅提示）',
+    'tp.warn.amateur_week_sessions': '{week} 这一周排了 {n} 节课（业余模式建议 ≤{max}；仅提示）',
     'tp.tool.report_source': '训练计划只能在对话中调整，报告生成场景不能修改计划',
     'tp.tool.adjust_hint': '请向用户解释以上原因，并给出满足训练节奏约束的替代调整方案',
     // 课次级局部调整（src/core/plan-ops，U1 收尾：adjust_plan_sessions 工具的操作校验）
@@ -255,6 +260,8 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'plan.tsb_recovery': 'Current TSB {tsb} is below {thr} — body not recovered, auto-downgraded to a recovery ride',
     'plan.unknown_type': 'Unknown workout type: {target} (options: {opts})',
     'plan.too_short': '{dur} minutes cannot fit the {label} workout (warmup {w} + at least {reps}×{min} min main sets + cooldown {c}) — increase the duration or pick a shorter workout',
+    'plan.too_short_short': '{dur} minutes cannot fit even the short version of {label} (minimum about {min} min) — add time or switch to an endurance/recovery ride',
+    'plan.short_fallback': 'Not enough time for the standard workout — using the short version: {label}',
     'sim.tsb_low': 'TSB below {thr} for {days} consecutive days — deep fatigue risk',
     'sim.ctl_ramp': 'CTL weekly ramp {pct}% exceeds {thr}% — overtraining risk',
     'tp.no_block': 'Report has no plan-json data block (```plan-json fence)',
@@ -275,6 +282,9 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'tp.warn.quality_gap': 'Quality sessions on {a} and {b} are only {n} days apart (quality sessions need ≥48h — at least one day between dates)',
     'tp.warn.no_rest': '{range} (a full week) has no rest day',
     'tp.warn.no_recovery': '{n} consecutive weeks from {a} without a recovery week (weekly planned TSS always above 70% of the max week)',
+    'tp.warn.amateur_quality_cap': 'The week of {week} has {n} quality sessions (amateur mode suggests ≤{max}; advisory only)',
+    'tp.warn.amateur_session_len': 'The session on {date} is {n} min, above your {max}-min per-session cap (advisory only)',
+    'tp.warn.amateur_week_sessions': 'The week of {week} has {n} sessions (amateur mode suggests ≤{max}; advisory only)',
     'tp.tool.report_source': 'The training plan can only be adjusted in conversations — report generation must not modify it',
     'tp.tool.adjust_hint': 'Explain these reasons to the user and propose an alternative adjustment that satisfies the training-rhythm constraints',
     // Session-level plan operations (src/core/plan-ops, U1: adjust_plan_sessions validation)

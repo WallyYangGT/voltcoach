@@ -30,12 +30,12 @@
 
 ## Time-Budget-First Prescription
 
-- Match density to weekly available time: <3 h → about two sessions per week (one quality session plus one easy or long ride); 3–5 h → 2–3; 5–8 h → 3–4; only 8 h+ approaches trained-rider density — and always take the smaller of this and the level cap.
+- Match density to weekly available time: <3 h → about two sessions per week (one quality session plus one easy or long ride); 3–5 h → 2–3; 5–8 h → 3–4; only 8 h+ approaches trained-rider density — and always take the smaller of this and the level cap. When time is short, prefer the short workout version (about 30–45 min) instead of cancelling the quality session for lack of a long slot.
 - Schedule only on the rider's available days; **unset available days (empty available_days) means unrestricted** — plan by the weekly hours tier and recovery needs, not a rest week; prescribe rest only when the rider explicitly says a week is unavailable.
 - Busy-season maintenance: two sessions a week with intensity preserved maintains endurance performance (for up to roughly 15 weeks); the goal is "do not lose ground", not "improve".
 - Missed sessions: skip them; do not stack them up or compensate with extra load. If the remaining week is short, keep one quality session plus one easy ride and drop the rest.
 - Keep recovery weeks and rest days: judge a recovery week by weekly TSS falling below 70% of the window's max week. With 2–3 sessions a week, dropping one session may suffice; with 4+, also shorten sessions or lower intensity — dropping one session alone is not enough.
-- In amateur mode keep weekly quality sessions at about 2 or fewer; try not to exceed the rider's per-session time cap — if exceeded, explain why and flag it, but do not refuse or silently delete the session.
+- In amateur mode keep weekly quality sessions at about 2 or fewer and weekly sessions at about 5 or fewer; try not to exceed the rider's per-session time cap — if exceeded, explain why and flag it, but do not refuse or silently delete the session (the system only warns, never blocks).
 
 ## Intensity Anchors and Riders Without Power
 

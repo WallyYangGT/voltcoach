@@ -414,6 +414,7 @@ test('档案段：null 省略；完整档案逐行渲染；被标记披露', () 
     cadence_profile: { rides_analyzed: 8, style_counts: { low: 4, normal: 3, high: 1 } },
     intensity_structure: {
       zone_pct: { Z1: 30, Z2: 25, Z3: 20, Z4: 15, Z5: 7, Z6: 2.5, Z7: 0.5 },
+      hr_zone_pct: { Z1: 60, Z2: 20, Z3: 10, Z4: 5, Z5: 5 },
       intensity_types: [{ month: '2026-09', type: 'pyramidal' }],
     },
     load_shape: {
@@ -429,12 +430,21 @@ test('档案段：null 省略；完整档案逐行渲染；被标记披露', () 
   assert.match(s, /坡度 5\.2%、强度 88\.3%FTP、心率 152 bpm/);
   assert.match(s, /低踏频 50%、正常 37\.5%、高踏频 12\.5%/);
   assert.match(s, /Z1–Z2 55%、Z3–Z4 35%、Z5–Z7 10%/);
+  // 单锚点降级：功率不可用骑行的心率五区结构
+  assert.match(s, /90 天心率强度结构（功率不可用骑行，按时长加权）：Z1–Z2 80%、Z3–Z4 15%、Z5 5%/);
   assert.match(s, /月度强度类型：2026-09 pyramidal/);
   assert.match(s, /周均 TSS 200（峰值 200），周均骑行 10 小时/);
   assert.match(s, /心率漂移中位 3\.4%（9 次样本/);
   assert.match(s, /功率可信度：2 次骑行被标记功率不可信/);
+  // 旧缓存 dossier（shape 1，无 hr_zone_pct）不产生该行，也不报错
+  const oldDossier = {
+    ...dossier,
+    intensity_structure: { zone_pct: dossier.intensity_structure.zone_pct, intensity_types: [] },
+  };
+  assert.doesNotMatch(buildDossierSection(oldDossier, 'zh'), /心率强度结构/);
   const en = buildDossierSection(dossier, 'en');
   assert.match(en, /^## Athlete Dossier/);
+  assert.match(en, /90-day HR intensity structure/);
 });
 
 test('复盘提示词注入档案段（新末参，缺省不影响旧调用）', () => {
