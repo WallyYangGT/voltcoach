@@ -10,6 +10,7 @@
 - **指标体系**：NP/IF/TSS/VI、Coggan 功率 7 区与心率 5 区、峰功率曲线、心率漂移、爬坡段/间歇识别、FTP 自动估算与历史估算（口径详见 [docs/METRICS.md](./docs/METRICS.md)）
 - **长期负荷**：CTL/ATL/TSB 体系、月度汇总与强度分布、未来负荷推演与课表生成
 - **AI 教练**（BYOK）：自带 OpenAI 兼容 Key（DeepSeek/Kimi/GLM/OpenAI 预设或自定义端点），训练复盘/规划/减量/对比报告与自由对话，agentic 工具本地查数，训练科学知识库注入
+- **业余教练模式**：以你的期望与可用时间为主导（每周时长档 / 可骑日 / 单次上限），目标不现实时给「目标阶梯」而非硬拒；活动日减量、忙季每周 2 次维持合法；业余模式首页显示 WHO 150–300 分钟/周健康活动量瓦片
 - **数据自主**：SQLCipher 加密训练库、`.fitbackup` 全量备份/迁移（格式见 [docs/BACKUP_FORMAT.md](./docs/BACKUP_FORMAT.md)）、多平台云自动同步（顽鹿 / 迹驰 iGPSPORT / Wahoo，见下）
 - **双语界面**：中文/English
 
