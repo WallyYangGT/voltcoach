@@ -1,10 +1,11 @@
 /**
  * ChatBubbles — 追问/对话消息气泡流（会话详情页与训练详情页共用）。
  *
- * 状态口径：pending 显示"生成中…"（有传输级自动重试时附重试进度、有工具调用时附
- * 动态行，2026-10 增量落库后附部分正文实时预览与停止按钮——直接停止不弹框，对话
- * 单次消耗小）；cancelled 显示"已取消" + 部分正文 + 重试；failed 显示错误 + 重试；
- * completed 渲染 Markdown。user 消息右对齐、AI 左对齐。
+ * 状态口径：pending 显示生成状态行（思考/工具/生成三态，2026-10 可视化：菱形/放大镜
+ * 闪烁 + 推理模型思考正文单行滚动；有传输级自动重试时附重试进度，2026-10 增量落库后
+ * 附部分正文实时预览与停止按钮——直接停止不弹框，对话单次消耗小）；cancelled 显示
+ * "已取消" + 部分正文 + 重试；failed 显示错误 + 重试；completed 渲染 Markdown。
+ * user 消息右对齐、AI 左对齐。
  * M5：重试按消息逐条生效（此前固定重跑第一条失败消息，点第 3 条实际重试第 1 条）；
  * 该消息在跑时重试按钮禁用（此前无 disabled，「实际在重试还能点」即此）。
  */
@@ -16,6 +17,7 @@ import { getChatProgress, isChatGenerating } from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiMarkdown } from './AiMarkdown';
+import { GenStatusRow } from './GenStatusRow';
 
 interface Props {
   chatId: number;
@@ -44,10 +46,7 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
             style={[styles.bubble, m.role === 'user' ? styles.bubbleUser : styles.bubbleAi]}>
             {m.status === 'pending' && (
               <View style={{ gap: 4 }}>
-                <Text style={styles.pendingNote}>{t('session.generating')}</Text>
-                {!!progress?.activity && (
-                  <Text style={styles.activityNote}>{progress.activity}</Text>
-                )}
+                <GenStatusRow progress={progress} live />
                 {!!progress?.note && (
                   <Text style={styles.progressNote}>
                     {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
@@ -93,9 +92,7 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
                     {t('ai.cancelGenerate')}
                   </Button>
                 )}
-                {!!progress?.activity && (
-                  <Text style={styles.activityNote}>{progress.activity}</Text>
-                )}
+                <GenStatusRow progress={progress} live={running} />
                 {!!m.content && <AiMarkdown markdown={m.content} />}
                 <Button
                   compact
@@ -130,9 +127,7 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
                     {t('ai.cancelGenerate')}
                   </Button>
                 )}
-                {!!progress?.activity && (
-                  <Text style={styles.activityNote}>{progress.activity}</Text>
-                )}
+                <GenStatusRow progress={progress} live={running} />
                 <Button
                   compact
                   mode="outlined"
@@ -169,8 +164,6 @@ const styles = StyleSheet.create({
   bubbleUser: { alignSelf: 'flex-end', backgroundColor: '#20301a', borderWidth: 1, borderColor: palette.voltDim },
   bubbleAi: { alignSelf: 'flex-start', backgroundColor: palette.panel, borderWidth: 1, borderColor: palette.lineSoft },
   bubbleUserText: { color: palette.text, fontSize: 13, lineHeight: 20 },
-  pendingNote: { color: palette.orange, fontSize: 12 },
-  activityNote: { color: palette.orange, fontSize: 11, lineHeight: 16 },
   progressNote: { color: palette.faint, fontSize: 11, lineHeight: 16 },
   failedText: { color: palette.red, fontSize: 13, fontWeight: '700' },
   failedErr: { color: palette.muted, fontSize: 12 },

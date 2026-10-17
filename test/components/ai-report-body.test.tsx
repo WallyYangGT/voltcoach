@@ -55,7 +55,7 @@ describe('AiReportBody', () => {
 
   it('pending 态：显示已等待时长（m:ss）与自动重试进度', async () => {
     const progress: GenProgress = { attempt: 2, note: '连接被网关掐断' };
-    const { getByText } = await renderWithProviders(
+    const { getByText, getByTestId } = await renderWithProviders(
       <AiReportBody
         report={reportOf({ status: 'pending' })}
         progress={progress}
@@ -65,6 +65,7 @@ describe('AiReportBody', () => {
       />,
     );
     expect(getByText('已等待 1:05')).toBeTruthy();
+    expect(getByTestId('gen-status-icon-thinking')).toBeTruthy();
     expect(getByText('响应被中断，正在自动重试（第 2 次尝试） · 连接被网关掐断')).toBeTruthy();
   });
 
@@ -119,9 +120,14 @@ describe('AiReportBody', () => {
 
   // ---------------- 2026-10：增量落库实时预览 + 取消 + cancelled 态 ----------------
 
-  it('pending 态：显示工具调用动态行与已生成部分正文（增量落库预览）', async () => {
-    const progress: GenProgress = { attempt: 0, note: '', activity: '✓ get_activity_summary · 2048 字符' };
-    const { getByText } = await renderWithProviders(
+  it('pending 态：显示工具调用完成态与已生成部分正文（增量落库预览）', async () => {
+    const progress: GenProgress = {
+      attempt: 0,
+      note: '',
+      phase: 'tool_done',
+      activity: '✓ get_activity_summary · 2048 字符',
+    };
+    const { getByText, getByTestId } = await renderWithProviders(
       <AiReportBody
         report={reportOf({ status: 'pending', markdown: '已生成的开头部分。' })}
         progress={progress}
@@ -131,6 +137,7 @@ describe('AiReportBody', () => {
         onCancel={() => {}}
       />,
     );
+    expect(getByTestId('gen-status-icon-tool_done')).toBeTruthy();
     expect(getByText('✓ get_activity_summary · 2048 字符')).toBeTruthy();
     expect(getByText('已生成的开头部分。')).toBeTruthy();
   });

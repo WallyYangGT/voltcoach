@@ -356,6 +356,7 @@ export const DICT = {
     'session.chatTitle': '对话',
     'session.reportPending': '报告生成中…',
     'session.generating': '生成中…',
+    'session.thinking': '模型思考中…',
     'session.failed': '生成失败',
     'session.retry': '重试',
     'session.share': '分享',
@@ -370,8 +371,9 @@ export const DICT = {
     'ai.retryNote': '响应被中断，正在自动重试（第 {n} 次尝试）',
     'ai.elapsed': '已等待 {t}',
     // ---- 2026-10：生成取消 + 增量落库实时预览（架构评审 P2） ----
-    // 注意：toolRunning/toolDone/degraded/stream_truncated 是服务层（core/i18n）文案，
-    // 经 GenProgress.activity 预本地化透传，不在此词典（code-review 修正）
+    // 注意：toolRunning/toolDone/thinking/generating/degraded/stream_truncated 是
+    // 服务层（core/i18n）文案，经 GenProgress.activity 预本地化透传，不在此词典
+    // （code-review 修正）；session.thinking 仅作无 progress 时的 UI 兜底
     'ai.cancelGenerate': '取消生成',
     // 报告↔计划结构化关联（U1③：锚在 settings 链接行，chip 在 PlanLinkChip）
     'ai.plan_link.chip': '关联计划 · 第 {n} 版（{from} ~ {to}）',
@@ -1236,6 +1238,7 @@ export const DICT = {
     'session.chatTitle': 'Chat',
     'session.reportPending': 'Generating report…',
     'session.generating': 'Generating…',
+    'session.thinking': 'Model is thinking…',
     'session.failed': 'Generation failed',
     'session.retry': 'Retry',
     'session.share': 'Share',

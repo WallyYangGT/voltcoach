@@ -128,6 +128,8 @@ export const DICT: Record<Lang, Record<string, string>> = {
     // 透传给 UI 的动态文案（activity 是预本地化字符串，组件直接渲染不再过 useI18n）
     'ai.toolRunning': '正在调用 {name}…',
     'ai.toolDone': '✓ {name} · {chars} 字符',
+    'ai.thinking': '模型思考中…',
+    'ai.generating': '生成中…',
     'ai.degraded': '模型不支持工具调用，已改为单轮生成',
     'ai.stream_truncated': 'AI 流式响应未正常收尾（缺少终止标记），正文可能被网络中间层截断',
     // 上下文装配（E1 完整解，2026-10-17）：滚动摘要的动态文案与历史压缩提示
@@ -349,6 +351,8 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'ai.retried_note': ' (auto-retried {n}x)',
     'ai.toolRunning': 'Calling {name}…',
     'ai.toolDone': '✓ {name} · {chars} chars',
+    'ai.thinking': 'Model is thinking…',
+    'ai.generating': 'Generating…',
     'ai.degraded': 'Model does not support tool calls — fell back to a single round',
     'ai.stream_truncated': 'AI stream ended without a proper terminator — the output may have been truncated by a network proxy',
     // 上下文装配（E1 完整解，2026-10-17）

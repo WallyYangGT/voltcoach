@@ -2,11 +2,11 @@
  * AiReportBody — 报告四态正文（pending / cancelled / failed / completed），会话详情页
  * 与训练详情页的 AI 面板共用，避免两处状态机与文案漂移。
  *
- * pending：生成中提示 + 已等待时长 +（若有）工具调用动态与传输级自动重试进度 +
- * （2026-10 增量落库）已生成部分正文的实时预览 + 取消按钮（Alert 二次确认——
- * token 已在消耗，防误触）；cancelled：已取消横幅 + 部分正文 + 重试（原行重跑，
- * cancelled 不命中任何补跑路径，重试是唯一复活方式）；failed：错误原文 + 重试；
- * completed：Markdown 正文。
+ * pending：生成中提示 + 已等待时长 + 生成状态行（思考/工具/生成三态，2026-10 可视化：
+ * 菱形/放大镜闪烁 + 推理模型思考正文单行滚动）+ 传输级自动重试进度 +（2026-10 增量
+ * 落库）已生成部分正文的实时预览 + 取消按钮（Alert 二次确认——token 已在消耗，防误触）；
+ * cancelled：已取消横幅 + 部分正文 + 重试（原行重跑，cancelled 不命中任何补跑路径，
+ * 重试是唯一复活方式）；failed：错误原文 + 重试；completed：Markdown 正文。
  * M5：failed 重试按钮的禁用/文案改用 generating（db 状态 + 进程内注册表派生）——
  * 此前用局部 retrying，任务被注册表挡下时它立即归零，按钮「实际在重试还能点」。
  */
@@ -18,6 +18,7 @@ import type { GenProgress } from '@/services/aiGenerate';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 import { AiMarkdown } from './AiMarkdown';
+import { GenStatusRow } from './GenStatusRow';
 import { PlanLinkChip } from './PlanLinkChip';
 
 /** 已等待时长：秒 → "m:ss"（超过 1 小时只显示到分） */
@@ -74,9 +75,8 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
         {elapsedSec != null && (
           <Text style={styles.hint}>{t('ai.elapsed', { t: fmtElapsed(elapsedSec) })}</Text>
         )}
-        {/* 工具调用动态（「正在调用 X…」/「✓ X · N 字符」）与重试进度是两个独立字段，
-            分别有值时各占一行（增量落库后生成中过程整体可见） */}
-        {!!progress?.activity && <Text style={styles.activity}>{progress.activity}</Text>}
+        {/* 生成状态行（思考/工具/生成）与重试进度是两个独立字段，分别有值时各占一行 */}
+        <GenStatusRow progress={progress} live />
         {!!progress?.note && (
           <Text style={styles.hint}>
             {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
@@ -104,8 +104,8 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
             {generating ? t('ai.retrying') : t('session.retry')}
           </Button>
         </View>
-        {/* 重试期间库状态仍是 cancelled：活动/重试进度与取消按钮同样要可见（同 failed） */}
-        {!!progress?.activity && <Text style={styles.activity}>{progress.activity}</Text>}
+        {/* 重试期间库状态仍是 cancelled：状态行/重试进度与取消按钮同样要可见（同 failed） */}
+        <GenStatusRow progress={progress} live={generating} />
         {!!progress?.note && (
           <Text style={styles.hint}>
             {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
@@ -132,8 +132,8 @@ export function AiReportBody({ report, progress, elapsedSec, generating, onRetry
             {generating ? t('ai.retrying') : t('session.retry')}
           </Button>
         </View>
-        {/* 重试期间库状态仍是 failed：自动重试进度必须在这里也可见（用户此刻最需要知道"在补发"） */}
-        {!!progress?.activity && <Text style={styles.activity}>{progress.activity}</Text>}
+        {/* 重试期间库状态仍是 failed：状态行/自动重试进度必须在这里也可见（用户此刻最需要知道"在补发"） */}
+        <GenStatusRow progress={progress} live={generating} />
         {!!progress?.note && (
           <Text style={styles.hint}>
             {t('ai.retryNote', { n: progress.attempt })} · {progress.note}
@@ -162,7 +162,6 @@ const styles = StyleSheet.create({
   completedWrap: { gap: 6, paddingVertical: 6 },
   pending: { color: palette.text, fontSize: 13, lineHeight: 20 },
   hint: { color: palette.faint, fontSize: 11.5, lineHeight: 17 },
-  activity: { color: palette.orange, fontSize: 11.5, lineHeight: 17 },
   failedBox: { borderWidth: 1, borderColor: palette.red, borderRadius: 10, gap: 6, padding: 12 },
   failedText: { color: palette.red, fontSize: 13, fontWeight: '700' },
   failedErr: { color: palette.muted, fontSize: 12 },
