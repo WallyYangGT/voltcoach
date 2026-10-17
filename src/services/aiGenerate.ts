@@ -418,10 +418,11 @@ export async function generateReport(reportId: number, lang: Lang = 'zh'): Promi
       finalPrompt += '\n\n' + agenticSection;
       // E1：记忆按相关度 top-k（query=报告基础 prompt 的正文特征），并在
       // report_total_max_chars 的剩余预算内二次收口——基础段已由 assemble 控制在
-      // report_base_max_chars，记忆只吃剩余额度，绝不把总量推爆
+      // report_base_max_chars，记忆只吃剩余额度，绝不把总量推爆。预留 ~600 字符给
+      // 记忆段的固定规则文案（save_memory 指引依赖它，不能只按条目内容算预算）。
       const remaining = Math.max(
         400,
-        CONTEXT_BUDGET.report_total_max_chars - finalPrompt.length - 4,
+        CONTEXT_BUDGET.report_total_max_chars - finalPrompt.length - 600,
       );
       const memories = rankMemories(await listMemories(), {
         mode: report.mode,
@@ -708,7 +709,12 @@ async function maybeRefreshChatSummary(
     // up_to = 最后一条被挤出窗口的消息 id（buildSummaryInput 已按输入上限从新往回保，
     // 丢掉的是更早的极小部分；不把水位线停在中间，避免下轮重复概括同一批旧消息）
     const upTo = omitted[omitted.length - 1].id;
-    await saveChatSummary(chatId, normalized, upTo);
+    try {
+      await saveChatSummary(chatId, normalized, upTo);
+    } catch (e) {
+      // 落库失败不影响本轮使用模型摘要（下轮会重算，代价可接受）
+      console.warn('[AI chat] 滚动摘要落库失败（不影响本轮）:', e);
+    }
     onActivity?.(t(lang, 'ai.compacted'));
     return normalized;
   } catch (e) {
