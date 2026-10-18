@@ -16,11 +16,29 @@ import { act, fireEvent } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import { AiFtpUpdateBanner } from '@/components/AiFtpUpdateBanner';
 import { undoAiFtpUpdate } from '@/services/ftp-apply';
+import { getAdjustNoticeSeen, markAdjustNoticeSeen } from '@/db';
 import { renderWithProviders, wrapWithProviders } from './helpers/render';
 
 jest.mock('@/services/ftp-apply', () => ({
   undoAiFtpUpdate: jest.fn(),
 }));
+
+jest.mock('@/db', () => ({
+  getAdjustNoticeSeen: jest.fn(),
+  markAdjustNoticeSeen: jest.fn(),
+  setLang: jest.fn(), // 真实 '@/i18n' 顶层从 '@/db' 取 setLang
+}));
+
+jest.mock('expo-router', () => {
+  const React = require('react'); // eslint-disable-line @typescript-eslint/no-require-imports
+  return {
+    // 已读闸门 Hook 走 useFocusEffect——测试里退化为挂载即聚焦一次，保留 cleanup
+    useFocusEffect: (cb: () => void) => React.useEffect(cb, [cb]),
+  };
+});
+
+/** 已读锚读取是异步链：渲染后补一轮宏任务，再断言行文本/按钮 */
+const flushAsync = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
 type AlertButton = { text: string; style?: string; onPress?: () => void };
 /** 取第 callIdx 次 Alert.alert 的按钮数组（title/message/buttons 三参形态） */
@@ -31,6 +49,8 @@ const snap = { old_ftp_w: 245, new_ftp_w: 258, updated_at: '2026-10-14T12:00:00.
 
 beforeEach(() => {
   (undoAiFtpUpdate as jest.Mock).mockReset().mockResolvedValue({ undone: true, restored_ftp_w: 245 });
+  (getAdjustNoticeSeen as jest.Mock).mockReset().mockResolvedValue(null);
+  (markAdjustNoticeSeen as jest.Mock).mockReset().mockResolvedValue(undefined);
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
 
@@ -48,11 +68,34 @@ describe('AiFtpUpdateBanner', () => {
     expect(queryByText(/AI 教练已于/)).toBeNull();
   });
 
+  it('已读锚等于快照 updated_at：再次进入不再显示（浏览过即消失）', async () => {
+    (getAdjustNoticeSeen as jest.Mock).mockResolvedValue(snap.updated_at);
+    const { queryByText } = await renderWithProviders(
+      <AiFtpUpdateBanner snapshot={snap} currentFtp={258} />,
+    );
+    await flushAsync();
+    expect(queryByText(/AI 教练已于/)).toBeNull();
+    expect(markAdjustNoticeSeen).not.toHaveBeenCalled();
+  });
+
+  it('旧已读锚：新 AI 更新快照重新披露一次并覆盖为新锚', async () => {
+    (getAdjustNoticeSeen as jest.Mock).mockResolvedValue('2026-10-13T12:00:00.000Z');
+    const { getByText } = await renderWithProviders(
+      <AiFtpUpdateBanner snapshot={snap} currentFtp={258} />,
+    );
+    await flushAsync();
+    expect(getByText(/AI 教练已于/)).toBeTruthy();
+    expect(markAdjustNoticeSeen).toHaveBeenCalledWith('ftp_update', snap.updated_at);
+  });
+
   it('快照有效：披露 old→new 与本地日期，点撤销先弹二次确认且确认前不动数据', async () => {
     const { getByText } = await renderWithProviders(
       <AiFtpUpdateBanner snapshot={snap} currentFtp={258} />,
     );
+    await flushAsync();
     expect(getByText('AI 教练已于 2026-10-14 将 FTP 从 245W 调整为 258W（数据自动估算，依据见会话）')).toBeTruthy();
+    // 本次仍可见（撤销入口可用），已读锚已落库：下次聚焦即隐藏
+    expect(markAdjustNoticeSeen).toHaveBeenCalledWith('ftp_update', snap.updated_at);
     await act(async () => {
       fireEvent.press(getByText('撤销'));
     });
@@ -69,6 +112,7 @@ describe('AiFtpUpdateBanner', () => {
     const { getByText, rerender, queryByText } = await renderWithProviders(
       <AiFtpUpdateBanner snapshot={snap} currentFtp={258} onChanged={onChanged} />,
     );
+    await flushAsync();
     await act(async () => {
       fireEvent.press(getByText('撤销'));
     });
@@ -91,6 +135,7 @@ describe('AiFtpUpdateBanner', () => {
     const { getByText } = await renderWithProviders(
       <AiFtpUpdateBanner snapshot={snap} currentFtp={258} onChanged={onChanged} />,
     );
+    await flushAsync();
     await act(async () => {
       fireEvent.press(getByText('撤销'));
     });

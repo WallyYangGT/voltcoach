@@ -10,7 +10,12 @@
  *   调整立即反映；
  * - 自加载（首页）：getCurrentPlan + getPlanHistory + useFocusEffect 每次回焦点
  *   重取——调整发生在计划页，返回首页即回焦点，立即可见。
- * 显示条件：当前版是 adjust 落库——被生成新版替换/手动撤销后自然隐藏。
+ * 一次性披露（2026-10-18）：显示后由 useAdjustNoticeVisible 写已读锚
+ * （settings adjust_notice_seen:plan_adjust = 当前版 created_at）；本次停留保留
+ * 撤销入口，下次进入页面/冷启动读锚相同即不再出现。新调整版本（新 created_at）
+ * 重新披露一次。
+ * 显示条件：当前版是 adjust 落库且该版本尚未被浏览过——被生成新版替换/手动撤销/
+ * 已读后自然隐藏。
  */
 import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
@@ -19,6 +24,7 @@ import { getCurrentPlan, getPlanHistory, undoLastPlanVersion, type StoredPlan } 
 import { localDayFromUtc } from '@/core/local-day';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
+import { useAdjustNoticeVisible } from './useAdjustNotice';
 
 interface Props {
   /** 由宿主下传（plan 页：轮询收尾已刷新）；缺省自加载（首页） */
@@ -52,6 +58,12 @@ export function PlanAdjustBanner({ stored: storedProp, history: historyProp, onC
 
   const stored = selfMode ? (self?.stored ?? null) : (storedProp ?? null);
   const history = selfMode ? (self?.history ?? []) : (historyProp ?? []);
+  // 已读闸门：锚 = 当前 adjust 版本 created_at；本次停留仍显示，下次聚焦才隐藏
+  const noticeVisible = useAdjustNoticeVisible(
+    'plan_adjust',
+    stored?.origin === 'adjust' ? stored.created_at : null,
+    stored?.origin === 'adjust',
+  );
 
   const undo = () => {
     Alert.alert(t('plan.adjust.undo_title'), t('plan.adjust.undo_body'), [
@@ -80,7 +92,7 @@ export function PlanAdjustBanner({ stored: storedProp, history: historyProp, onC
     ]);
   };
 
-  if (!stored || stored.origin !== 'adjust') return null;
+  if (!stored || stored.origin !== 'adjust' || !noticeVisible) return null;
   const day = localDayFromUtc(stored.created_at) ?? stored.created_at.slice(0, 10);
   return (
     <View style={styles.banner} testID="plan-adjust-banner">

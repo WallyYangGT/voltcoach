@@ -2044,3 +2044,48 @@ export async function undoLastPlanVersion(): Promise<boolean> {
   });
   return undone;
 }
+
+// ---------------- AI 调整披露条已读锚（settings 松散 KV 行，一次性披露） ----------------
+//
+// 计划/FTP 的调整披露条带撤销入口；用户看过且未撤销后不应永久常驻。锚 = 该次调整的
+// 稳定身份（计划版 StoredPlan.created_at / FTP 快照 updated_at）：新调整 → 新锚 →
+// 重新披露一次；每类只保留最近一次，不随历史增长。锚只存最近一次：连续调整后撤销
+// 回更早的调整版时可能再披露一次——与「撤销可换回」的既有语义一致（严格每版只披露
+// 一次需存有界 seen 集合，当前不做）。沿 ai_ftp_update 快照先例走 settings JSON 行
+// ——不加列、不动 SCHEMA_VERSION，备份整库拷贝透明携带。
+
+/** 一次性披露条类型（与组件 useAdjustNoticeVisible 的 kind 对应） */
+export type AdjustNoticeKind = 'plan_adjust' | 'ftp_update';
+
+const ADJUST_NOTICE_SEEN_PREFIX = 'adjust_notice_seen:';
+
+/** 读某类披露条的已读锚（等于当前调整身份即不再展示；无行/损坏返回 null） */
+export async function getAdjustNoticeSeen(kind: AdjustNoticeKind): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = ?`,
+    ADJUST_NOTICE_SEEN_PREFIX + kind,
+  );
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.value) as { identity?: unknown };
+    return typeof parsed?.identity === 'string' ? parsed.identity : null;
+  } catch {
+    return null; // 行损坏按未读处理，下次展示后覆盖写入自愈
+  }
+}
+
+/** 记某类披露条已读锚（单行 upsert，两类各一行，无读改写竞态；空锚不写） */
+export async function markAdjustNoticeSeen(
+  kind: AdjustNoticeKind,
+  identity: string,
+): Promise<void> {
+  if (!identity) return; // 损坏版本的空身份不标记，避免把异常态误判成已读
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+    ADJUST_NOTICE_SEEN_PREFIX + kind,
+    JSON.stringify({ identity, seen_at: new Date().toISOString() }),
+  );
+}
