@@ -5,9 +5,13 @@
  * 闪烁 + 推理模型思考正文单行滚动；有传输级自动重试时附重试进度，2026-10 增量落库后
  * 附部分正文实时预览与停止按钮——直接停止不弹框，对话单次消耗小）；cancelled 显示
  * "已取消" + 部分正文 + 重试；failed 显示错误 + 重试；completed 渲染 Markdown。
- * user 消息右对齐、AI 左对齐。
+ * user 消息右对齐、AI 消息占满整行（左缘对齐）。
  * M5：重试按消息逐条生效（此前固定重跑第一条失败消息，点第 3 条实际重试第 1 条）；
  * 该消息在跑时重试按钮禁用（此前无 disabled，「实际在重试还能点」即此）。
+ * 2026-10-18 宽度口径：AI 气泡占满可用宽度（stretch），不再按内容收缩——收缩布局下
+ * GenStatusRow 的思考 ticker（flex:1 横向滚动）不贡献内在宽度，pending 气泡会被压成
+ * 图标宽，对话页几乎看不到思考/工具信息；Markdown 表格也更需要整行宽度。用户气泡
+ * 仍右对齐且上限 88%（短消息保留聊天气泡形态）。
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -43,6 +47,7 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
         return (
           <View
             key={m.id}
+            testID={`chat-bubble-${m.id}`}
             style={[styles.bubble, m.role === 'user' ? styles.bubbleUser : styles.bubbleAi]}>
             {m.status === 'pending' && (
               <View style={{ gap: 4 }}>
@@ -160,9 +165,10 @@ export function ChatBubbles({ chatId, messages, onRetry, onCancelMessage }: Prop
 
 const styles = StyleSheet.create({
   list: { gap: 0 },
-  bubble: { maxWidth: '88%', borderRadius: 10, padding: 10, marginBottom: 8 },
-  bubbleUser: { alignSelf: 'flex-end', backgroundColor: '#20301a', borderWidth: 1, borderColor: palette.voltDim },
-  bubbleAi: { alignSelf: 'flex-start', backgroundColor: palette.panel, borderWidth: 1, borderColor: palette.lineSoft },
+  bubble: { borderRadius: 10, padding: 10, marginBottom: 8 },
+  // 宽度上限只给用户气泡；AI 气泡走 stretch（见文件头 2026-10-18 口径）
+  bubbleUser: { alignSelf: 'flex-end', maxWidth: '88%', backgroundColor: '#20301a', borderWidth: 1, borderColor: palette.voltDim },
+  bubbleAi: { alignSelf: 'stretch', backgroundColor: palette.panel, borderWidth: 1, borderColor: palette.lineSoft },
   bubbleUserText: { color: palette.text, fontSize: 13, lineHeight: 20 },
   progressNote: { color: palette.faint, fontSize: 11, lineHeight: 16 },
   failedText: { color: palette.red, fontSize: 13, fontWeight: '700' },

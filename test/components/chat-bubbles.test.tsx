@@ -57,6 +57,26 @@ describe('ChatBubbles', () => {
     expect(getByText('疲劳管理')).toBeTruthy();
   });
 
+  // 2026-10-18 宽度口径：AI 气泡 stretch（否则 pending 期思考 ticker 的 flex:1 不贡献
+  // 内在宽度，气泡被压成图标宽）；用户气泡仍右对齐且上限 88%
+  it('AI 气泡占满可用宽度（pending/completed 一致）、用户气泡右对齐且上限 88%', async () => {
+    const { getByTestId } = await renderWithProviders(
+      <ChatBubbles
+        chatId={CHAT_ID}
+        messages={[
+          msg({ id: 1, role: 'user', content: '问' }),
+          msg({ id: 2, role: 'assistant', content: '答', status: 'completed' }),
+          msg({ id: 3, role: 'assistant', status: 'pending' }),
+        ]}
+        onRetry={() => {}}
+      />,
+    );
+    expect(getByTestId('chat-bubble-2')).toHaveStyle({ alignSelf: 'stretch' });
+    expect(getByTestId('chat-bubble-2')).not.toHaveStyle({ maxWidth: '88%' });
+    expect(getByTestId('chat-bubble-3')).toHaveStyle({ alignSelf: 'stretch' });
+    expect(getByTestId('chat-bubble-1')).toHaveStyle({ alignSelf: 'flex-end', maxWidth: '88%' });
+  });
+
   it('pending 消息显示思考态与重试进度', async () => {
     (getChatProgress as jest.Mock).mockReturnValue({ attempt: 2, note: 'SSE 断连' });
     const { getByText, getByTestId } = await renderWithProviders(
