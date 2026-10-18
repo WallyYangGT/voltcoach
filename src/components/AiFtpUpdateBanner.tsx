@@ -8,8 +8,11 @@
  * 数据（快照 + 当前 FTP）由首页经 props 下传（首页 load() 在 useFocusEffect 里
  * 每次回焦点重取）——tab 常驻挂载、组件不因切换重建，若在组件内部自查只在挂载
  * 时跑一次，AI 更新后返回首页将看不到披露条（code-review P1：可逆半边不可达）。
- * 显示条件：快照存在且当前 FTP 仍等于快照 new 值——被后续手动/AI 修改即隐藏，
- * 每笔变更只披露/回滚最近一笔。
+ * 一次性披露（2026-10-18）：显示后由 useAdjustNoticeVisible 写已读锚
+ * （settings adjust_notice_seen:ftp_update = 快照 updated_at）；本次停留保留撤销
+ * 入口，下次进入首页/冷启动读锚相同即不再出现。新快照（新 updated_at）重新披露一次。
+ * 显示条件：快照存在且当前 FTP 仍等于快照 new 值，且该快照尚未被浏览过——被后续
+ * 手动/AI 修改或已读即隐藏，每笔变更只披露/回滚最近一笔。
  */
 import React, { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
@@ -18,6 +21,7 @@ import type { AiFtpUpdateSnapshot } from '@/db';
 import { undoAiFtpUpdate } from '@/services/ftp-apply';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
+import { useAdjustNoticeVisible } from './useAdjustNotice';
 
 export function AiFtpUpdateBanner({
   snapshot,
@@ -30,8 +34,15 @@ export function AiFtpUpdateBanner({
 }) {
   const { t, lang } = useI18n();
   const [busy, setBusy] = useState(false);
+  const dataAvailable = !!snapshot && currentFtp === snapshot.new_ftp_w;
+  // 已读闸门：锚 = 本次 AI 更新快照 updated_at；本次停留仍显示，下次聚焦才隐藏
+  const noticeVisible = useAdjustNoticeVisible(
+    'ftp_update',
+    snapshot?.updated_at ?? null,
+    dataAvailable,
+  );
 
-  if (!snapshot || currentFtp !== snapshot.new_ftp_w) return null;
+  if (!snapshot || currentFtp !== snapshot.new_ftp_w || !noticeVisible) return null;
 
   const undo = () => {
     Alert.alert(t('ftp.ai_update.undo_title'), t('ftp.ai_update.undo_body', { w: snapshot.old_ftp_w }), [

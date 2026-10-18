@@ -11,21 +11,31 @@ import React from 'react';
 import { Alert } from 'react-native';
 import { act, fireEvent } from '@testing-library/react-native';
 import { PlanAdjustBanner } from '@/components/PlanAdjustBanner';
-import { getCurrentPlan, getPlanHistory, undoLastPlanVersion, type StoredPlan } from '@/db';
+import {
+  getAdjustNoticeSeen,
+  getCurrentPlan,
+  getPlanHistory,
+  markAdjustNoticeSeen,
+  undoLastPlanVersion,
+  type StoredPlan,
+} from '@/db';
 import { renderWithProviders } from './helpers/render';
 
 jest.mock('@/db', () => ({
   getCurrentPlan: jest.fn(),
   getPlanHistory: jest.fn(),
   undoLastPlanVersion: jest.fn(),
+  getAdjustNoticeSeen: jest.fn(),
+  markAdjustNoticeSeen: jest.fn(),
   setLang: jest.fn(), // 真实 '@/i18n' 顶层从 '@/db' 取 setLang——防御性补齐
 }));
 
 jest.mock('expo-router', () => {
   const React = require('react'); // eslint-disable-line @typescript-eslint/no-require-imports
   return {
-    // 组件自加载走 useFocusEffect——测试里退化为挂载即拉一次（weekly-plan-card 同款）
-    useFocusEffect: (cb: () => void) => React.useEffect(() => { void cb(); }, [cb]),
+    // 组件自加载走 useFocusEffect——测试里退化为挂载即拉一次（weekly-plan-card 同款）；
+    // 保留 cb 的 cleanup，已读锚 Hook 靠它防止旧身份异步结果回写
+    useFocusEffect: (cb: () => void) => React.useEffect(cb, [cb]),
     useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn() }),
   };
 });
@@ -51,6 +61,8 @@ const flushAsync = () => act(async () => { await new Promise((r) => setTimeout(r
 
 async function mount() {
   const screen = await renderWithProviders(<PlanAdjustBanner />);
+  // 两轮：计划数据（load）→ 已读锚（useAdjustNoticeVisible）→ 写锚 effect
+  await flushAsync();
   await flushAsync();
   return screen;
 }
@@ -59,6 +71,8 @@ beforeEach(() => {
   (getCurrentPlan as jest.Mock).mockReset().mockResolvedValue(null);
   (getPlanHistory as jest.Mock).mockReset().mockResolvedValue([]);
   (undoLastPlanVersion as jest.Mock).mockReset().mockResolvedValue(true);
+  (getAdjustNoticeSeen as jest.Mock).mockReset().mockResolvedValue(null);
+  (markAdjustNoticeSeen as jest.Mock).mockReset().mockResolvedValue(undefined);
   jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 });
 
@@ -73,12 +87,32 @@ describe('PlanAdjustBanner', () => {
     expect(screen.queryByTestId('plan-adjust-banner')).toBeNull();
   });
 
-  it('adjust 版：摘要含本地日与 change_note + 撤销入口', async () => {
+  it('adjust 版：摘要含本地日与 change_note + 撤销入口，并写已读锚', async () => {
     (getCurrentPlan as jest.Mock).mockResolvedValue(plan());
     (getPlanHistory as jest.Mock).mockResolvedValue([{ ...plan(), origin: 'generate' }]);
     const screen = await mount();
     expect(screen.getByText(/AI 教练已于 .* 调整计划：周一阈值课顺延至周二/)).toBeTruthy();
     expect(screen.getByText('撤销调整')).toBeTruthy();
+    // 本次仍可见（撤销入口不被抽走），但已读锚已落库：下次聚焦即隐藏
+    expect(markAdjustNoticeSeen).toHaveBeenCalledWith('plan_adjust', plan().created_at);
+  });
+
+  it('已读锚等于当前版本：再次进入不再显示（浏览过即消失）', async () => {
+    (getCurrentPlan as jest.Mock).mockResolvedValue(plan());
+    (getPlanHistory as jest.Mock).mockResolvedValue([{ ...plan(), origin: 'generate' }]);
+    (getAdjustNoticeSeen as jest.Mock).mockResolvedValue(plan().created_at);
+    const screen = await mount();
+    expect(screen.queryByTestId('plan-adjust-banner')).toBeNull();
+    expect(markAdjustNoticeSeen).not.toHaveBeenCalled();
+  });
+
+  it('旧已读锚 + 新调整版本：重新披露一次并覆盖为新锚', async () => {
+    (getCurrentPlan as jest.Mock).mockResolvedValue(plan());
+    (getPlanHistory as jest.Mock).mockResolvedValue([{ ...plan(), origin: 'generate' }]);
+    (getAdjustNoticeSeen as jest.Mock).mockResolvedValue('2026-10-12T08:00:00.000Z');
+    const screen = await mount();
+    expect(screen.getByTestId('plan-adjust-banner')).toBeTruthy();
+    expect(markAdjustNoticeSeen).toHaveBeenCalledWith('plan_adjust', plan().created_at);
   });
 
   it('无历史版本（异常态）：不显示撤销入口', async () => {
@@ -113,7 +147,9 @@ describe('PlanAdjustBanner', () => {
     (getCurrentPlan as jest.Mock).mockResolvedValue(plan());
     (getPlanHistory as jest.Mock).mockResolvedValue([{ ...plan(), origin: 'generate' }]);
     const screen = await mount();
-    fireEvent.press(screen.getByText('撤销调整'));
+    await act(async () => {
+      fireEvent.press(screen.getByText('撤销调整'));
+    });
     // 确认框阶段不触发（防误触），手动执行破坏性按钮（第三枚）后恰调一次撤销
     expect(undoLastPlanVersion).not.toHaveBeenCalled();
     const buttons = (Alert.alert as jest.Mock).mock.calls.at(-1)[2] as { text: string; onPress?: () => void }[];
