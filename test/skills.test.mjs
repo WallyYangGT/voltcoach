@@ -189,11 +189,12 @@ test('内嵌产物与 skills/ 源目录逐篇一致（防改 md 后忘记重跑 
           (lang === 'en' ? name.endsWith('.en.md') : !name.endsWith('.en.md')),
       )
       .sort()
-      // 归一化口径同 embed-skills.mjs：CRLF→LF + 首尾 trim
+      // 归一化口径同 embed-skills.mjs：CRLF→LF + 首尾 trim；空文件同样跳过（生成器口径）
       .map((name) => ({
         name,
         content: readFileSync(new URL(name, dir), 'utf8').replace(/\r\n/g, '\n').trim(),
-      }));
+      }))
+      .filter((row) => row.content);
     assert.equal(
       SKILL_FILES[lang].length,
       onDisk.length,
@@ -222,5 +223,24 @@ test('E1 预算闸门：两语言技能全文渲染段 ≤ skills_max_chars 的 
       share <= 0.85,
       `${lang} 技能段 ${section.length} 字符已达 skills_max_chars=${CONTEXT_BUDGET.skills_max_chars} 的 ${(share * 100).toFixed(1)}%（阈值 85%）——新增技能前先评审预算，否则运行时会开始整篇静默省略尾部技能`,
     );
+    // 真实运行路径直等断言：当前体量下带预算渲染与全文渲染相等（未触发任何省略）
+    assert.equal(
+      buildSkillsSection(lang, undefined, CONTEXT_BUDGET.skills_max_chars),
+      section,
+      `${lang} 在现预算下已触发整篇省略——运行时输出与全文不一致`,
+    );
   }
+});
+
+// 06 技能的 FTP 标记感知口径钉死：估算/更新链路已自动剔除被标记骑行
+// （src/core/ftp.ts 样本筛选 + ftp-apply 新鲜度门槛），防退回「不感知标记」旧表述
+test('功率数据质量技能：FTP 标记感知口径（防旧表述回归）', () => {
+  const zh = SKILL_FILES.zh.find((f) => f.name === '06-power-data-quality.md');
+  const en = SKILL_FILES.en.find((f) => f.name === '06-power-data-quality.en.md');
+  assert.ok(zh, '缺少 06-power-data-quality.md');
+  assert.ok(en, '缺少 06-power-data-quality.en.md');
+  assert.ok(zh.content.includes('已感知标记'), 'zh 应为「已感知标记」口径');
+  assert.ok(!zh.content.includes('不感知标记'), 'zh 不得残留「不感知标记」旧表述');
+  assert.ok(en.content.includes('is flag-aware'), 'en 应为 flag-aware 口径');
+  assert.ok(!en.content.includes('is not flag-aware'), 'en 不得残留 "not flag-aware" 旧表述');
 });
