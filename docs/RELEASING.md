@@ -13,10 +13,10 @@
 | # | 步骤 | 操作 | 要点 |
 |---|---|---|---|
 | 1 | 前置检查 | `git status` 干净、当前在 main、`git log --oneline -5` 确认在目标提交 | 出包与再开发不并行；多分支时**先确认分支**再打 tag |
-| 2 | 本地门禁 | `npm run lint && npm test && npm run test:coverage && npm run golden` | 全绿才继续；golden 需本地真实素材（见 [MAINTENANCE](./MAINTENANCE.md)） |
+| 2 | 本地门禁 | `npm run lint && npx tsc --noEmit && npm test && npm run test:coverage && npm run golden` | 全绿才继续；golden 需本地真实素材（见 [MAINTENANCE](./MAINTENANCE.md)） |
 | 3 | 确认版本 | `node scripts/version.mjs check` | version 应已是本次想发的值（合并 PR 时已 bump） |
 | 4 | 打 tag | `git tag v1.2.3 && git push origin v1.2.3` | tag == package.json version，否则流水线「版本戳」步骤失败 |
-| 5 | 等 CI 门禁 | Actions 页观察 `Release APK` | lint+单测+黄金 diff（CI 无素材自动跳过 golden） |
+| 5 | 等 CI 门禁 | Actions 页观察 `Release APK` | lint + 单测 + 组件测试 + 黄金 diff（CI 无素材自动跳过 golden） |
 | 6 | 自动打包 | prebuild → 签名 → `assembleRelease` → `check:apk` | NDK 版本随 Expo SDK 固定（workflow 内注明） |
 | 7 | 产物体检 | `check:apk` 解包断言 | 见下文「发版包体检」；失败即中止发布 |
 | 8 | Release 发布 | 自动挂 GitHub Release，附 APK 与自动 release notes | debug 签名回退时 Release 正文自曝（见下） |
@@ -53,8 +53,9 @@ certutil -encode <密钥目录>/voltcoach.keystore keystore-b64.txt   # Windows�
 
 每次发版构建后流水线自动跑 `npm run check:apk`：解包 APK 内的 JS bundle，断言——
 
-- **不含**联调残留：`10.0.2.2`、`:8791`、`127.0.0.1`、`10./192.168./172.` 私网地址；
-- **必须含** `onelap.cn`（顽鹿同步生产端点）——反向验证 bundle 是生产配置。
+- **不含**联调残留：`10.0.2.2`、`:8791`/`:8792`/`:8793`（顽鹿/迹驰/Wahoo 三个 mock 的默认端口）、`127.0.0.1`、`10./192.168./172.` 私网地址；
+- **必须含**三平台四个生产端点特征：`onelap.cn`、`prod.zh.igpsport.com`、`prod.en.igpsport.com`、`api.wahooligan.com`——反向验证 bundle 是生产配置；
+- cleartext `http://` 主机**默认拒绝**（白名单外一律算嫌疑，公网联调地址也逃不掉，白名单见脚本）。
 
 背景：`EXPO_PUBLIC_*` 环境变量是打包期内联的，而改环境变量**不会**失效 Metro/Gradle 的 bundle 缓存——曾出现「联调包被当生产包发出」的真实事故，此闸门是防复发手段。
 
