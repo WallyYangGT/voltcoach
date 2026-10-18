@@ -6,8 +6,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readdirSync, readFileSync } from 'node:fs';
 
 const { SKILL_FILES, buildSkillsSection, truncateSkillsSection } = await import('../src/prompts/skills.ts');
+const { CONTEXT_BUDGET } = await import('../src/core/settings.ts');
 
 test('按文件名排序加载，标题取首个一级标题（files 注入）', () => {
   const files = [
@@ -170,4 +172,55 @@ test('内嵌英文技能：.en.md 归英文，zh 不混入英文技能', () => {
   assert.equal(SKILL_FILES.en.length, 10);
   for (const f of SKILL_FILES.zh) assert.ok(!f.name.endsWith('.en.md'));
   for (const f of SKILL_FILES.en) assert.ok(f.name.endsWith('.en.md'));
+});
+
+// ---- 内嵌产物守卫（2026-10-18 skills 评审批）----
+
+// 改 skills/*.md 后忘跑 `node scripts/embed-skills.mjs` 时，内嵌 SKILL_FILES 会静默漂移
+// （本文件其余断言读的都是内嵌产物，测不出源文件改动）。md 已入库，本测试在 CI 同样生效。
+test('内嵌产物与 skills/ 源目录逐篇一致（防改 md 后忘记重跑 embed-skills）', () => {
+  const dir = new URL('../src/prompts/skills/', import.meta.url);
+  for (const lang of ['zh', 'en']) {
+    const onDisk = readdirSync(dir)
+      .filter(
+        (name) =>
+          name.endsWith('.md') &&
+          !name.startsWith('_') &&
+          (lang === 'en' ? name.endsWith('.en.md') : !name.endsWith('.en.md')),
+      )
+      .sort()
+      // 归一化口径同 embed-skills.mjs：CRLF→LF + 首尾 trim
+      .map((name) => ({
+        name,
+        content: readFileSync(new URL(name, dir), 'utf8').replace(/\r\n/g, '\n').trim(),
+      }));
+    assert.equal(
+      SKILL_FILES[lang].length,
+      onDisk.length,
+      `${lang} 内嵌篇数（${SKILL_FILES[lang].length}）与磁盘（${onDisk.length}）不一致——新增/删除技能后需重跑 node scripts/embed-skills.mjs`,
+    );
+    for (let i = 0; i < onDisk.length; i++) {
+      assert.equal(SKILL_FILES[lang][i].name, onDisk[i].name, `${lang} 第 ${i} 篇文件名错位`);
+      assert.equal(
+        SKILL_FILES[lang][i].content,
+        onDisk[i].content,
+        `技能 ${onDisk[i].name} 内容与内嵌产物不一致——改了 md 后需重跑 node scripts/embed-skills.mjs`,
+      );
+    }
+  }
+});
+
+// en 全文 ~40k 字符曾达旧预算 44k 的 ~90%：再增技能就会在运行时开始整篇静默省略尾部
+// 技能（最先牺牲排最尾、体积最大的 10-amateur-coach）。本测试把增长闸门前移到 CI：
+// 渲染段超预算 85% 即红灯，提示先评审 skills_max_chars 而不是默默降级。
+test('E1 预算闸门：两语言技能全文渲染段 ≤ skills_max_chars 的 85%', () => {
+  for (const lang of ['zh', 'en']) {
+    const section = buildSkillsSection(lang);
+    assert.ok(section, `${lang} 技能段为空`);
+    const share = section.length / CONTEXT_BUDGET.skills_max_chars;
+    assert.ok(
+      share <= 0.85,
+      `${lang} 技能段 ${section.length} 字符已达 skills_max_chars=${CONTEXT_BUDGET.skills_max_chars} 的 ${(share * 100).toFixed(1)}%（阈值 85%）——新增技能前先评审预算，否则运行时会开始整篇静默省略尾部技能`,
+    );
+  }
 });

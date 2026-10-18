@@ -185,8 +185,9 @@ export const CONTEXT_BUDGET = {
   report_base_max_chars: 56000,
   /** 报告基础段 + agentic 指引 + 记忆段的总量上限 */
   report_total_max_chars: 66000,
-  /** 专业知识库段上限（zh 实测 ~14.6k / en ~40k，en 仍完整；未来新增技能的增长闸门） */
-  skills_max_chars: 44000,
+  /** 专业知识库段上限（zh 实测 ~14.6k / en ~40k；新增技能的增长闸门——test/skills.test.mjs
+   * 断言两语言全文渲染 ≤ 预算 85%，超限在 CI 显式红灯而非运行时静默省略尾部技能） */
+  skills_max_chars: 52000,
   /** follow_up 内联报告正文上限（超出走 compactReportForPrompt 首末章瘦身） */
   report_inline_max_chars: 16000,
   /** follow_up 训练 summary JSON 上限；超出第 1 轮即直接降 headline（不再区分轮次） */
