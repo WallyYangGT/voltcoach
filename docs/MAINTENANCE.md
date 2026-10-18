@@ -32,7 +32,8 @@ src/
                         + 状态形状 state.ts；纯函数 + 环境注入，不 import RN，可 node:test 直测）
   backup/               .fitbackup 备份层（manifest/archive 纯函数 + 设备侧导入导出）
   charts/               react-native-svg 自绘图表（计算层复用 core 逻辑，渲染点数抽稀）
-  components/           共用 UI 组件（含 PlanTable 轻量表格、首页训练计划卡）
+  components/           共用 UI 组件（含 PlanTable 轻量表格、首页今日建议卡 TodayAdviceCard、
+                        多平台云同步卡 SyncCard）
   i18n/                 前端双语词典（zh 默认 / en）
 modules/                本地 Expo 原生模块（generation-keepalive：AI 生成保活前台服务
                         + 电池优化白名单 API，android-only，autolinking 自动接入）

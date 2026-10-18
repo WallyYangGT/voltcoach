@@ -19,6 +19,7 @@ npx expo start --android  # 直接拉起安卓模拟器/已连接设备
 | `npm run lint` | ESLint（门槛 0 error **且 0 warning**） |
 | `npm test` | 单元测试（node:test，纯函数层，无需模拟器） |
 | `npm run test:coverage` | 单测 + 覆盖率报告（纯函数层行覆盖 ≥90% 为口径） |
+| `npm run test:components` | 组件与交互测试（jest-expo + RNTL，无需模拟器） |
 | `npm run golden` | 黄金 diff（需本地自备素材，见下） |
 | `node scripts/version.mjs bump` | 提版号（patch，可选 minor/major） |
 
@@ -47,11 +48,13 @@ git push -u origin feat/xxx      # 开 PR
 ## 门禁清单（合并前自查）
 
 1. `npm run lint` 0 error 且 0 warning；
-2. `npm test` 全绿；
-3. `npm run test:coverage` 纯函数层行覆盖 ≥90%（新增分支必须补断言）；
-4. 涉及解析/指标代码时 `npm run golden` 全绿；
-5. 新增用户可见文案已补 zh/en 双语 key；
-6. PR 已提版号（CI 会校验）。
+2. `npx tsc --noEmit` 全绿（Metro 不查类型、ESLint 的 TS 支持关闭 no-undef，渲染期 ReferenceError 级缺陷只能由 tsc 抓；CI gate 已纳入）；
+3. `npm test` 全绿；
+4. 涉及组件/交互改动时 `npm run test:components` 全绿（CI gate 每次必跑）；
+5. `npm run test:coverage` 纯函数层行覆盖 ≥90%（新增分支必须补断言）；
+6. 涉及解析/指标代码时 `npm run golden` 全绿；
+7. 新增用户可见文案已补 zh/en 双语 key；
+8. PR 已提版号（CI 会校验）。
 
 ## 黄金 diff 的本地素材
 

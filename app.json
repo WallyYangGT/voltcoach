@@ -2,7 +2,7 @@
   "expo": {
     "name": "VoltCoach",
     "slug": "voltcoach",
-    "version": "0.3.11",
+    "version": "0.3.12",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "voltcoach",
