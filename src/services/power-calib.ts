@@ -18,18 +18,20 @@ import { rebuildSummaryFromRecords } from '@/core/reanalyze';
 import { POWER_CALIBRATION } from '@/core/settings';
 import {
   computeForm,
+  getActivityFileName,
   getActivitySummary,
   getEffectiveAthlete,
   rebuildDossierQuietly,
   setActivityPowerFlag,
-  upsertActivity,
+  updateActivitySummary,
 } from '@/db';
 import { loadStoredRecords } from '@/records-store';
 
 /** 标记结果（AI 转述给用户 / UI 提示用） */
 export interface PowerFlagOutcome {
   ok: true;
-  file_name: string;
+  uuid: string;
+  file_name: string | null;
   flagged: boolean;
   /** 标记原因（原样透传，可能为 null） */
   reason: string | null;
@@ -38,20 +40,21 @@ export interface PowerFlagOutcome {
 }
 
 export async function setPowerFlagAndRefresh(
-  fileName: string,
+  uuid: string,
   flagged: boolean,
   lang: Lang = 'zh',
   reason: string | null = null,
 ): Promise<PowerFlagOutcome> {
-  await setActivityPowerFlag(fileName, flagged, lang);
+  await setActivityPowerFlag(uuid, flagged, lang);
   await rebuildDossierQuietly();
-  return { ok: true, file_name: fileName, flagged, reason, dossier_updated: true };
+  return { ok: true, uuid, file_name: await getActivityFileName(uuid), flagged, reason, dossier_updated: true };
 }
 
 /** 校准结果：changes 仅列有变化的字段（旧→新），供 AI 在回答中向用户说明 */
 export interface PowerCalibOutcome {
   ok: true;
-  file_name: string;
+  uuid: string;
+  file_name: string | null;
   date: string;
   sport: string;
   /** 请求的系数与实际生效系数（越界被夹逼时两者不同） */
@@ -98,15 +101,16 @@ function diffSummaries(prev: Summary, rebuilt: Summary): PowerCalibOutcome['chan
  * 双语 Error（工具层兜为 {error}）；系数夹逼到 POWER_CALIBRATION 界限。
  */
 export async function recalibrateActivityPower(
-  fileName: string,
+  uuid: string,
   scaleFactor: number,
   lang: Lang = 'zh',
 ): Promise<PowerCalibOutcome> {
-  const prev = await getActivitySummary(fileName);
-  if (!prev) throw new Error(t(lang, 'tool.summary_not_found', { name: fileName }));
-  if (!prev.power) throw new Error(t(lang, 'tool.no_power_data', { name: fileName }));
-  const records = await loadStoredRecords(fileName);
-  if (!records) throw new Error(t(lang, 'tool.records_not_found', { name: fileName }));
+  const prev = await getActivitySummary(uuid);
+  const fileName = await getActivityFileName(uuid);
+  if (!prev) throw new Error(t(lang, 'tool.summary_not_found', { name: fileName ?? uuid }));
+  if (!prev.power) throw new Error(t(lang, 'tool.no_power_data', { name: fileName ?? uuid }));
+  const records = await loadStoredRecords(uuid);
+  if (!records) throw new Error(t(lang, 'tool.records_not_found', { name: fileName ?? uuid }));
 
   const scaleApplied = Math.min(
     POWER_CALIBRATION.max_scale,
@@ -119,12 +123,12 @@ export async function recalibrateActivityPower(
   delete rebuilt.activity.category;
   delete rebuilt.activity.note;
 
-  // 入库 + 注入当日 CTL/ATL/TSB 后终版再入库（两段式，口径同 importFit/reanalyze）
-  await upsertActivity(fileName, rebuilt);
+  // 写回 + 注入当日 CTL/ATL/TSB 后终版再写回（两段式，口径同 importFit/reanalyze）
+  await updateActivitySummary(uuid, rebuilt, { lang });
   const form = await computeForm(rebuilt.activity.date);
   if (form) {
     Object.assign(rebuilt.athlete_context, form);
-    await upsertActivity(fileName, rebuilt);
+    await updateActivitySummary(uuid, rebuilt, { lang });
   }
 
   void rollLocalSnapshotQuietly(); // 数据被改写，滚静默快照（fire-and-forget 串行链）
@@ -132,6 +136,7 @@ export async function recalibrateActivityPower(
 
   return {
     ok: true,
+    uuid,
     file_name: fileName,
     date: rebuilt.activity.date,
     sport: rebuilt.activity.sport,

@@ -142,7 +142,7 @@ export function buildChatSystemSection(input: ChatSystemInput, lang: Lang = 'zh'
         degrade: (n) => reportSectionText(input.reportMarkdown!, lang, n),
       });
     }
-    // 追问只带报告会让 AI 无法回答报告未覆盖的细节，按 file_name 附训练数据——
+    // 追问只带报告会让 AI 无法回答报告未覆盖的细节，按 activity_uuid 附训练数据——
     // 首轮压缩全量，第 2 轮起降为 headline 摘要（历史每轮重发，完整 JSON 随轮数线性烧 token）
     const summaryText = summarySectionText(input, lang);
     if (summaryText) sections.push({ id: 'summary', text: summaryText, priority: 1 });

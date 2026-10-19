@@ -108,9 +108,9 @@ export default function AiCenterScreen() {
   };
 
   const scenarioContext = (s: Scenario) => ({
-    file_name: pickA,
+    activity_uuid: pickA,
     race_date: s === 'taper' ? raceDate : null,
-    compare_with: s === 'compare' ? pickB : null,
+    compare_uuid: s === 'compare' ? pickB : null,
   });
 
   const generate = async () => {
@@ -384,19 +384,19 @@ function ActivityPicker({
   label: string;
   acts: Awaited<ReturnType<typeof listActivities>>;
   selected: string | null;
-  onSelect: (name: string | null) => void;
+  onSelect: (activityId: string | null) => void;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   // 日期按本地日历日展示（双口径统一，与训练列表同源同口径）
-  const dateLabels = useRideDateLabels(acts.map((a) => a.file_name));
-  const sel = acts.find((a) => a.file_name === selected);
+  const dateLabels = useRideDateLabels(acts.map((a) => a.uuid));
+  const sel = acts.find((a) => a.uuid === selected);
   return (
     <View>
       <Pressable style={styles.pickerRow} onPress={() => setOpen((v) => !v)}>
         <Text style={styles.pickerLabel}>{label}</Text>
         <Text style={[styles.pickerValue, { color: sel ? palette.text : palette.faint }]} numberOfLines={1}>
-          {sel ? `${dateLabels.get(sel.file_name) ?? sel.date} · ${sel.file_name}` : label}
+          {sel ? `${dateLabels.get(sel.uuid) ?? sel.date} · ${sel.file_name}` : label}
         </Text>
         <Icon source={open ? 'chevron-up' : 'chevron-down'} size={18} color={palette.muted} />
       </Pressable>
@@ -405,14 +405,14 @@ function ActivityPicker({
           <ScrollView style={{ maxHeight: 200 }} nestedScrollEnabled>
             {acts.map((a) => (
               <Pressable
-                key={a.file_name}
+                key={a.uuid}
                 style={styles.pickerItem}
                 onPress={() => {
-                  onSelect(a.file_name);
+                  onSelect(a.uuid);
                   setOpen(false);
                 }}>
                 <Text style={styles.pickerItemText} numberOfLines={1}>
-                  {dateLabels.get(a.file_name) ?? a.date} · {t(`cat.${a.category}` as never)} · {a.file_name}
+                  {dateLabels.get(a.uuid) ?? a.date} · {t(`cat.${a.category}` as never)} · {a.file_name}
                 </Text>
               </Pressable>
             ))}

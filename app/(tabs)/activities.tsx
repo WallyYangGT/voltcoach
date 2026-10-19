@@ -1,6 +1,6 @@
 /**
  * 训练列表（M1）：按日期倒序的训练清单 + FAB「＋」导入 FIT（MD3）。
- * 行数据来自训练库 listActivities（入库键 file_name 即详情页路由参数）。
+ * 行数据来自训练库 listActivities（活动 uuid 即详情页路由参数）。
  * M5：每行可左滑露出删除按钮（ReanimatedSwipeable，需根布局的 GestureHandlerRootView），
  * 确认后删训练行 + 其逐秒数据；已生成的 AI 报告保留（弹窗文案已说明）。
  */
@@ -32,7 +32,7 @@ export default function ActivitiesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   // 行日期按本地日历日展示（双口径统一，2026-10）：activities.date 是 UTC 日，早骑差
   // 一天；首帧时刻换算（带缓存，渐进补齐），与 AI 报告标题同源同口径，缺首帧回退原值
-  const dateLabels = useRideDateLabels((items ?? []).map((r) => r.file_name));
+  const dateLabels = useRideDateLabels((items ?? []).map((r) => r.uuid));
   // 左滑行的控制器（按文件名索引）：同一时刻只留一行展开，避免多行悬空
   const swipeRefs = useRef(new Map<string, SwipeableMethods>());
 
@@ -59,7 +59,7 @@ export default function ActivitiesScreen() {
     }
   };
 
-  const confirmDelete = (fileName: string) => {
+  const confirmDelete = (activityId: string) => {
     Alert.alert(t('activities.deleteTitle'), t('activities.deleteMsg'), [
       { text: t('common.cancel'), style: 'cancel' },
       {
@@ -68,7 +68,7 @@ export default function ActivitiesScreen() {
         onPress: () => {
           void (async () => {
             try {
-              await deleteActivity(fileName);
+              await deleteActivity(activityId);
             } catch (e) {
               console.warn('删除训练失败:', e);
               Alert.alert(t('data.err.generic'), e instanceof Error ? e.message : String(e));
@@ -76,11 +76,11 @@ export default function ActivitiesScreen() {
             }
             // 逐秒数据清理失败不该让界面停在旧列表（行已删）：只记警告
             try {
-              deleteStoredRecord(fileName);
+              deleteStoredRecord(activityId);
             } catch (e) {
               console.warn('逐秒数据清理失败（训练已删除）:', e);
             }
-            invalidateReportTitles(fileName);
+            invalidateReportTitles(activityId);
             void rebuildDossierQuietly(); // 档案基线剔除该骑行（fire-and-forget）
             await load();
           })();
@@ -93,7 +93,7 @@ export default function ActivitiesScreen() {
     <View style={[styles.page, { paddingTop: insets.top + 12 }]}>
       <FlatList
         data={items ?? []}
-        keyExtractor={(r) => r.file_name}
+        keyExtractor={(r) => r.uuid}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -125,8 +125,8 @@ export default function ActivitiesScreen() {
             // ⚠️ 这个 ref 回调必须保持「返回 undefined」：返回清理函数时 React 19 不再以
             // null 调用它，下面 Map 的失效清理就不会发生（失效引用残留 → closeOthers 崩）
             ref={(r) => {
-              if (r) swipeRefs.current.set(item.file_name, r);
-              else swipeRefs.current.delete(item.file_name);
+              if (r) swipeRefs.current.set(item.uuid, r);
+              else swipeRefs.current.delete(item.uuid);
             }}
             friction={2}
             rightThreshold={40}
@@ -136,12 +136,12 @@ export default function ActivitiesScreen() {
               // 注意方向语义：库在「向左滑露出右侧面板」时回调 LEFT（内部按 translateX
               // 正负派发，右侧面板的目标位移是 -rightWidth），见 ReanimatedSwipeable
               // 的 dispatchImmediateEvents。这里只渲染右侧删除动作，故判 left。
-              if (dir === 'left') closeOthers(item.file_name);
+              if (dir === 'left') closeOthers(item.uuid);
             }}
             renderRightActions={() => (
               <Pressable
                 style={({ pressed }) => [styles.deleteAction, pressed && { opacity: 0.7 }]}
-                onPress={() => confirmDelete(item.file_name)}>
+                onPress={() => confirmDelete(item.uuid)}>
                 <Text style={styles.deleteText}>{t('common.delete')}</Text>
               </Pressable>
             )}>
@@ -150,11 +150,11 @@ export default function ActivitiesScreen() {
               onPress={() =>
                 router.push({
                   pathname: '/activity/[id]',
-                  params: { id: encodeURIComponent(item.file_name) },
+                  params: { id: encodeURIComponent(item.uuid) },
                 })
               }>
               <View style={styles.cardTop}>
-                <Text style={styles.date}>{dateLabels.get(item.file_name) ?? item.date}</Text>
+                <Text style={styles.date}>{dateLabels.get(item.uuid) ?? item.date}</Text>
                 <View style={styles.badges}>
                   <Text style={[styles.sport, item.category === 'race' && { color: palette.volt }]}>
                     {t(`cat.${item.category}` as never)}

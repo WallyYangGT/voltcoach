@@ -65,8 +65,8 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'agentic.rules_head': `使用规则：`,
     'agentic.intro': `你可以通过工具调用主动查询本应用训练库中的数据、做负荷推演与课表计算，不必只依赖上方预装的数据。可用工具：`,
     'agentic.tool.list_activities': `- list_activities：训练简明清单（日期/类型/时长/TSS/NP/IF），可按日期范围/运动类型/分类过滤——这是"目录页"`,
-    'agentic.tool.get_activity_summary': `- get_activity_summary：按 file_name 取单次训练完整汇总指标（NP/IF/TSS/分区/峰功率/心率漂移/备注等）`,
-    'agentic.tool.get_activity_records': `- get_activity_records：按 file_name 取逐秒时序（功率/心率/踏频等），可用 start_sec/end_sec 只取时间窗片段`,
+    'agentic.tool.get_activity_summary': `- get_activity_summary：按 activity_id 取单次训练完整汇总指标（NP/IF/TSS/分区/峰功率/心率漂移/备注等）`,
+    'agentic.tool.get_activity_records': `- get_activity_records：按 activity_id 取逐秒时序（功率/心率/踏频等），可用 start_sec/end_sec 只取时间窗片段`,
     'agentic.tool.get_form_series': `- get_form_series：最近 N 天逐日 CTL/ATL/TSB（疲劳与状态走势）`,
     'agentic.tool.get_monthly_summary': `- get_monthly_summary：逐月训练汇总（长期负荷趋势）`,
     'agentic.tool.get_athlete_profile': `- get_athlete_profile：骑手参数（FTP/最大心率/体重，含是否已校准）、用户身份/训练目标、教练模式与时间预算（每周可用时长档/可骑日，空=不限/单次上限）`,
@@ -83,7 +83,7 @@ const TEXT: Record<PromptLang, Record<string, string>> = {
     'agentic.tool.set_power_flag': `- set_power_flag：标记/取消某骑行的「功率不可信」（可逆）——被标记骑行从训练档案功率基线排除`,
     'agentic.tool.recalibrate_activity_power': `- recalibrate_activity_power：按系数缩放重算某骑行的功率派生指标并写回（功率计校准偏差修正，0.5–1.5），返回新旧对比`,
     'agentic.rule.0': `1. 只在上方预装数据不足以回答时才调用工具；能直接回答就不要调用。`,
-    'agentic.rule.1': `2. 深挖单次训练时先 list_activities 找到 file_name，再用 get_activity_summary / get_activity_records 按名取数。`,
+    'agentic.rule.1': `2. 深挖单次训练时先 list_activities 找到 activity_id，再用 get_activity_summary / get_activity_records 按 id 取数。`,
     'agentic.rule.2': `3. 每轮只发起回答所必需的调用，不要批量试探。`,
     'agentic.rule.3': `4. 需要先调用工具时，中间轮只写简短过渡语；完整结论/报告正文留到不再调用工具的最后一轮一次性输出。`,
     'agentic.rule.4': `5. FTP 自动更新（update_ftp）：复盘或对话中发现功率-心率区间系统性错位、峰功率与当前 FTP 明显不符等数据偏移迹象时，主动跑 estimate_ftp；门槛满足（置信度足够且数据新鲜）即调用 update_ftp，无需等用户开口。更新成功后必须在回答中明确指出「FTP 已由 X 更新为 Y」及数据依据；被拒绝时向用户转述原因与数据收集建议。用户口头给出的 FTP 数值不要用本工具，引导其到「我的」页手动设置。`,
@@ -270,8 +270,8 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     'agentic.rules_head': `Rules:`,
     'agentic.intro': `You may proactively query this app's training library, run load simulations, and build workouts through tool calls — you are not limited to the preloaded data above. Available tools:`,
     'agentic.tool.list_activities': `- list_activities: brief activity list (date/type/duration/TSS/NP/IF) with date range / sport / category filters — the "catalog page"`,
-    'agentic.tool.get_activity_summary': `- get_activity_summary: full summary metrics for one activity by file_name (NP/IF/TSS/zones/peak power/HR drift/notes etc.)`,
-    'agentic.tool.get_activity_records': `- get_activity_records: per-second time series (power/HR/cadence etc.) by file_name, with start_sec/end_sec to fetch only a time window`,
+    'agentic.tool.get_activity_summary': `- get_activity_summary: full summary metrics for one activity by activity_id (NP/IF/TSS/zones/peak power/HR drift/notes etc.)`,
+    'agentic.tool.get_activity_records': `- get_activity_records: per-second time series (power/HR/cadence etc.) by activity_id, with start_sec/end_sec to fetch only a time window`,
     'agentic.tool.get_form_series': `- get_form_series: daily CTL/ATL/TSB for the last N days (fatigue and form trend)`,
     'agentic.tool.get_monthly_summary': `- get_monthly_summary: monthly training summary (long-term load trend)`,
     'agentic.tool.get_athlete_profile': `- get_athlete_profile: athlete parameters (FTP/max HR/weight, including whether calibrated), user identity/goals, coaching mode, and time budget (weekly hours tier / available days, empty = unrestricted / per-session cap)`,
@@ -285,7 +285,7 @@ You are a rigorous, pragmatic cycling coach, well-versed in the Coggan power tra
     'agentic.tool.update_training_plan': `- update_training_plan: submit the FULLY adjusted training plan (creates a new version; old ones are archived) — only for explicit user requests to replan or reshuffle at scale; ALWAYS resend every session (a partial submission would wipe the rest); on validation failure relay the reasons and offer a compliant alternative`,
     'agentic.tool.adjust_plan_sessions': `- adjust_plan_sessions: session-level local adjustments (shift / swap / change type / change duration / remove / insert) — prefer it for small tweaks, no full resend; ⚠️ confirmation protocol: before calling, restate the concrete change to the user (which day, what changes from→to what) and call only after the user agrees — never modify the plan preemptively; when the target day has a session, state whether it is a swap or a replacement; on rejection relay the reasons honestly`,
     'agentic.rule.0': `1. Only call a tool when the preloaded data above is insufficient; answer directly whenever possible.`,
-    'agentic.rule.1': `2. To dig into a single workout, first list_activities to find the file_name, then get_activity_summary / get_activity_records.`,
+    'agentic.rule.1': `2. To dig into a single workout, first list_activities to find the activity_id, then get_activity_summary / get_activity_records.`,
     'agentic.rule.2': `3. Per round, make only the calls needed to answer — no batch probing.`,
     'agentic.rule.3': `4. When tools are needed first, keep intermediate rounds to a short transition; write the full conclusion/report only in the final round, which makes no tool calls.`,
     'agentic.rule.4': `5. FTP auto-update (update_ftp): in reviews or chats, when you spot data-drift signs such as a systematic power-vs-HR zone mismatch or peak power clearly inconsistent with the current FTP, run estimate_ftp proactively; when the gate passes (enough confidence and fresh data) call update_ftp without waiting to be asked. After a successful update you MUST state explicitly in the answer that "FTP has been updated from X to Y" with the data basis; if refused, relay the reason and data-collection advice. Never pass user-quoted FTP numbers to this tool — direct the user to set it manually on the Profile page.`,
@@ -978,15 +978,15 @@ export function withLocalActivityDate<T extends object>(summary: T, startAt: str
 
 /**
  * 活动行清单（list_activities 工具与报告 recentActivities 数据段共用）的 date
- * 统一改写为本地日历日。starts 为 file_name → records 首帧 UTC ISO/null 映射，
- * 缺首帧的行保持原值。返回新数组，入参不被修改。口径同 withLocalActivityDate。
+ * 统一改写为本地日历日。starts 为 activity uuid → records 首帧 UTC ISO/null 映射
+ * （v3；行必须带 uuid），缺首帧的行保持原值。返回新数组，入参不被修改。
  */
-export function withLocalActivityDates<T extends { file_name: string; date: string }>(
+export function withLocalActivityDates<T extends { uuid: string; date: string }>(
   rows: T[],
   starts: Map<string, string | null>,
 ): T[] {
   return rows.map((r) => {
-    const local = localDayFromUtc(starts.get(r.file_name) ?? null);
+    const local = localDayFromUtc(starts.get(r.uuid) ?? null);
     return local && local !== r.date ? { ...r, date: local } : r;
   });
 }

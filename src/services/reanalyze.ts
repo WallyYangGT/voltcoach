@@ -13,13 +13,14 @@ import { rollLocalSnapshotQuietly } from '@/backup/export';
 import { t, type Lang } from '@/core/i18n';
 import { rebuildSummaryFromRecords } from '@/core/reanalyze';
 import type { Summary } from '@/core/analyze';
-import { computeForm, getActivitySummary, getEffectiveAthlete, rebuildDossierQuietly, upsertActivity } from '@/db';
+import { computeForm, getActivityFileName, getActivitySummary, getEffectiveAthlete, rebuildDossierQuietly, updateActivitySummary } from '@/db';
 import { loadStoredRecords } from '@/records-store';
 
 /** 重新分析结果：changes 仅列有变化的字段（旧→新），供 AI 在回答中向用户说明 */
 export interface ReanalyzeOutcome {
   ok: true;
-  file_name: string;
+  uuid: string;
+  file_name: string | null;
   date: string;
   sport: string;
   ftp_used: number;
@@ -59,11 +60,12 @@ function diffSummaries(prev: Summary, rebuilt: Summary): ReanalyzeOutcome['chang
  * 重新分析一次训练并写回：活动行不存在或缺逐秒数据抛双语 Error
  * （工具层兜为 {error}）。返回新旧指标对比供 AI 说明。
  */
-export async function reanalyzeActivity(fileName: string, lang: Lang = 'zh'): Promise<ReanalyzeOutcome> {
-  const prev = await getActivitySummary(fileName);
-  if (!prev) throw new Error(t(lang, 'tool.summary_not_found', { name: fileName }));
-  const records = await loadStoredRecords(fileName);
-  if (!records) throw new Error(t(lang, 'tool.records_not_found', { name: fileName }));
+export async function reanalyzeActivity(uuid: string, lang: Lang = 'zh'): Promise<ReanalyzeOutcome> {
+  const prev = await getActivitySummary(uuid);
+  const fileName = await getActivityFileName(uuid);
+  if (!prev) throw new Error(t(lang, 'tool.summary_not_found', { name: fileName ?? uuid }));
+  const records = await loadStoredRecords(uuid);
+  if (!records) throw new Error(t(lang, 'tool.records_not_found', { name: fileName ?? uuid }));
 
   const athlete = await getEffectiveAthlete();
   const rebuilt = rebuildSummaryFromRecords(records, prev, athlete);
@@ -72,12 +74,12 @@ export async function reanalyzeActivity(fileName: string, lang: Lang = 'zh'): Pr
   delete rebuilt.activity.category;
   delete rebuilt.activity.note;
 
-  // 入库 + 注入当日 CTL/ATL/TSB 后终版再入库（两段式，口径同 importFit）
-  await upsertActivity(fileName, rebuilt);
+  // 写回 + 注入当日 CTL/ATL/TSB 后终版再写回（两段式，口径同 importFit）
+  await updateActivitySummary(uuid, rebuilt, { lang });
   const form = await computeForm(rebuilt.activity.date);
   if (form) {
     Object.assign(rebuilt.athlete_context, form);
-    await upsertActivity(fileName, rebuilt);
+    await updateActivitySummary(uuid, rebuilt, { lang });
   }
 
   void rollLocalSnapshotQuietly(); // 数据被改写，滚静默快照（失败仅警告，fire-and-forget 串行链）
@@ -85,6 +87,7 @@ export async function reanalyzeActivity(fileName: string, lang: Lang = 'zh'): Pr
 
   return {
     ok: true,
+    uuid,
     file_name: fileName,
     date: rebuilt.activity.date,
     sport: rebuilt.activity.sport,

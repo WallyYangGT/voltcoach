@@ -57,9 +57,11 @@ function reportOf(partial: Partial<AiReportRow> = {}): AiReportRow {
   return {
     id: REPORT_ID,
     mode: 'review',
-    file_name: '2026-10-10 ride.fit',
+    activity_uuid: 'a'.repeat(32),
     race_date: null,
-    compare_with: null,
+    compare_uuid: null,
+    activity_fingerprint: '2026-10-10|3600|30000',
+    compare_fingerprint: null,
     status: 'completed',
     error: null,
     created_at: '2026-10-13 00:00:00',
@@ -163,7 +165,7 @@ describe('useAiReport', () => {
     });
     expect(err).toBeNull();
     expect(submitChatMessage).toHaveBeenCalledWith(
-      { chatId: null, mode: 'follow_up', message: '这次 NP 为什么偏高？', reportId: REPORT_ID, fileName: '2026-10-10 ride.fit' },
+      { chatId: null, mode: 'follow_up', message: '这次 NP 为什么偏高？', reportId: REPORT_ID, activityUuid: 'a'.repeat(32) },
       'zh',
     );
     expect(runChatGeneration).toHaveBeenCalledWith(5, 9, 'zh');

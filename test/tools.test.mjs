@@ -13,20 +13,26 @@ const { createExecuteTool } = await import('../src/tools/execute.ts');
 const { AGENTIC } = await import('../src/core/settings.ts');
 const { emptyProfile, normalizeProfilePatch } = await import('../src/core/profile.ts');
 
+/** 活动 uuid 夹具（工具层只认 32 hex） */
+const A = 'a'.repeat(32);
+const B = 'b'.repeat(32);
+const C = 'c'.repeat(32);
+const X = 'f'.repeat(32);
+
 /** 内存版 ToolIo（最小数据集，按需覆写） */
 function fakeIo(overrides = {}) {
   const io = {
     listActivities: async () => [
-      { file_name: 'a.fit', date: '2026-03-25', sport: 'cycling', category: 'race', duration_sec: 3600, distance_km: 90, tss: 120, np: 200, intensity_factor: 0.9 },
-      { file_name: 'b.fit', date: '2026-03-20', sport: 'cycling', category: 'training', duration_sec: 5400, distance_km: 120, tss: 90, np: 160, intensity_factor: 0.75 },
-      { file_name: 'c.fit', date: '2026-03-18', sport: 'running', category: 'training', duration_sec: 1800, distance_km: 15, tss: 30, np: null, intensity_factor: null },
+      { uuid: A, file_name: 'a.fit', date: '2026-03-25', sport: 'cycling', category: 'race', duration_sec: 3600, distance_km: 90, tss: 120, np: 200, intensity_factor: 0.9 },
+      { uuid: B, file_name: 'b.fit', date: '2026-03-20', sport: 'cycling', category: 'training', duration_sec: 5400, distance_km: 120, tss: 90, np: 160, intensity_factor: 0.75 },
+      { uuid: C, file_name: 'c.fit', date: '2026-03-18', sport: 'running', category: 'training', duration_sec: 1800, distance_km: 15, tss: 30, np: null, intensity_factor: null },
     ],
-    getActivitySummary: async (name) =>
-      name === 'a.fit'
+    getActivitySummary: async (id) =>
+      id === A
         ? { activity: { date: '2026-03-25', category: 'race' }, power: { np: 200, tss: 120 }, anomalies: [] }
         : null,
-    loadRecords: async (name, opts) => {
-      if (name !== 'a.fit') return null;
+    loadRecords: async (id, opts) => {
+      if (id !== A) return null;
       // 10 秒数据，stride 按 maxPoints 推算
       const points = Array.from({ length: 10 }, (_, i) => ({
         t: `2026-03-25T03:00:${String(i).padStart(2, '0')}.000Z`,
@@ -67,20 +73,20 @@ function fakeIo(overrides = {}) {
       return { applied: true, old_ftp_w: 210, new_ftp_w: 224, updated_at: '2026-03-25T10:00:00.000Z' };
     },
     getDossier: async () => io._dossier ?? null,
-    setPowerFlag: async (name, flagged, lang, reason) => {
-      io._powerFlag = { name, flagged, lang, reason };
-      return { ok: true, file_name: name, flagged, reason, dossier_updated: true };
+    setPowerFlag: async (id, flagged, lang, reason) => {
+      io._powerFlag = { id, flagged, lang, reason };
+      return { ok: true, uuid: id, file_name: 'a.fit', flagged, reason, dossier_updated: true };
     },
-    recalibratePower: async (name, scale, lang) => {
-      if (name !== 'a.fit') throw new Error(`训练库中找不到: ${name}`);
-      io._recalibrated = { name, scale, lang };
-      return { ok: true, file_name: name, scale, changes: { np: { old: 200, new: 210 } } };
+    recalibratePower: async (id, scale, lang) => {
+      if (id !== A) throw new Error(`训练库中找不到: ${id}`);
+      io._recalibrated = { id, scale, lang };
+      return { ok: true, uuid: id, file_name: 'a.fit', scale, changes: { np: { old: 200, new: 210 } } };
     },
-    reanalyzeActivity: async (name, lang) => {
-      if (name !== 'a.fit') throw new Error(`训练库中找不到: ${name}`);
-      io._reanalyze = { name, lang };
+    reanalyzeActivity: async (id, lang) => {
+      if (id !== A) throw new Error(`训练库中找不到: ${id}`);
+      io._reanalyze = { id, lang };
       return {
-        ok: true, file_name: name, date: '2026-03-25', sport: 'cycling',
+        ok: true, uuid: id, file_name: 'a.fit', date: '2026-03-25', sport: 'cycling',
         ftp_used: 224, max_hr_used: 190, weight_used: 65,
         changes: { tss: { old: 120, new: 128 } }, form: { ctl: 55, atl: 48, tsb: 7 },
       };
@@ -118,9 +124,9 @@ test('toolDefs：19 个工具、双语描述、schema 关键字段', () => {
   assert.equal(byName.update_rider_profile.function.parameters.properties.session_max_min.minimum, 0);
   const enByName = Object.fromEntries(en.map((d) => [d.function.name, d]));
   assert.match(enByName.save_memory.function.parameters.properties.scope.description, /two weeks or 5 activities/);
-  assert.deepEqual(byName.reanalyze_activity.function.parameters.required, ['file_name']);
-  assert.deepEqual(byName.set_power_flag.function.parameters.required, ['file_name', 'flagged']);
-  assert.deepEqual(byName.recalibrate_activity_power.function.parameters.required, ['file_name', 'scale_factor']);
+  assert.deepEqual(byName.reanalyze_activity.function.parameters.required, ['activity_id']);
+  assert.deepEqual(byName.set_power_flag.function.parameters.required, ['activity_id', 'flagged']);
+  assert.deepEqual(byName.recalibrate_activity_power.function.parameters.required, ['activity_id', 'scale_factor']);
   assert.deepEqual(byName.update_training_plan.function.parameters.required, ['plan']);
   assert.deepEqual(byName.adjust_plan_sessions.function.parameters.required, ['ops']);
   assert.match(byName.adjust_plan_sessions.function.description, /肯定答复/); // 确认落实协议进工具描述
@@ -133,6 +139,9 @@ test('list_activities：日期范围/运动/分类过滤 + limit 截断 + 非法
   const exec = createExecuteTool(fakeIo(), { lang: 'zh' });
   const all = JSON.parse(await exec('list_activities', {}));
   assert.equal(all.count, 3);
+  // 模型句柄字段名与工具入参一致：activity_id（内部 uuid 不外露）
+  assert.equal(all.activities[0].activity_id, A);
+  assert.equal(all.activities[0].uuid, undefined);
   const ranged = JSON.parse(await exec('list_activities', { start_date: '2026-03-20', end_date: '2026-03-24' }));
   assert.equal(ranged.count, 1);
   assert.equal(ranged.activities[0].file_name, 'b.fit');
@@ -151,7 +160,7 @@ test('list_activities：日期范围/运动/分类过滤 + limit 截断 + 非法
     const d = new Date(Date.parse(utcText));
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
-  const ioTz = fakeIo({ readRecordStart: async (name) => (name === 'a.fit' ? '2026-03-25T20:00:00Z' : null) });
+  const ioTz = fakeIo({ readRecordStart: async (id) => (id === A ? '2026-03-25T20:00:00Z' : null) });
   const localized = JSON.parse(await createExecuteTool(ioTz, { lang: 'zh' })('list_activities', {}));
   assert.equal(localized.activities.find((a) => a.file_name === 'a.fit').date, expectDay('2026-03-25T20:00:00Z'));
   assert.equal(localized.activities.find((a) => a.file_name === 'b.fit').date, '2026-03-20');
@@ -159,12 +168,12 @@ test('list_activities：日期范围/运动/分类过滤 + limit 截断 + 非法
 
 test('get_activity_summary：压缩后返回；不存在与路径穿越报错', async () => {
   const exec = createExecuteTool(fakeIo(), { lang: 'zh' });
-  const ok = JSON.parse(await exec('get_activity_summary', { file_name: 'a.fit' }));
+  const ok = JSON.parse(await exec('get_activity_summary', { activity_id: A }));
   assert.equal(ok.power.np, 200);
-  const missing = JSON.parse(await exec('get_activity_summary', { file_name: 'x.fit' }));
-  assert.match(missing.error, /训练库中找不到: x\.fit/);
-  const evil = JSON.parse(await exec('get_activity_summary', { file_name: '../../etc/passwd' }));
-  assert.ok(evil.error); // safeName basename 校验拒绝
+  const missing = JSON.parse(await exec('get_activity_summary', { activity_id: X }));
+  assert.match(missing.error, new RegExp(`训练库中找不到: ${X}`));
+  const evil = JSON.parse(await exec('get_activity_summary', { activity_id: 'not-a-uuid' }));
+  assert.match(evil.error, /activity_id 非法/);
 
   // 双口径统一：activity.date 按首帧时刻换算为本地日历日（时区无关断言同 list_activities）
   const expectDay = (utcText) => {
@@ -172,18 +181,18 @@ test('get_activity_summary：压缩后返回；不存在与路径穿越报错', 
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
   const ioTz = fakeIo({ readRecordStart: async () => '2026-03-25T20:00:00Z' });
-  const okTz = JSON.parse(await createExecuteTool(ioTz, { lang: 'zh' })('get_activity_summary', { file_name: 'a.fit' }));
+  const okTz = JSON.parse(await createExecuteTool(ioTz, { lang: 'zh' })('get_activity_summary', { activity_id: A }));
   assert.equal(okTz.activity.date, expectDay('2026-03-25T20:00:00Z'));
 });
 
 test('get_activity_records：抽稀 + 时间窗 + 时间戳本地化；不存在报错', async () => {
   const exec = createExecuteTool(fakeIo(), { lang: 'zh' });
-  const ok = JSON.parse(await exec('get_activity_records', { file_name: 'a.fit', start_sec: 2, end_sec: 4 }));
+  const ok = JSON.parse(await exec('get_activity_records', { activity_id: A, start_sec: 2, end_sec: 4 }));
   // 时间戳已改写为本地偏移表示（不再是 Z 结尾），时刻不变
   assert.ok(ok.points.length >= 1);
   assert.doesNotMatch(ok.points[0].t, /Z$/);
-  const missing = JSON.parse(await exec('get_activity_records', { file_name: 'b.fit' }));
-  assert.match(missing.error, /找不到时序数据: b\.fit/);
+  const missing = JSON.parse(await exec('get_activity_records', { activity_id: B }));
+  assert.match(missing.error, new RegExp(`找不到时序数据: ${B}`));
 });
 
 test('get_form_series / get_monthly_summary：days/months 传透', async () => {
@@ -447,28 +456,28 @@ test('本地日口径（双口径统一）：save_memory 返回 date、simulate_
   assert.equal(plain.load_shape.weeks[0].end, anchor);
 });
 
-test('set_power_flag：布尔校验、reason 截断透传；file_name 穿越拒绝', async () => {
+test('set_power_flag：布尔校验、reason 截断透传；activity_id 形状拒绝', async () => {
   const io = fakeIo();
   const exec = createExecuteTool(io, { lang: 'zh' });
-  const ok = JSON.parse(await exec('set_power_flag', { file_name: 'a.fit', flagged: true, reason: 'x'.repeat(500) }));
+  const ok = JSON.parse(await exec('set_power_flag', { activity_id: A, flagged: true, reason: 'x'.repeat(500) }));
   assert.equal(ok.ok, true);
   assert.equal(io._powerFlag.flagged, true);
   assert.equal(io._powerFlag.reason.length, 200); // 截到 200 字
-  const notBool = JSON.parse(await exec('set_power_flag', { file_name: 'a.fit', flagged: 'yes' }));
+  const notBool = JSON.parse(await exec('set_power_flag', { activity_id: A, flagged: 'yes' }));
   assert.match(notBool.error, /flagged 需为布尔值/);
-  const trav = JSON.parse(await exec('set_power_flag', { file_name: '../etc/passwd', flagged: true }));
-  assert.match(trav.error, /file_name 非法/);
+  const trav = JSON.parse(await exec('set_power_flag', { activity_id: 'not-a-uuid', flagged: true }));
+  assert.match(trav.error, /activity_id 非法/);
 });
 
 test('recalibrate_activity_power：数值校验、透传服务层；训练不存在兜 {error}', async () => {
   const io = fakeIo();
   const exec = createExecuteTool(io, { lang: 'zh' });
-  const ok = JSON.parse(await exec('recalibrate_activity_power', { file_name: 'a.fit', scale_factor: 1.05 }));
+  const ok = JSON.parse(await exec('recalibrate_activity_power', { activity_id: A, scale_factor: 1.05 }));
   assert.equal(ok.ok, true);
   assert.equal(io._recalibrated.scale, 1.05);
-  const notNum = JSON.parse(await exec('recalibrate_activity_power', { file_name: 'a.fit', scale_factor: 'abc' }));
+  const notNum = JSON.parse(await exec('recalibrate_activity_power', { activity_id: A, scale_factor: 'abc' }));
   assert.match(notNum.error, /scale_factor 需为数值/);
-  const missing = JSON.parse(await exec('recalibrate_activity_power', { file_name: 'zz.fit', scale_factor: 1.05 }));
+  const missing = JSON.parse(await exec('recalibrate_activity_power', { activity_id: 'e'.repeat(32), scale_factor: 1.05 }));
   assert.match(missing.error, /训练库中找不到/);
 });
 
@@ -487,19 +496,19 @@ test('update_ftp：零参透传编排层结果，lang 随 ctx 注入；en 场景
   assert.equal(ignored.applied, true);
 });
 
-test('reanalyze_activity：file_name 校验/路径穿越拒绝；不存在兜 {error}；成功返回新旧对比', async () => {
+test('reanalyze_activity：activity_id 形状校验；不存在兜 {error}；成功返回新旧对比', async () => {
   const io = fakeIo();
   const exec = createExecuteTool(io, { lang: 'zh' });
-  const ok = JSON.parse(await exec('reanalyze_activity', { file_name: 'a.fit' }));
+  const ok = JSON.parse(await exec('reanalyze_activity', { activity_id: A }));
   assert.equal(ok.ok, true);
   assert.equal(ok.ftp_used, 224);
   assert.equal(ok.changes.tss.old, 120);
   assert.equal(ok.changes.tss.new, 128);
   assert.equal(io._reanalyze.lang, 'zh');
-  const missing = JSON.parse(await exec('reanalyze_activity', { file_name: 'x.fit' }));
-  assert.match(missing.error, /工具执行失败: 训练库中找不到: x\.fit/);
-  const evil = JSON.parse(await exec('reanalyze_activity', { file_name: '../etc/passwd' }));
-  assert.match(evil.error, /file_name 非法/);
+  const missing = JSON.parse(await exec('reanalyze_activity', { activity_id: X }));
+  assert.match(missing.error, new RegExp(`工具执行失败: 训练库中找不到: ${X}`));
+  const evil = JSON.parse(await exec('reanalyze_activity', { activity_id: 'not-a-uuid' }));
+  assert.match(evil.error, /activity_id 非法/);
 });
 
 test('executeTool：未知工具与执行异常均返回 {error}', async () => {
@@ -514,7 +523,7 @@ test('executeTool：未知工具与执行异常均返回 {error}', async () => {
 test('结果超长：结构化降级为合法 JSON（长文本截短 + _truncated 元信息）', async () => {
   const big = 'x'.repeat(AGENTIC.tool_result_max_chars + 100);
   const exec = createExecuteTool(fakeIo({ getActivitySummary: async () => ({ blob: big }) }), { lang: 'zh' });
-  const raw = await exec('get_activity_summary', { file_name: 'a.fit' });
+  const raw = await exec('get_activity_summary', { activity_id: A });
   assert.ok(raw.length <= AGENTIC.tool_result_max_chars, `len=${raw.length}`);
   const parsed = JSON.parse(raw); // 能 parse 即未从中间切坏
   assert.ok(parsed.blob.length < big.length);
@@ -537,7 +546,7 @@ test('get_activity_records：60s 全秒窄窗不截断（逐秒核对暂停时�
   }));
   const io = fakeIo({ loadRecords: async () => ({ points, total_seconds: points.length, stride: 1 }) });
   const exec = createExecuteTool(io, { lang: 'zh' });
-  const raw = await exec('get_activity_records', { file_name: 'a.fit', start_sec: 0, end_sec: 59 });
+  const raw = await exec('get_activity_records', { activity_id: A, start_sec: 0, end_sec: 59 });
   assert.ok(raw.length > 4000, '60s 全秒窗应超旧 4000 上限（证明放宽实际生效）');
   const parsed = JSON.parse(raw); // 截断标记会破坏 JSON——能 parse 即未截断
   assert.equal(parsed.points.length, 60);

@@ -286,11 +286,13 @@ test('双口径统一：withLocalActivityDate(s) 把喂模型的纯日期字段�
   const empty = {};
   assert.equal(withLocalActivityDate(empty, startAt), empty);
 
+  const ua = 'a'.repeat(32);
+  const ub = 'b'.repeat(32);
   const rows = [
-    { file_name: 'a.fit', date: '2026-03-25', tss: 60 },
-    { file_name: 'b.fit', date: '2026-03-25', tss: 0 },
+    { uuid: ua, file_name: 'a.fit', date: '2026-03-25', tss: 60 },
+    { uuid: ub, file_name: 'b.fit', date: '2026-03-25', tss: 0 },
   ];
-  const starts = new Map([['a.fit', startAt], ['b.fit', null]]);
+  const starts = new Map([[ua, startAt], [ub, null]]);
   const outRows = withLocalActivityDates(rows, starts);
   assert.equal(outRows[0].date, expectDay(startAt));
   assert.equal(outRows[1].date, '2026-03-25'); // 缺首帧回退原值

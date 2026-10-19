@@ -34,7 +34,7 @@ export interface AiReviewPanelHandle {
 }
 
 interface Props {
-  fileName: string;
+  activityId: string;
   /** 面板需要露出自身时回调（页面负责滚动） */
   onReveal?: () => void;
   /** 追问输入聚焦信号（页面据此把滚动目标切到追问行） */
@@ -46,7 +46,7 @@ interface Props {
   ref?: React.Ref<AiReviewPanelHandle>;
 }
 
-export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInputRef, onFollowUpLayout, ref }: Props) {
+export function AiReviewPanel({ activityId, onReveal, onFollowUpFocus, followUpInputRef, onFollowUpLayout, ref }: Props) {
   const { t, lang } = useI18n();
   const router = useRouter();
   const [reportId, setReportId] = useState<number | null>(null);
@@ -66,7 +66,7 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
 
   const find = useCallback(async () => {
     try {
-      const [r, cfg] = await Promise.all([getLatestReviewReport(fileName), getAiConfig()]);
+      const [r, cfg] = await Promise.all([getLatestReviewReport(activityId), getAiConfig()]);
       setReportId(r?.id ?? null);
       setConfigured(cfg.configured);
     } catch (e) {
@@ -75,7 +75,7 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
     } finally {
       setLooking(false);
     }
-  }, [fileName]);
+  }, [activityId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -85,9 +85,9 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
 
   /** 新建一份复盘报告并交给 useAiReport 的 pending 恢复路径触发后台生成 */
   const startNew = useCallback(async () => {
-    const id = await createReportDraft('review', { file_name: fileName }, lang);
+    const id = await createReportDraft('review', { activity_uuid: activityId }, lang);
     setReportId(id);
-  }, [fileName, lang]);
+  }, [activityId, lang]);
 
   const analyze = useCallback(() => {
     if (busyRef.current) return; // 连点保护：查找/新建期间不重复发起
@@ -95,7 +95,7 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
     void (async () => {
       try {
         // 以库为准再查一次（防"查找未完成时连点"造出重复报告）
-        const current = await getLatestReviewReport(fileName);
+        const current = await getLatestReviewReport(activityId);
         if (current) {
           setReportId(current.id);
         } else {
@@ -111,7 +111,7 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
       }
       onReveal?.();
     })();
-  }, [fileName, startNew, onReveal]);
+  }, [activityId, startNew, onReveal]);
 
   useImperativeHandle(ref, () => ({ analyze }), [analyze]);
 
@@ -182,14 +182,14 @@ export function AiReviewPanel({ fileName, onReveal, onFollowUpFocus, followUpInp
   /** 复制提示词兜底（未配置密钥时的降级路径，口径同会话中心） */
   const copyPrompt = useCallback(async () => {
     try {
-      await Clipboard.setStringAsync(await buildReportPrompt('review', { file_name: fileName }, lang));
+      await Clipboard.setStringAsync(await buildReportPrompt('review', { activity_uuid: activityId }, lang));
       setCopied(true);
       if (flashTimer.current) clearTimeout(flashTimer.current);
       flashTimer.current = setTimeout(() => setCopied(false), 2000);
     } catch (e) {
       Alert.alert(t('ai.center.copyFailed', { msg: e instanceof Error ? e.message : String(e) }));
     }
-  }, [fileName, lang, t]);
+  }, [activityId, lang, t]);
 
   if (looking) return null;
 

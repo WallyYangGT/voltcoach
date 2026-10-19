@@ -20,9 +20,11 @@ function rowOf(partial: Partial<AiReportRow>): AiReportRow {
   return {
     id: 7,
     mode: 'plan',
-    file_name: null,
+    activity_uuid: null,
     race_date: null,
-    compare_with: null,
+    compare_uuid: null,
+    activity_fingerprint: null,
+    compare_fingerprint: null,
     status: 'completed',
     error: null,
     created_at: '2026-10-14 08:00:00',

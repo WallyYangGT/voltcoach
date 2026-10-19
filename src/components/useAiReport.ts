@@ -170,13 +170,17 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
     if (!report) throw new Error('report not loaded');
     const id = await createReportDraft(
       report.mode,
-      { file_name: report.file_name, race_date: report.race_date, compare_with: report.compare_with },
+      {
+        activity_uuid: report.activity_uuid,
+        race_date: report.race_date,
+        compare_uuid: report.compare_uuid,
+      },
       lang,
     );
     return id;
   }, [report, lang]);
 
-  const reportFileName = report?.file_name ?? null;
+  const reportActivityUuid = report?.activity_uuid ?? null;
 
   /**
    * 重试追问/对话里的一条失败消息（失败气泡上的重试）。
@@ -205,7 +209,7 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
             mode: 'follow_up',
             message: text,
             reportId,
-            fileName: reportFileName,
+            activityUuid: reportActivityUuid,
           },
           lang,
         );
@@ -221,7 +225,7 @@ export function useAiReport(reportId: number | null, lang: Lang): UseAiReportRes
         setSending(false);
       }
     },
-    [reportId, followChatId, reportFileName, lang, load],
+    [reportId, followChatId, reportActivityUuid, lang, load],
   );
 
   const elapsedSec = useMemo(() => elapsedFrom(report?.created_at, now), [report?.created_at, now]);

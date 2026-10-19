@@ -9,7 +9,7 @@
 ```
 manifest.json                       清单（见下节 schema）
 fitness.db                          SQLite 整库（SQLCipher 密文或明文，见 db_key 语义）
-records/<base>.records.csv.gz       逐活动逐秒数据（<base> = 训练文件名去扩展名）
+records/<base>.records.csv.gz       逐活动逐秒数据（v3+ <base> = 活动 uuid；v2 及以前 = 训练文件名去扩展名）
 ```
 
 解包端按**条目白名单**处理：只认上述三类条目，其余静默跳过；records 条目名过 basename 安全校验，防构造包的路径穿越。
@@ -37,8 +37,9 @@ records/<base>.records.csv.gz       逐活动逐秒数据（<base> = 训练文�
 ## schema 版本闸门
 
 - 包内 `schema_version` **高于**本机 App → 拒绝导入（错误码 `unsupported_version`，提示升级 App）。
-- 低于或等于 → 允许，导入后由开库流程跑迁移链补齐。
-- **迁移链**（实现 `src/db/migrations.ts` 的 `migrationsFor`，按 `PRAGMA user_version` 步进）：v1→2 加 `ai_memories.scope`（记忆分层）与 `activities.power_flagged`（功率可信度标记）；新库（user_version 0）直接按最新 schema 整体创建。**第三方只读消费无需关心迁移**——只在高版本拒绝边界上需要 schema_version 判断。
+- 低于或等于 → 允许；v3 起在 **staged 库上先跑迁移链**（v1→2 加记忆分层/功率标记，v2→3 表重建：活动 uuid 身份、file_name 去唯一、AI 报告/对话外键与指纹），迁移失败以 `migration_failed` 中止，当前库与 records 完全未动。迁移成功后才替换本机库并按 `file_name → uuid` 映射恢复 records。
+- **v3 包不能由 v2 App 导入**（manifest 闸门拒绝）；v3 App 可导入 v1/v2 包（staged 预迁移）。新库（user_version 0）直接按最新 schema 整体创建。
+- **第三方只读消费无需关心迁移**——只在高版本拒绝边界上需要 schema_version 判断；v3 起活动身份是 32 位 hex uuid，`file_name` 只是来源元数据。
 
 ## 导入错误码
 
@@ -54,11 +55,12 @@ records/<base>.records.csv.gz       逐活动逐秒数据（<base> = 训练文�
 | `wrong_key` | db_key 开库失败 |
 | `passphrase_required` | 需要用户输入口令（db_key=null 且非明文） |
 | `safety_backup_failed` | 导入前的本机安全快照失败（中止导入，不动现有数据） |
+| `migration_failed` | 包内数据库升级到当前 schema 失败（中止导入，不动现有数据） |
 | `no_sqlcipher` | 本机构建无 SQLCipher，无法导入密文库 |
 
 ## 互操作注意
 
 - 导入流程是「先安全快照本机现有库 → 再解包落库」，任何一步失败都不破坏现有数据。
-- `counts` 字段在导入确认弹窗中展示，供用户人工对照包内容，导入流程**不做自动对账**。
+- `counts` 字段在导入确认弹窗中展示，供用户人工对照包内容，导入流程**不做自动对账**。v3 起导出只收录属于库内活动的 records 文件（无主孤儿文件跳过并告警），`counts.records` 即有效载荷数。
 - records 条目是 gzip 压缩的逐秒 CSV，列序固定：`timestamp,power,heart_rate,cadence,altitude,speed,distance_m,temperature`（缺数据留空；序列化实现在 `src/core/analyze.ts` 的 `recordsToCsv`，解析读取在 `src/core/records.ts`）。fitness.db 的表结构由 App 建库代码定义（`src/db/index.ts`，`PRAGMA user_version` 即 `schema_version`）——**载荷 schema 演进不承诺向后兼容本规范**，第三方工具应以只读消费为目标。
 - 删除类操作不产生快照回滚（快照只保证「导入成功」与「误删可恢复」两个场景），第三方工具同步该语义时注意：**导入成功后滚动快照，删除后不滚**。

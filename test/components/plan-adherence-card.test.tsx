@@ -43,6 +43,8 @@ const plan: TrainingPlan = {
 };
 
 const act_ = (file_name: string, date: string, tss: number, duration_sec = 3600): ActivityListItem => ({
+  // 本测试只关心本地日归并：uuid 直接用文件名占位，标签 Map 的键同源
+  uuid: file_name,
   file_name,
   date,
   sport: 'cycling',

@@ -32,8 +32,8 @@ async function withStarts(
   const starts = new Map<string, string | null>();
   // 串行读取：每条候选都要整包解压 records gzip，同一日期候选多时并发会同时压多份
   // 文件进内存；个人训练量级（同日期无距离候选通常 2–5 条）串行成本可忽略
-  for (const r of candidates) starts.set(r.file_name, await getRideStartAt(r.file_name));
-  return rows.map((r) => ({ ...r, start_at: starts.get(r.file_name) ?? null }));
+  for (const r of candidates) starts.set(r.uuid, await getRideStartAt(r.uuid));
+  return rows.map((r) => ({ ...r, start_at: starts.get(r.uuid) ?? null }));
 }
 
 /**

@@ -204,14 +204,15 @@ async function pullActivities(provider: SyncProvider, prev: ProviderSyncState): 
         // 文件名预检命中即跳过（省下载）：绝大多数情况下就是本活动的历史副本。
         // 已知边界：若「本地同名的其实是另一趟骑行」（云端文件名与手动命名的碰撞，
         // 真实云端文件名自带日期时间戳故概率极低），该云活动会被静默跳过——打日志
-        // 留痕，不做自动改名的导入（同名入库会 upsert 覆盖掉本地那条，宁可漏也不毁数据）。
+        // 留痕。v3 起同名入库不再覆盖（会插新行），漏判只影响省下载的优化，不再有
+        // 数据风险。
         console.warn(`${provider.id} 活动 ${act.id}：文件名 ${ref.fileName} 本地已存在，按重复跳过（未校验内容）`);
         outcome.skipped += 1;
         continue;
       }
       const bytes = await runner.download(ref);
-      const { duplicateOf } = await importFitBytes(bytes, ref.fileName);
-      if (duplicateOf) {
+      const { duplicateOfUuid } = await importFitBytes(bytes, ref.fileName, { source: provider.id });
+      if (duplicateOfUuid) {
         // 内容指纹命中（多为先前手动导入过同一趟骑行）：计重复。注意 existing 是每轮从库里
         // 重建的，这里不能 add——那个名字并没有入库，add 到本轮集合只会让**同一轮里**
         // 后续算出同名文件的另一个活动被上面那条预检静默跳过（跨轮去重只能靠内容指纹，

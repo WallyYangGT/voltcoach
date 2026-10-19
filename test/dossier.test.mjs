@@ -21,6 +21,7 @@ import { isShortMemoryExpired } from '../src/core/memory.ts';
 /** 一次完整骑行的输入（按需覆盖字段） */
 function ride(over = {}) {
   return {
+    uuid: 'a'.repeat(32),
     file_name: 'a.fit',
     date: '2026-10-01',
     sport: 'cycling',
