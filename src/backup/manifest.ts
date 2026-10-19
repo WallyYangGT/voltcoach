@@ -44,6 +44,7 @@ export type BackupErrorCode =
   | 'wrong_key'
   | 'passphrase_required'
   | 'safety_backup_failed'
+  | 'migration_failed'
   | 'no_sqlcipher';
 
 /** 带 code 的备份错误：import/export 层抛出，UI 按 code 出双语提示 */
@@ -108,13 +109,40 @@ export function validateBackupManifest(value: unknown): BackupManifest {
 
 /**
  * schema 版本闸门（版本高于本机则提示升级 App）。包比本机新 → 拒绝导入；
- * 包比本机旧 → 允许，导入后由开库流程跑迁移链补齐（当前 SCHEMA_VERSION=1，链为空）。
+ * 包比本机旧 → 允许，导入前在 staged 库上跑迁移链（v1/v2 → v3），失败按
+ * migration_failed 中止且原库未动。
  */
 export function checkSchemaVersion(manifest: BackupManifest, currentSchemaVersion: number): void {
   if (manifest.schema_version > currentSchemaVersion) {
     throw new BackupError(
       'unsupported_version',
       `备份 schema v${manifest.schema_version} 高于本机 v${currentSchemaVersion}`,
+    );
+  }
+}
+
+/**
+ * staged 库的版本一致性（manifest 只是声明，真正的结构以库内 user_version 为准）：
+ *  - 库版本高于本机 → unsupported_version（否则随后 migrationsFor 方向校验会炸，
+ *    且库已被替换——v3 起这条必须在替换前拦住）；
+ *  - 库版本高于 manifest 声明 → bad_manifest（清单与载荷不一致，拒绝不可信包）。
+ * 库低于 manifest 允许（按库内版本走迁移链）。
+ */
+export function checkStagedDbVersion(
+  manifestSchemaVersion: number,
+  dbUserVersion: number,
+  currentSchemaVersion: number,
+): void {
+  if (dbUserVersion > currentSchemaVersion) {
+    throw new BackupError(
+      'unsupported_version',
+      `备份库 user_version v${dbUserVersion} 高于本机 v${currentSchemaVersion}`,
+    );
+  }
+  if (dbUserVersion > manifestSchemaVersion) {
+    throw new BackupError(
+      'bad_manifest',
+      `备份库 user_version v${dbUserVersion} 高于 manifest 声明的 v${manifestSchemaVersion}`,
     );
   }
 }

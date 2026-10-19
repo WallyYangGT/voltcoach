@@ -29,9 +29,7 @@ import { invalidateReportTitles, useRideDateLabels } from '@/services/aiTitle';
 import { listRideKeysForDedupe } from '@/services/dedupe';
 import {
   SCHEMA_VERSION,
-  deleteActivity,
-  mergeActivityExtras,
-  retargetActivityRefs,
+  mergeActivityRows,
   type ActivityRideKey,
   rebuildDossierQuietly,
 } from '@/db';
@@ -60,7 +58,7 @@ export default function DataScreen() {
   // —— 重复记录检查（M5） ——
   const [dupGroups, setDupGroups] = useState<ActivityRideKey[][] | null>(null);
   // 重复组头日期按本地日历日展示（双口径统一，与训练列表同源同口径）
-  const dateLabels = useRideDateLabels((dupGroups ?? []).map((g) => g[0]?.file_name));
+  const dateLabels = useRideDateLabels((dupGroups ?? []).map((g) => g[0]?.uuid));
   const [scanning, setScanning] = useState(false);
   const [merging, setMerging] = useState(false);
 
@@ -270,11 +268,11 @@ export default function DataScreen() {
       for (const g of dupGroups ?? []) {
         const keep = g[0];
         for (const drop of g.slice(1)) {
-          await mergeActivityExtras(keep.file_name, drop.file_name);
-          await retargetActivityRefs(drop.file_name, keep.file_name);
-          await copyStoredRecord(drop.file_name, keep.file_name); // 保留项缺逐秒数据时接管
-          await deleteActivity(drop.file_name);
-          deleteStoredRecord(drop.file_name);
+          // records 先接管（保留项缺数据时），DB 侧 extras + 引用重挂 + 删副本在一个
+          // 事务里（mergeActivityRows），最后清副本的逐秒文件
+          await copyStoredRecord(drop.uuid, keep.uuid);
+          await mergeActivityRows(keep.uuid, drop.uuid);
+          deleteStoredRecord(drop.uuid);
         }
         groups += 1;
       }
@@ -391,14 +389,14 @@ export default function DataScreen() {
           )}
           {/* 逐组列出重复项：让用户在合并前看清保留谁、删谁 */}
           {dupGroups?.map((g) => (
-            <View key={g[0].file_name} style={styles.dupGroup}>
+            <View key={g[0].uuid} style={styles.dupGroup}>
               <Text style={styles.dupGroupHead}>
-                {dateLabels.get(g[0].file_name) ?? g[0].date} · {formatDuration(g[0].duration_sec)} ·{' '}
+                {dateLabels.get(g[0].uuid) ?? g[0].date} · {formatDuration(g[0].duration_sec)} ·{' '}
                 {/* 距离口径与训练列表一致（先按 0.1km 取整再显示，避免列表 18.00 / 此处 17.99 打架） */}
                 {g[0].distance_km != null ? `${(Math.round(g[0].distance_km * 10) / 10).toFixed(2)} km` : '—'}
               </Text>
               {g.map((r, i) => (
-                <Text key={r.file_name} style={i === 0 ? styles.dupKeep : styles.dupDrop} numberOfLines={1}>
+                <Text key={r.uuid} style={i === 0 ? styles.dupKeep : styles.dupDrop} numberOfLines={1}>
                   {i === 0 ? `✓ ${t('data.dupe.keep')}` : `✗ ${t('common.delete')}`} · {r.file_name}
                 </Text>
               ))}

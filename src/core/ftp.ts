@@ -23,6 +23,8 @@ export type FtpEstimationConfig = typeof FTP_ESTIMATION;
 
 /** 窗口内单次骑行（db 层 cyclingSummariesSince 的元素形状） */
 export interface CyclingRideInput {
+  /** 活动稳定身份（v3；锚点匹配用） */
+  uuid: string;
   file_name: string;
   date: string;
   duration_sec: number | null;
@@ -44,6 +46,7 @@ export interface FtpCpModel {
 export interface PeakAnchor {
   watts: number;
   date: string;
+  uuid: string;
   file_name: string;
 }
 
@@ -52,6 +55,7 @@ export interface FtpCoggan {
   ftp_w: number;
   peak_20min_w: number;
   date: string;
+  uuid: string;
   file_name: string;
 }
 
@@ -172,7 +176,7 @@ export function estimateFtpFromHistory(
       const w = a.summary.power?.peak_curve?.[key];
       if (w == null) continue;
       if (!best || w > best.watts)
-        best = { watts: w, date: a.date, file_name: a.file_name };
+        best = { watts: w, date: a.date, uuid: a.uuid, file_name: a.file_name };
     }
     return best;
   };
@@ -220,6 +224,7 @@ export function estimateFtpFromHistory(
     ftp_w: Math.round(p20.watts * cfg.coggan_factor),
     peak_20min_w: p20.watts,
     date: p20.date,
+    uuid: p20.uuid,
     file_name: p20.file_name,
   };
 
@@ -233,7 +238,7 @@ export function estimateFtpFromHistory(
   };
 
   // 5a. 全力判定：20min 峰功率所在骑行的心率峰值是否达到全力阈值
-  const anchor = usable.find((a) => a.file_name === p20.file_name);
+  const anchor = usable.find((a) => a.uuid === p20.uuid);
   const thresholdHr = Math.round(athlete.max_hr * cfg.max_effort_hr_pct);
   hrCheck.threshold_hr = thresholdHr;
   const anchorHr = anchor?.summary.heart_rate;

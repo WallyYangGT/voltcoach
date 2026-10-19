@@ -40,11 +40,11 @@ export default function ImportScreen() {
       setProgress(i / sources.length);
       const { uri, fileName } = sources[i];
       try {
-        const { summary, duplicateOf } = await importFitSource(uri, fileName);
+        const { summary, uuid, duplicateOfUuid, duplicateOfFileName } = await importFitSource(uri, fileName);
         results.push(
-          duplicateOf
-            ? { fileName, ok: true, summary, duplicateOf }
-            : { fileName, ok: true, summary },
+          duplicateOfUuid
+            ? { fileName, ok: true, uuid, summary, duplicateOfUuid, duplicateOfFileName: duplicateOfFileName ?? undefined }
+            : { fileName, ok: true, uuid, summary },
         );
       } catch (e) {
         results.push({
@@ -86,8 +86,8 @@ export default function ImportScreen() {
     if (shared) queueMicrotask(() => runImport([shared]));
   }, []);
 
-  const okCount = outcomes.filter((o) => o.ok && !o.duplicateOf).length;
-  const dupCount = outcomes.filter((o) => o.duplicateOf).length;
+  const okCount = outcomes.filter((o) => o.ok && !o.duplicateOfUuid).length;
+  const dupCount = outcomes.filter((o) => o.duplicateOfUuid).length;
 
   return (
     <View style={styles.page}>
@@ -138,21 +138,21 @@ export default function ImportScreen() {
                 router.replace({
                   pathname: '/activity/[id]',
                   // 重复项跳的是库里已有的那条（本次文件没入库）
-                  params: { id: encodeURIComponent(o.duplicateOf ?? o.fileName) },
+                  params: { id: encodeURIComponent(o.duplicateOfUuid ?? o.uuid ?? '') },
                 })
               }
               style={({ pressed }) => [
                 styles.item,
-                o.duplicateOf ? styles.itemDup : o.ok ? styles.itemOk : styles.itemFail,
+                o.duplicateOfUuid ? styles.itemDup : o.ok ? styles.itemOk : styles.itemFail,
                 pressed && { opacity: 0.7 },
               ]}>
               <Text style={styles.itemName} numberOfLines={1}>
                 {o.fileName || '—'}
               </Text>
-              {o.duplicateOf ? (
+              {o.duplicateOfUuid ? (
                 // 内容指纹命中：同一趟骑行已在库里（文件名不同），未重复入库；点击看已有那条
                 <Text style={styles.itemDupText} numberOfLines={2}>
-                  {t('import.item_dup', { name: o.duplicateOf })} ›
+                  {t('import.item_dup', { name: o.duplicateOfFileName ?? '—' })} ›
                 </Text>
               ) : o.ok ? (
                 <Text style={styles.itemMeta}>

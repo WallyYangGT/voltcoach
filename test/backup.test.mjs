@@ -12,6 +12,7 @@ import { zipSync, strToU8 } from 'fflate';
 import {
   BackupError,
   checkSchemaVersion,
+  checkStagedDbVersion,
   validateBackupManifest,
 } from '../src/backup/manifest.ts';
 import {
@@ -82,6 +83,33 @@ test('checkSchemaVersion: 包版本高于本机 → unsupported_version（提示
 test('checkSchemaVersion: 包版本等于/低于本机放行（旧包由迁移链补齐）', () => {
   checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 2 })), 2);
   checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 1 })), 2);
+});
+
+test('checkSchemaVersion: v3 破坏性边界——v3 包被 v2 App 拒绝，v2 包被 v3 App 接受', () => {
+  assert.throws(
+    () => checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 3 })), 2),
+    (e) => e instanceof BackupError && e.code === 'unsupported_version',
+  );
+  checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 3 })), 3);
+  checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 2 })), 3);
+  checkSchemaVersion(validateBackupManifest(manifest({ schema_version: 1 })), 3);
+});
+
+test('checkStagedDbVersion: 库内版本高于本机 / 高于 manifest 声明均拒绝', () => {
+  // 库版本高于本机：必须在替换前拦住（否则 migrationsFor 方向校验会炸在已替换的库上）
+  assert.throws(
+    () => checkStagedDbVersion(4, 5, 4),
+    (e) => e instanceof BackupError && e.code === 'unsupported_version',
+  );
+  // 库版本高于 manifest 声明：清单与载荷不一致
+  assert.throws(
+    () => checkStagedDbVersion(2, 3, 3),
+    (e) => e instanceof BackupError && e.code === 'bad_manifest',
+  );
+  // 库版本低于 manifest（清单虚高）允许，按库内版本走迁移链
+  checkStagedDbVersion(3, 2, 3);
+  checkStagedDbVersion(3, 0, 3);
+  checkStagedDbVersion(3, 3, 3);
 });
 
 test('utf8ToBytes/bytesToUtf8: ASCII roundtrip', () => {

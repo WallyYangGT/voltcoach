@@ -43,6 +43,13 @@ async function drainUntil(get: () => Map<string, string>, key: string): Promise<
   });
 }
 
+/** act 窗口内轮询到指定键的值命中（用于失效后重新解析的断言） */
+async function drainUntilValue(get: () => Map<string, string>, key: string, value: string): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 50 && get().get(key) !== value; i++) await Promise.resolve();
+  });
+}
+
 describe('useRideDateLabels', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -75,5 +82,22 @@ describe('useRideDateLabels', () => {
     await drainUntil(() => result.current, 'c.fit');
     expect(result.current.get('a.fit')).toBe(tzDay('2026-03-01T05:00:00Z'));
     expect(mockedRead.mock.calls.filter((c) => c[0] === 'a.fit')).toHaveLength(1);
+  });
+
+  it('invalidateReportTitles 后同一 id 集合重新解析（缓存代际订阅，不展示陈旧标签）', async () => {
+    let utc = '2026-03-01T05:00:00Z';
+    mockedRead.mockImplementation(async () => utc);
+    const { result } = await renderHook(() => useRideDateLabels(['a.fit']));
+    await drainUntil(() => result.current, 'a.fit');
+    const first = tzDay(utc);
+    expect(result.current.get('a.fit')).toBe(first);
+
+    utc = '2026-03-02T05:00:00Z';
+    await act(async () => {
+      invalidateReportTitles();
+    });
+    await drainUntilValue(() => result.current, 'a.fit', tzDay(utc));
+    expect(result.current.get('a.fit')).toBe(tzDay(utc));
+    expect(mockedRead.mock.calls.filter((c) => c[0] === 'a.fit').length).toBeGreaterThan(1);
   });
 });

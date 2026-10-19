@@ -1,11 +1,12 @@
 /**
  * dedupe.ts — 同趟骑行的内容指纹判定（纯函数层，M5）
  *
- * 背景：activities 的唯一去重键是 file_name，而两条入库路径给同一个文件取的名字
- * 几乎不可能逐字相同——手动导入存本地文件原名（safeName 只取 basename），顽鹿云
+ * 背景：v2 及以前 activities 的唯一键是 file_name，而两条入库路径给同一个文件取的
+ * 名字几乎不可能逐字相同——手动导入存本地文件原名（safeName 只取 basename），顽鹿云
  * 同步存云端 fileKey 的 basename 且强制小写 .fit（sync/onelap.extractFitFileName）。
  * 于是「先前手动导入过、后来又被云同步拉到」的同一趟骑行会二次入库（2026-09-23
  * 真机复现）。这里按**解析结果的内容特征**判重，与文件名无关。
+ * v3 起 file_name 不再是身份（可同名并存），本层还产出稳定内容指纹供报告重挂。
  *
  * 口径（2026-09-23 定，2026-10-17 扩展室内骑行）：
  *  - **有距离**（两侧均 >0）：同一 UTC 日期 + 时长 ±2s + 距离 ±0.05km；
@@ -127,20 +128,65 @@ export function findDuplicateGroups<T extends RideKey>(rows: T[]): T[][] {
 }
 
 /**
- * 入库前的查重决策：候选（即将入库的文件名 + 骑行键）vs 库内全量行，
- * 命中同一趟骑行时返回**应让路的已有文件名**，否则 null（照常入库/更新）。
+ * 内容指纹（v3，2026-10-19）：活动的稳定骑行身份串，用于「同名重导入更新」与
+ * 「孤儿报告自动重挂」。口径与迁移回填一致（v2 库没有起骑时刻，只能回填前三段）：
  *
- * 同名优先：库内已有同名行时直接返回 null —— 这是「重新导入同一文件」的更新路径，
- * 必须走 upsert 覆盖（口径与旧版一致）。否则「同名行 + 另一份云同步副本并存」时，
- * 再次导入该文件会被副本顶掉、同名行永远更新不到（2026-09-23 code-review 发现）。
+ *   date | duration_sec | round(distance_km * 1000)
  *
- * 已知边界（口径固有代价）：**同名但其实是两趟不同骑行时会被 upsert 覆盖**（本地那条
- * 的逐秒数据随之更新）。要区分只能给本地行存内容指纹或外部 id，本轮明确不做。
+ * 无有效距离（室内）时追加 `|start_at`——起骑时刻是室内骑行的唯一强身份信号；
+ * 跨源转码后起点可能按分钟舍入，重挂因此是**精确匹配**（不吸收容差），
+ * 超出容差时宁可漏挂（见 decisions §34 已知边界）。
  */
-export function findDuplicateOf(
-  candidate: RideKey & { file_name: string },
-  rows: (RideKey & { file_name: string })[],
-): string | null {
-  if (rows.some((r) => r.file_name === candidate.file_name)) return null;
-  return rows.find((r) => isSameRide(r, candidate))?.file_name ?? null;
+export function rideFingerprint(ride: RideKey): string {
+  const distanceM = hasPositiveDistance(ride.distance_km)
+    ? String(Math.round(ride.distance_km! * 1000))
+    : '';
+  const base = `${ride.date}|${ride.duration_sec ?? ''}|${distanceM}`;
+  return !hasPositiveDistance(ride.distance_km) && ride.start_at ? `${base}|${ride.start_at}` : base;
+}
+
+/** 导入决策候选（解析结果 + 来源文件名 + 指纹） */
+export interface ImportCandidate extends RideKey {
+  file_name: string;
+  fingerprint: string;
+}
+
+/** 库内已有行（导入决策输入） */
+export interface ImportRow extends RideKey {
+  uuid: string;
+  file_name: string;
+  fingerprint: string;
+}
+
+/** 导入决策：更新已有行 / 跳过重复 / 插入新行 */
+export type ImportDecision =
+  | { action: 'update'; uuid: string; file_name: string }
+  | { action: 'skip'; uuid: string; file_name: string }
+  | { action: 'insert' };
+
+/**
+ * 入库前决策（v3 起取代 findDuplicateOf 的同名旁路）：
+ *
+ * 1. 指纹精确一致 → update（同一趟骑行的重新导入/重新解析，保留 uuid 与用户数据）；
+ * 2. 同名行中存在 isSameRide → update（同一文件重新导入；文件名仍是稳定的来源句柄）；
+ * 3. 异名且 isSameRide → skip（同趟骑行跨源副本，不重复入库）；
+ * 4. 同名但不同骑行 → insert（v3 允许同名并存，不再静默覆盖）；
+ * 5. 其余 → insert。
+ *
+ * 指纹优先于同名：同名行可能有多条（v3 后），精确指纹能选中真正的那一趟。
+ */
+export function decideImport(candidate: ImportCandidate, rows: ImportRow[]): ImportDecision {
+  const exact = rows.find((r) => r.fingerprint === candidate.fingerprint);
+  if (exact) return { action: 'update', uuid: exact.uuid, file_name: exact.file_name };
+
+  const sameName = rows.filter((r) => r.file_name === candidate.file_name);
+  if (sameName.length) {
+    const sameRide = sameName.find((r) => isSameRide(r, candidate));
+    if (sameRide) return { action: 'update', uuid: sameRide.uuid, file_name: sameRide.file_name };
+    return { action: 'insert' };
+  }
+
+  const duplicate = rows.find((r) => isSameRide(r, candidate));
+  if (duplicate) return { action: 'skip', uuid: duplicate.uuid, file_name: duplicate.file_name };
+  return { action: 'insert' };
 }

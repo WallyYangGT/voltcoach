@@ -44,7 +44,7 @@ export interface RemoteActivity {
 
 /**
  * 云端文件引用：key 供下载用（各平台语义不同：顽鹿是 fileKey、迹驰是 OSS 直链、
- * Wahoo 是 pre-signed URL），fileName 是**入库幂等去重键**（本地已有同名即跳过下载）。
+ * Wahoo 是 pre-signed URL），fileName 是来源文件名（同步预检用；v3 起不再是唯一身份）。
  */
 export interface FileRef {
   key: string;

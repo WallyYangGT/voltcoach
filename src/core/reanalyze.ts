@@ -8,7 +8,7 @@
  * 才有的信息（lap 段、swim、开发者字段、设备爬升、暂停事件判据）与参数无关字段
  * 从旧 summary 继承。
  *
- * 入库（upsertActivity）与当日 CTL/ATL/TSB 两段式注入由服务层负责（口径同
+ * 写回（updateActivitySummary）与当日 CTL/ATL/TSB 两段式注入由服务层负责（口径同
  * importFit），本模块只做纯计算。
  */
 

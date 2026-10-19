@@ -14,9 +14,12 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
 import { closeDb, countActivities, getDbKey, SCHEMA_VERSION } from '@/db';
+import { runMigrations } from '@/db/migrations';
+import { CREATE_V2_COMPAT_SQL } from '@/db/schema';
+import { recordBaseFromFileName } from '@/core/records';
 import { clearStoredRecords, writeStoredRecordGz } from '@/records-store';
 import { unpackBackup } from './archive';
-import { BackupError, checkSchemaVersion, type BackupManifest } from './manifest';
+import { BackupError, checkSchemaVersion, checkStagedDbVersion, type BackupManifest } from './manifest';
 import { buildBackup } from './export';
 import { appDbFile, fileUriToPath, hasSqlCipher, sqliteDir, sqlStr } from './sqlite.ts';
 
@@ -77,6 +80,20 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
   // 的实例做清理——那是把刚换上的新库当临时文件删掉（数据销毁且当次会话不可见）。
   const importedTmpName = `voltcoach-import-new-${Date.now()}.db`;
   const importedTmp = new File(dir, importedTmpName);
+  // staged 库已完成迁移：读活动身份映射，records 恢复时把 v2 的旧基名折算成 uuid
+  // （旧基名可能被多条活动共享，逐条写入；未知基名原样保留，导出时会按 uuid 过滤）
+  const stagedActivities = await conn.getAllAsync<{ uuid: string; file_name: string }>(
+    'SELECT uuid, file_name FROM activities;',
+  );
+  const activityUuids = new Set(stagedActivities.map((a) => a.uuid));
+  const uuidByOldBase = new Map<string, string[]>();
+  for (const a of stagedActivities) {
+    const oldBase = recordBaseFromFileName(a.file_name);
+    if (!oldBase) continue;
+    const bucket = uuidByOldBase.get(oldBase);
+    if (bucket) bucket.push(a.uuid);
+    else uuidByOldBase.set(oldBase, [a.uuid]);
+  }
   try {
     if (await hasSqlCipher(conn)) {
       const localKey = await getDbKey();
@@ -91,8 +108,17 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
         await conn.execAsync('DETACH DATABASE import_new;');
       }
     } else {
-      // 无 SQLCipher 构建（iOS）：staged 已验证为明文库，直接作为替换产物
-      importedTmp.write(dbBytes);
+      // 无 SQLCipher 构建（iOS）：必须用**已迁移**的 staged 文件做替换产物。
+      // 包内原始 dbBytes 是迁移前旧库；直接写回会让下一次开库再生成一批新 uuid，
+      // 与上面按 staged 映射恢复的 records 全部错位（code-review P1-2）。
+      // 显式关闭（失败即中止）：close 负责 checkpoint WAL，悄悄失败会复制到旧数据。
+      try {
+        await conn.closeAsync();
+      } catch (e) {
+        throw new BackupError('migration_failed', `staged 库关闭失败: ${String(e)}`);
+      }
+      conn = null;
+      importedTmp.write(await staged.bytes());
     }
     await closeQuietly(conn);
     conn = null;
@@ -105,12 +131,21 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
 
     clearStoredRecords();
     let restored = 0;
+    const written = new Set<string>();
     for (const rec of records) {
-      try {
-        await writeStoredRecordGz(rec.base, rec.gz);
-        restored += 1;
-      } catch (e) {
-        console.warn(`records 恢复失败（详情页图表将无数据）: ${rec.base}:`, e);
+      // v3 包直接是 uuid 基名；v2 包是 file_name 去扩展名 → 折算到 uuid（可多条）
+      const targets = activityUuids.has(rec.base)
+        ? [rec.base]
+        : (uuidByOldBase.get(rec.base) ?? [rec.base]);
+      for (const base of targets) {
+        if (written.has(base)) continue;
+        try {
+          await writeStoredRecordGz(base, rec.gz);
+          written.add(base);
+          restored += 1;
+        } catch (e) {
+          console.warn(`records 恢复失败（详情页图表将无数据）: ${base}:`, e);
+        }
       }
     }
     return { activities: await countActivities(), records: restored };
@@ -122,9 +157,13 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
 }
 
 /**
- * 按包密钥策略打开 staged 库并试读验证。SQLCipher 构建下开加密库必须先 PRAGMA key；
- * 明文库不能带 key（会被当错误密钥）。验证读 sqlite_master + activities 表在位——
- * 结构不符说明不是本应用的备份，按 bad_manifest 拒绝。
+ * 按包密钥策略打开 staged 库、试读验证，并在**替换本机库之前**完成 schema 迁移。
+ * SQLCipher 构建下开加密库必须先 PRAGMA key；明文库不能带 key（会被当错误密钥）。
+ * 验证读 sqlite_master + activities 表在位——结构不符说明不是本应用的备份。
+ *
+ * v3 起迁移前移（2026-10-19）：v1/v2 包在 staged 库上跑完迁移链，失败按
+ * migration_failed 中止，原库与 records 完全未动；成功后再替换，避免“替换后
+ * 迁移失败”把用户库置于不可用状态。
  */
 async function openStagedVerified(
   staged: File,
@@ -143,6 +182,30 @@ async function openStagedVerified(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activities';",
     );
     if (!table) throw new BackupError('bad_manifest', '库内无 activities 表，不像本应用的备份');
+
+    // schema 迁移在 staged 库上先行（替换前失败 = 原库无损）
+    const uv = await conn.getFirstAsync<{ user_version: number }>('PRAGMA user_version;');
+    const dbVersion = uv?.user_version ?? 0;
+    // manifest 只是声明：库内版本更高（篡改/损包）必须在替换前拒绝
+    checkStagedDbVersion(manifest.schema_version, dbVersion, SCHEMA_VERSION);
+    let from = dbVersion;
+    if (from < SCHEMA_VERSION) {
+      if (from === 0) {
+        // v1/v3 建库中途崩溃的残留：uuid 列已在说明结构是 v3，让开库流程盖戳即可
+        const cols = await conn.getAllAsync<{ name: string }>('PRAGMA table_info(activities);');
+        from = cols.some((c) => c.name === 'uuid') ? SCHEMA_VERSION : 1;
+      }
+      if (from < SCHEMA_VERSION) {
+        try {
+          // v1 包可能缺 ai_memories/ai_reports 等表（旧导出中途残留）：按 v2 形状
+          // 补建缺失空表（IF NOT EXISTS），与开库迁移的自愈口径一致
+          await conn.execAsync(CREATE_V2_COMPAT_SQL);
+          await runMigrations(conn, from, SCHEMA_VERSION);
+        } catch (e) {
+          throw new BackupError('migration_failed', String(e));
+        }
+      }
+    }
     return conn;
   } catch (e) {
     if (e instanceof BackupError) {

@@ -2,19 +2,17 @@
  * aiTitle.ts — AI 报告标题装配 + 骑行首帧时刻/本地日缓存（App 层）。
  *
  * core/reportTitle 只做日期格式化与分支选择，骑行信息（运动类型、起骑时刻）要在
- * 这里从训练库取：活动行来自 listActivityRideKeys（一次全表查询，按 file_name 建索引），
- * 起骑时刻来自该活动的 records 首帧（readStoredRecordStart，读 gzip 后只扫头部）。
+ * 这里从训练库取：活动行来自 listActivityRideKeys（一次全表查询，按 activity uuid
+ * 建索引），起骑时刻来自该活动的 records 首帧（readStoredRecordStart，读 gzip 后只扫头部）。
+ *
+ * v3（2026-10-19，decisions §34）：所有缓存键从 file_name 换成 activity uuid——
+ * file_name 可同名并存，不能再当唯一键。
  *
  * 两级进程内缓存（训练库是唯一数据源，改动点全部由本模块的失效函数收口）：
- *  - startCache：file_name → 首帧 ISO（null 也缓存，避免反复读不存在的文件）；
+ *  - startCache：uuid → 首帧 ISO（null 也缓存，避免反复读不存在的文件）；
  *  - titleCache：标题键（lang + 报告标识字段）→ 标题文本，让「报告详情页 1.5s 轮询
  *    刷新」这类同内容重算只花一次 Map 查找，不再重查库/读盘。
- * 导入、删除、合并重复都会改数据，各自调用 invalidateReportTitles() 清缓存。
- *
- * 2026-10 双口径统一：startCache 对外开放（getRideStartAt）——首帧时刻是行级
- * 本地日历日的唯一精确瞬间源（summary 里没有 start_time），AI 数据面整形
- * （withLocalActivityDate(s)）与 UI 展示面（useRideDateLabels）共用同一缓存与
- * 同一换算源，与报告标题天然同口径。
+ * 导入、删除、合并重复、孤儿重挂都会改数据，各自调用 invalidateReportTitles()。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -29,80 +27,110 @@ import { readStoredRecordStart } from '@/records-store';
 export interface ReportTitleSource {
   id: number;
   mode: 'review' | 'plan' | 'taper' | 'compare';
-  file_name: string | null;
+  activity_uuid: string | null;
   race_date: string | null;
-  compare_with: string | null;
+  compare_uuid: string | null;
   created_at: string;
 }
 
-/** 起骑时刻缓存（file_name → ISO/null） */
+/** 起骑时刻缓存（activity uuid → ISO/null） */
 let startCache = new Map<string, string | null>();
 /** 标题缓存（标题键 → 文本） */
 let titleCache = new Map<string, string>();
+/** 缓存代际：失效时 +1，useRideDateLabels 订阅后重新解析（同名重导入换内容/重挂） */
+let cacheEpoch = 0;
+const cacheListeners = new Set<() => void>();
 
 /**
- * 清缓存：数据变更（导入/删除/合并重复）后调用，否则标题与起骑时刻会停在旧值
- * （合并时逐秒数据从副本接管到保留项、同名重导入换了内容都属于这类）。
- * 传 fileName 只清该文件的起骑时刻；不传则全清。标题缓存一律全清（compare 跨两条记录）。
+ * 清缓存：数据变更（导入/删除/合并重复/孤儿重挂）后调用，否则标题与起骑时刻会停在
+ * 旧值（合并时逐秒数据从副本接管到保留项、同名重导入换了内容都属于这类）。
+ * 传 uuid 只清该活动的起骑时刻；不传则全清。标题缓存一律全清（compare 跨两条记录）。
  */
-export function invalidateReportTitles(fileName?: string): void {
+export function invalidateReportTitles(uuid?: string): void {
   titleCache = new Map();
-  if (fileName) startCache.delete(fileName);
+  if (uuid) startCache.delete(uuid);
   else startCache = new Map();
+  cacheEpoch += 1;
+  for (const fn of cacheListeners) fn();
 }
 
 /**
  * 单个骑行的首帧时刻（ISO UTC；带进程内缓存）。本地日历日换算的瞬间源——
  * AI 数据面整形与 UI 展示面共用，缺 records/读盘失败返回 null（调用方回退 UTC 日）。
  */
-export async function getRideStartAt(fileName: string): Promise<string | null> {
-  let startAt = startCache.get(fileName);
+export async function getRideStartAt(activityId: string): Promise<string | null> {
+  let startAt = startCache.get(activityId);
   if (startAt === undefined) {
-    startAt = await readStoredRecordStart(fileName);
-    startCache.set(fileName, startAt);
+    startAt = await readStoredRecordStart(activityId);
+    startCache.set(activityId, startAt);
   }
   return startAt;
 }
 
 /**
- * 批量解析骑行本地日历日标签（展示面用）：fileNames → Map(file_name → 本地日)。
- * 缺首帧/解析失败的键不进 Map，调用方以 `labels.get(name) ?? row.date` 回退存储 UTC 日。
+ * 批量解析骑行本地日历日标签（展示面用）：activity uuids → Map(uuid → 本地日)。
+ * 缺首帧/解析失败的键不进 Map，调用方以 `labels.get(uuid) ?? row.date` 回退存储 UTC 日。
  * 语义上假定传入的是一小批（调用方大批量自行分片，见 useRideDateLabels）。
  */
-export async function resolveRideDateLabels(fileNames: (string | null | undefined)[]): Promise<Map<string, string>> {
+export async function resolveRideDateLabels(
+  activityIds: (string | null | undefined)[],
+): Promise<Map<string, string>> {
   const out = new Map<string, string>();
-  for (const name of new Set(fileNames)) {
-    if (!name) continue;
-    const day = localDayFromUtc(await getRideStartAt(name));
-    if (day) out.set(name, day);
+  for (const id of new Set(activityIds)) {
+    if (!id) continue;
+    const day = localDayFromUtc(await getRideStartAt(id));
+    if (day) out.set(id, day);
   }
   return out;
 }
 
+const EMPTY_LABELS: Map<string, string> = new Map();
+
 /**
- * 骑行本地日标签的 React 装配（列表类屏共用）：fileNames 变化时解析。首帧读取是
- * 整包 gzip 解压（cold ~几十 ms/条），列表 200 行按 8 条分批渐进 setState——先出
- * UTC 日标签，本地日随解析进度补齐（多数骑行两种口径同日，翻转不可感知）；
- * 进程内缓存命中后同批同步完成。返回的 Map 只含解析成功的键。
+ * 骑行本地日标签的 React 装配（列表类屏共用）：activity uuids 变化或缓存失效时
+ * 重新解析。首帧读取是整包 gzip 解压（cold ~几十 ms/条），列表 200 行按 8 条分批
+ * 渐进 setState——先出 UTC 日标签，本地日随解析进度补齐（多数骑行两种口径同日，
+ * 翻转不可感知）；进程内缓存命中后同批同步完成。返回的 Map 只含解析成功的键。
+ *
+ * state 以「key#epoch」为版本：集合或缓存代际变化时渲染侧立即用空 Map（不展示上一轮
+ * 的陈旧标签），异步批次到达后按版本合并——effect 体内不做同步 setState。
  */
-export function useRideDateLabels(fileNames: (string | null | undefined)[]): Map<string, string> {
-  const key = fileNames.filter(Boolean).join('|');
-  const [labels, setLabels] = useState<Map<string, string>>(() => new Map());
+export function useRideDateLabels(activityIds: (string | null | undefined)[]): Map<string, string> {
+  const key = activityIds.filter(Boolean).join('|');
+  const [epoch, setEpoch] = useState(cacheEpoch);
+  const version = `${key}#${epoch}`;
+  const [state, setState] = useState<{ version: string; labels: Map<string, string> }>({
+    version: '',
+    labels: EMPTY_LABELS,
+  });
+  // 失效通知：invalidateReportTitles 后重新解析（uuid 集合不变但 contents 变了）
+  useEffect(() => {
+    const fn = () => setEpoch((e) => e + 1);
+    cacheListeners.add(fn);
+    return () => {
+      cacheListeners.delete(fn);
+    };
+  }, []);
   useEffect(() => {
     let alive = true;
-    const names = key ? key.split('|') : [];
+    const ids = key ? key.split('|') : [];
     void (async () => {
-      for (let i = 0; i < names.length; i += 8) {
-        const batch = await resolveRideDateLabels(names.slice(i, i + 8));
+      for (let i = 0; i < ids.length; i += 8) {
+        const batch = await resolveRideDateLabels(ids.slice(i, i + 8));
         if (!alive) return;
-        if (batch.size) setLabels((prev) => new Map([...prev, ...batch]));
+        if (batch.size) {
+          setState((prev) => {
+            const base = prev.version === version ? prev.labels : EMPTY_LABELS;
+            return { version, labels: new Map([...base, ...batch]) };
+          });
+        }
       }
     })();
     return () => {
       alive = false;
     };
-  }, [key]);
-  return labels;
+  }, [version, key]);
+  return state.version === version ? state.labels : EMPTY_LABELS;
 }
 
 /**
@@ -111,18 +139,18 @@ export function useRideDateLabels(fileNames: (string | null | undefined)[]): Map
  */
 function titleKeyOf(r: ReportTitleSource, lang: Lang): string {
   const tz = new Date().getTimezoneOffset();
-  return [lang, tz, r.mode, r.file_name ?? '', r.race_date ?? '', r.compare_with ?? '', r.created_at].join('|');
+  return [lang, tz, r.mode, r.activity_uuid ?? '', r.race_date ?? '', r.compare_uuid ?? '', r.created_at].join('|');
 }
 
 /** 单个活动的骑行简报（活动不存在返回 null） */
 async function loadBrief(
-  fileName: string | null | undefined,
+  activityId: string | null | undefined,
   rows: Map<string, { sport: string; date: string }>,
 ): Promise<RideBrief | null> {
-  if (!fileName) return null;
-  const row = rows.get(fileName);
+  if (!activityId) return null;
+  const row = rows.get(activityId);
   if (!row) return null;
-  const startAt = await getRideStartAt(fileName);
+  const startAt = await getRideStartAt(activityId);
   return {
     // 'unknown' 视为未知 → 标题走泛称模板（与列表里显示「未知」徽章同源）
     sport: row.sport === 'unknown' ? null : row.sport,
@@ -159,7 +187,7 @@ export async function buildReportTitles(
   const needsActivities = pending.some((r) => r.mode === 'review' || r.mode === 'compare');
   const rows = new Map<string, { sport: string; date: string }>();
   if (needsActivities) {
-    for (const r of await listActivityRideKeys()) rows.set(r.file_name, { sport: r.sport, date: r.date });
+    for (const r of await listActivityRideKeys()) rows.set(r.uuid, { sport: r.sport, date: r.date });
   }
 
   for (const r of reports) {
@@ -171,8 +199,8 @@ export async function buildReportTitles(
     }
     const withSport = (b: RideBrief | null): RideBrief | null =>
       b ? { ...b, sport: b.sport ? sportLabelOf(t, b.sport) : null } : null;
-    const ride = await loadBrief(r.file_name, rows);
-    const other = r.mode === 'compare' ? await loadBrief(r.compare_with, rows) : null;
+    const ride = await loadBrief(r.activity_uuid, rows);
+    const other = r.mode === 'compare' ? await loadBrief(r.compare_uuid, rows) : null;
     const title = reportTitle(
       {
         mode: r.mode,
@@ -207,6 +235,15 @@ export async function buildReportTitle(
 export function useReportTitle(report: ReportTitleSource | null): string | null {
   const { t, lang } = useI18n();
   const [title, setTitle] = useState<string | null>(null);
+  const [epoch, setEpoch] = useState(cacheEpoch);
+  // 数据变更（导入/删除/合并/重挂）后重新装配：报告对象本身可能没变，但起骑时刻变了
+  useEffect(() => {
+    const fn = () => setEpoch((e) => e + 1);
+    cacheListeners.add(fn);
+    return () => {
+      cacheListeners.delete(fn);
+    };
+  }, []);
 
   const compute = useCallback(async () => {
     if (!report) return null;
@@ -227,7 +264,7 @@ export function useReportTitle(report: ReportTitleSource | null): string | null 
     return () => {
       alive = false;
     };
-  }, [compute]);
+  }, [compute, epoch]);
 
   return title;
 }

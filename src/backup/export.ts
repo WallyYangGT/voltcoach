@@ -17,7 +17,7 @@ import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Directory, File, Paths } from 'expo-file-system';
 import { Platform } from 'react-native';
-import { countActivities, getDb, getDbKey, SCHEMA_VERSION } from '@/db';
+import { countActivities, getDb, getDbKey, listActivityUuids, SCHEMA_VERSION } from '@/db';
 import { listStoredRecordBases, readStoredRecordGz } from '@/records-store';
 import { bytesToUtf8, packBackup } from './archive';
 import type { BackupManifest } from './manifest';
@@ -59,14 +59,22 @@ export async function buildBackup(passphrase: string | null): Promise<BuiltBacku
   const dbKey = sqlcipher ? await getDbKey() : null;
   const pkgKey = passphrase || dbKey; // 口令优先，其次本机 key；无 SQLCipher 为 null（明文库）
 
-  const [dbBytes, bases, activities] = await Promise.all([
+  const [dbBytes, bases, activities, uuids] = await Promise.all([
     buildPackageDbBytes(pkgKey),
     listStoredRecordBases(),
     countActivities(),
+    listActivityUuids(),
   ]);
+
+  // v3：records 一律以 uuid 命名；目录里不属于任何活动的文件（历史失败/旧布局残留）
+  // 不进包——counts.records 只统计有效载荷，避免备份无限膨胀与隐私残留。
+  const valid = new Set(uuids);
+  const orphans = bases.filter((b) => !valid.has(b));
+  if (orphans.length) console.warn(`备份导出跳过 ${orphans.length} 个无主 records 文件:`, orphans.slice(0, 5));
 
   const records: { name: string; gz: Uint8Array }[] = [];
   for (const base of bases) {
+    if (!valid.has(base)) continue;
     const gz = await readStoredRecordGz(base);
     if (gz) records.push({ name: base, gz });
   }

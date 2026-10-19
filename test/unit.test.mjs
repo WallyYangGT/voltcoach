@@ -475,6 +475,7 @@ const mkRide = (
   date,
   { p5 = 150, p20 = 130, hrMax = 180, pz = { Z5: 5 }, hz = { Z4: 5 }, drift = 2, dur = 3600 } = {},
 ) => ({
+  uuid: name, // 测试内唯一身份即可（v3 锚点匹配按 uuid，不要求 32 hex 形状）
   file_name: name,
   date,
   duration_sec: dur,

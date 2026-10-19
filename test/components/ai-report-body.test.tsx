@@ -33,9 +33,11 @@ function reportOf(partial: Partial<AiReportRow>): AiReportRow {
   return {
     id: 1,
     mode: 'review',
-    file_name: '2026-10-10 ride.fit',
+    activity_uuid: 'a'.repeat(32),
     race_date: null,
-    compare_with: null,
+    compare_uuid: null,
+    activity_fingerprint: null,
+    compare_fingerprint: null,
     status: 'completed',
     error: null,
     created_at: '2026-10-13 00:00:00',

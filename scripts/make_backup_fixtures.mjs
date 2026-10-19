@@ -52,7 +52,7 @@ console.log(`基底: ${src}（活动 ${realManifest.counts.activities} · record
 
 const base = {
   format: 'fitbackup',
-  schema_version: 1,
+  schema_version: realManifest.schema_version ?? 1,
   app_version: realManifest.app_version ?? '0.1.0',
   exported_at: '2026-09-22T12:00:00.000Z',
   device: 'fixture',

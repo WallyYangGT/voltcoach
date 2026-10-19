@@ -39,7 +39,7 @@ import {
 import { pedalTimeBreakdown, type PedalTimeBreakdown } from '@/core/pedalTime';
 import { thinRecords } from '@/core/records';
 import { HR_ZONES, PEDAL_TIME, POWER_ZONES, type Zone } from '@/core/settings';
-import { CATEGORY_KEYS, deleteActivity, getActivityPowerFlag, getActivitySummary, rebuildDossierQuietly, setActivityCategory, setActivityNote } from '@/db';
+import { CATEGORY_KEYS, deleteActivity, getActivityPowerFlag, getActivitySummary, rebuildDossierQuietly, resolveActivityUuid, setActivityCategory, setActivityNote } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import { MetricGrid } from '@/components/MetricGrid';
 import { deleteStoredRecord, loadStoredRecords } from '@/records-store';
@@ -81,7 +81,28 @@ export default function ActivityDetailScreen() {
   const { t, lang } = useI18n();
   const router = useRouter();
   const params = useLocalSearchParams<{ id?: string }>();
-  const fileName = decodeURIComponent(Array.isArray(params.id) ? params.id[0] : (params.id ?? ''));
+  // v3 路由参数是活动 uuid；仍兼容 v2 的 `/activity/<file_name>` 旧深链（异步解析）。
+  // 解析结果带 routeId 版本：route 变化时渲染侧立即视为「未解析」，不在 effect 里
+  // 同步 setState（react-hooks/set-state-in-effect）。
+  const routeId = decodeURIComponent(Array.isArray(params.id) ? params.id[0] : (params.id ?? ''));
+  const [resolvedRoute, setResolvedRoute] = useState<{ routeId: string; activityId: string | null } | null>(null);
+  const routeResolved = routeId === '' || resolvedRoute?.routeId === routeId;
+  const activityId = routeId === '' ? null : resolvedRoute?.routeId === routeId ? resolvedRoute.activityId : null;
+
+  useEffect(() => {
+    let alive = true;
+    if (!routeId) return;
+    resolveActivityUuid(routeId)
+      .then((id) => {
+        if (alive) setResolvedRoute({ routeId, activityId: id });
+      })
+      .catch(() => {
+        if (alive) setResolvedRoute({ routeId, activityId: null });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [routeId]);
 
   const [summary, setSummary] = useState<Summary | null | undefined>(undefined); // undefined=加载中
   const [thinned, setThinned] = useState<Awaited<ReturnType<typeof thinRecords>> | null>(null);
@@ -153,8 +174,9 @@ export default function ActivityDetailScreen() {
   // 聚焦刷新标记态（AI 在对话里 set_power_flag 后回到本页要对上）：只读单个布尔，廉价
   useFocusEffect(
     useCallback(() => {
+      if (!activityId) return;
       let alive = true;
-      getActivityPowerFlag(fileName)
+      getActivityPowerFlag(activityId)
         .then((v) => {
           if (alive) setPowerFlagged(v);
         })
@@ -162,20 +184,25 @@ export default function ActivityDetailScreen() {
       return () => {
         alive = false;
       };
-    }, [fileName]),
+    }, [activityId]),
   );
 
   useEffect(() => {
     let alive = true;
+    if (!activityId) {
+      return () => {
+        alive = false;
+      };
+    }
     (async () => {
       try {
-        const s = await getActivitySummary(fileName);
+        const s = await getActivitySummary(activityId);
         if (!alive) return;
         setSummary(s);
         setNote(s?.activity.note ?? '');
-        setPowerFlagged(await getActivityPowerFlag(fileName));
+        setPowerFlagged(await getActivityPowerFlag(activityId));
         if (s) {
-          const stored = await loadStoredRecords(fileName);
+          const stored = await loadStoredRecords(activityId);
           if (alive) {
             setThinned(stored ? thinRecords(stored) : null);
             // 0W 根治后 summary.pedal_time 为权威数据源（与 AI 同源）；旧数据（升级前
@@ -192,7 +219,7 @@ export default function ActivityDetailScreen() {
     return () => {
       alive = false;
     };
-  }, [fileName]);
+  }, [activityId]);
 
   // 「已保存 ✓」flash 的定时器：组件卸载时清理（否则卸载后 setState）
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -210,6 +237,7 @@ export default function ActivityDetailScreen() {
 
   /** 删除本训练（含逐秒数据）；AI 报告保留，删完返回列表 */
   const confirmDelete = () => {
+    if (!activityId) return;
     Alert.alert(t('activities.deleteTitle'), t('activities.deleteMsg'), [
       { text: t('common.cancel'), style: 'cancel' },
       {
@@ -218,18 +246,18 @@ export default function ActivityDetailScreen() {
         onPress: () => {
           void (async () => {
             try {
-              await deleteActivity(fileName);
+              await deleteActivity(activityId);
             } catch (e) {
               Alert.alert(t('data.err.generic'), e instanceof Error ? e.message : String(e));
               return;
             }
             // 删完就返回：逐秒数据清理失败不该让用户停在一条已删训练的页面上
             try {
-              deleteStoredRecord(fileName);
+              deleteStoredRecord(activityId);
             } catch (e) {
               console.warn('逐秒数据清理失败（训练已删除）:', e);
             }
-            invalidateReportTitles(fileName);
+            invalidateReportTitles(activityId);
             void rebuildDossierQuietly(); // 档案基线剔除该骑行（fire-and-forget）
             router.back();
           })();
@@ -239,8 +267,9 @@ export default function ActivityDetailScreen() {
   };
 
   const changeCategory = async (cat: string) => {
+    if (!activityId) return;
     try {
-      await setActivityCategory(fileName, cat, lang);
+      await setActivityCategory(activityId, cat, lang);
       setSummary((prev) => (prev ? { ...prev, activity: { ...prev.activity, category: cat } } : prev));
       flashSaved();
     } catch (e) {
@@ -249,8 +278,9 @@ export default function ActivityDetailScreen() {
   };
 
   const saveNote = async () => {
+    if (!activityId) return;
     try {
-      await setActivityNote(fileName, note, lang);
+      await setActivityNote(activityId, note, lang);
       setSummary((prev) => (prev ? { ...prev, activity: { ...prev.activity, note } } : prev));
       flashSaved();
     } catch (e) {
@@ -260,6 +290,7 @@ export default function ActivityDetailScreen() {
 
   /** 标记/取消「功率不可信」（v2）：档案功率基线随之排除/恢复该骑行；可逆操作 */
   const togglePowerFlag = () => {
+    if (!activityId) return;
     const next = !powerFlagged;
     Alert.alert(t('activity.flag_title'), t(next ? 'activity.flag_msg' : 'activity.unflag_msg'), [
       { text: t('common.cancel'), style: 'cancel' },
@@ -269,7 +300,7 @@ export default function ActivityDetailScreen() {
         onPress: () => {
           void (async () => {
             try {
-              await setPowerFlagAndRefresh(fileName, next, lang);
+              await setPowerFlagAndRefresh(activityId, next, lang);
               setPowerFlagged(next);
             } catch (e) {
               Alert.alert(e instanceof Error ? e.message : String(e));
@@ -313,8 +344,10 @@ export default function ActivityDetailScreen() {
     return buildPedalTimeMetrics(pedal, tMetric);
   }, [pedal, t]);
 
-  if (summary === undefined) return <View style={styles.page} />;
-  if (!summary) {
+  // 路由解析失败（旧深链指向已删训练/非法参数）直接走空态；解析中显示空白页
+  const routeMissing = routeResolved && !activityId;
+  if (summary === undefined && !routeMissing) return <View style={styles.page} />;
+  if (!summary || !activityId) {
     return (
       <View style={styles.page}>
         <Appbar.Header style={styles.header}>
@@ -615,14 +648,16 @@ export default function ActivityDetailScreen() {
           onLayout={(e) => {
             panelY.current = e.nativeEvent.layout.y;
           }}>
-          <AiReviewPanel
-            ref={panelRef}
-            fileName={fileName}
-            onReveal={revealPanel}
-            onFollowUpFocus={() => setLastFocus('followup')}
-            followUpInputRef={followUpInputRef}
-            onFollowUpLayout={rescrollOnLayout}
-          />
+          {activityId ? (
+            <AiReviewPanel
+              ref={panelRef}
+              activityId={activityId}
+              onReveal={revealPanel}
+              onFollowUpFocus={() => setLastFocus('followup')}
+              followUpInputRef={followUpInputRef}
+              onFollowUpLayout={rescrollOnLayout}
+            />
+          ) : null}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

@@ -101,10 +101,10 @@ export function PlanAdherenceCard({ plan, weekStart, today }: Props) {
 
 /** 实际训练按本地日历日归并（records 首帧换算；缺首帧回退存储 UTC 日，§24 口径不猜） */
 async function mergeByLocalDay(acts: ActivityListItem[]): Promise<DayActual[]> {
-  const labels = await resolveRideDateLabels(acts.map((a) => a.file_name));
+  const labels = await resolveRideDateLabels(acts.map((a) => a.uuid));
   const byDay = new Map<string, DayActual>();
   for (const a of acts) {
-    const day = labels.get(a.file_name) ?? a.date;
+    const day = labels.get(a.uuid) ?? a.date;
     const cur = byDay.get(day) ?? { date: day, tss: 0, durationSec: 0 };
     cur.tss += a.tss ?? 0;
     cur.durationSec += a.duration_sec ?? 0;

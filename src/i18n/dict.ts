@@ -649,6 +649,7 @@ export const DICT = {
     'data.err.wrong_key': '口令错误或备份包损坏',
     'data.err.passphrase_required': '该备份由口令加密，请输入正确口令后重试',
     'data.err.safety_backup_failed': '导入前安全备份失败，已中止（当前数据未受影响）',
+    'data.err.migration_failed': '备份包数据库升级失败，已中止（当前数据未受影响）',
     'data.err.no_sqlcipher': '当前构建不支持加密备份包',
     'data.err.generic': '操作失败',
 
@@ -1112,6 +1113,7 @@ export const DICT = {
     'data.err.wrong_key': 'Wrong passphrase or corrupted backup',
     'data.err.passphrase_required': 'This backup is passphrase-protected — enter the correct passphrase and retry',
     'data.err.safety_backup_failed': 'Safety backup failed — import aborted (current data untouched)',
+    'data.err.migration_failed': 'Backup database upgrade failed — import aborted (current data untouched)',
     'data.err.no_sqlcipher': 'This build cannot handle encrypted backups',
     'data.err.generic': 'Operation failed',
 

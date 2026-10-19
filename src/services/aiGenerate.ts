@@ -46,6 +46,7 @@ import {
   updateAiChatMessage,
   updateAiReport,
   getActivitySummary,
+  getActivityFileName,
   listActivityRideKeys,
   listPendingAiReportRefs,
   listPendingChatMessageRefs,
@@ -69,7 +70,7 @@ import { localDay, localDayFromUtc } from '@/core/local-day';
 import { CONTEXT_BUDGET } from '@/core/settings';
 import type { AthleteDossier } from '@/core/dossier';
 import { shouldFlushPartial, withinResumeWindow } from '@/core/report-status';
-import { safeName, thinRecords } from '@/core/records';
+import { thinRecords } from '@/core/records';
 import { extractPlanFromMarkdown, validateTrainingPlan } from '@/core/training-plan';
 import { buildSummaryInput, normalizeSummaryOutput, shouldSummarize } from '@/core/chat-summary';
 
@@ -90,13 +91,13 @@ import { setPowerFlagAndRefresh, recalibrateActivityPower } from './power-calib'
 function buildToolIo(): ToolIo {
   return {
     listActivities: () => listActivities(200),
-    getActivitySummary: (name) => getActivitySummary(name),
-    loadRecords: async (name, opts) => {
-      const records = await loadStoredRecords(name);
+    getActivitySummary: (activityId) => getActivitySummary(activityId),
+    loadRecords: async (activityId, opts) => {
+      const records = await loadStoredRecords(activityId);
       if (!records) return null;
       return thinRecords(records, opts);
     },
-    readRecordStart: (name) => getRideStartAt(name),
+    readRecordStart: (activityId) => getRideStartAt(activityId),
     recentFormDaily: (days) => recentFormDaily(days),
     monthlySummary: (n) => monthlySummary(n),
     getAthleteState: () => getAthleteState(),
@@ -235,9 +236,9 @@ async function callAiMaybeAgentic(
  * 活动行的首帧时刻映射（withLocalActivityDates 入参；getRideStartAt 自带进程内
  * 缓存，同屏/同会话重复装配不再读盘）。
  */
-async function rideStartsOf(rows: { file_name: string }[]): Promise<Map<string, string | null>> {
+async function rideStartsOf(rows: { uuid: string }[]): Promise<Map<string, string | null>> {
   const starts = new Map<string, string | null>();
-  for (const r of rows) starts.set(r.file_name, await getRideStartAt(r.file_name));
+  for (const r of rows) starts.set(r.uuid, await getRideStartAt(r.uuid));
   return starts;
 }
 
@@ -246,7 +247,7 @@ async function localDayOfRideDay(utcDay: string): Promise<string | null> {
   const rides = await listActivityRideKeys();
   const hit = rides.find((r) => r.sport === 'cycling' && r.date === utcDay);
   if (!hit) return null;
-  return localDayFromUtc(await getRideStartAt(hit.file_name));
+  return localDayFromUtc(await getRideStartAt(hit.uuid));
 }
 
 /**
@@ -278,11 +279,21 @@ export async function buildReportPrompt(
   // 空库时提示词与旧形态一致）
   const dossierSection = buildDossierSection(await localAnchorDossier(await getDossier()), lang);
   if (mode === 'review') {
-    const name = safeName(String(context.file_name ?? ''));
-    const summary = name ? await getActivitySummary(name) : null;
-    if (!summary)
-      throw new Error(t(lang, 'tool.summary_not_found', { name: context.file_name ?? '(未提供)' }));
-    return buildReviewPrompt(withLocalActivityDate(summary, name ? await getRideStartAt(name) : null), athlete, profile, skills, lang, new Date(), dossierSection);
+    const uuid = context.activity_uuid ?? '';
+    const summary = uuid ? await getActivitySummary(uuid) : null;
+    if (!summary) {
+      const name = uuid ? ((await getActivityFileName(uuid)) ?? uuid) : '(未提供)';
+      throw new Error(t(lang, 'tool.summary_not_found', { name }));
+    }
+    return buildReviewPrompt(
+      withLocalActivityDate(summary, await getRideStartAt(uuid)),
+      athlete,
+      profile,
+      skills,
+      lang,
+      new Date(),
+      dossierSection,
+    );
   }
   if (mode === 'plan') {
     const daily = await recentFormDaily(56);
@@ -332,8 +343,8 @@ export async function buildReportPrompt(
     );
   }
   if (mode === 'compare') {
-    const a = safeName(String(context.file_name ?? ''));
-    const b = safeName(String(context.compare_with ?? ''));
+    const a = context.activity_uuid ?? '';
+    const b = context.compare_uuid ?? '';
     const sa = a ? await getActivitySummary(a) : null;
     const sb = b ? await getActivitySummary(b) : null;
     if (!sa || !sb || !a || !b) throw new Error(t(lang, 'srv.compare_not_found'));
@@ -737,9 +748,9 @@ export interface SubmitChatParams {
   chatId?: number | null;
   mode: AiChatMode;
   message: string;
-  /** follow_up：关联报告与训练文件 */
+  /** follow_up：关联报告与训练活动（v3 uuid） */
   reportId?: number | null;
-  fileName?: string | null;
+  activityUuid?: string | null;
 }
 
 /**
@@ -760,7 +771,7 @@ export async function submitChatMessage(
 
   let chatId = params.chatId ?? null;
   if (chatId != null) {
-    // 继续既有对话：校验存在，沿用其 mode/report_id/file_name
+    // 继续既有对话：校验存在，沿用其 mode/report_id/activity_uuid
     if (!Number.isInteger(chatId) || chatId <= 0)
       throw new Error(t(lang, 'srv.chat_id_invalid'));
     if (!(await getAiChat(chatId))) throw new Error(t(lang, 'srv.chat_not_found'));
@@ -768,7 +779,7 @@ export async function submitChatMessage(
     const reportId = Number(params.reportId);
     chatId = await createAiChat(params.mode, {
       report_id: Number.isInteger(reportId) && reportId > 0 ? reportId : null,
-      file_name: params.fileName ? safeName(params.fileName) : null,
+      activity_uuid: params.activityUuid ?? null,
       title: message.slice(0, 50),
     });
   }
@@ -888,8 +899,12 @@ async function buildChatSystem(
   // follow_up：关联报告正文 + 压缩训练数据（报告可能已被滚动清理，缺则仅靠训练数据）；
   // 双口径统一：summary 的活动日期与档案锚日换算为本地日历日（与「当前时间」段同日历）
   const rep = chat.report_id != null ? await getAiReport(chat.report_id) : null;
-  const rawSummary = chat.mode === 'follow_up' && chat.file_name ? await getActivitySummary(chat.file_name) : null;
-  const rideStart = chat.mode === 'follow_up' && chat.file_name ? await getRideStartAt(chat.file_name) : null;
+  const rawSummary = chat.mode === 'follow_up' && chat.activity_uuid
+    ? await getActivitySummary(chat.activity_uuid)
+    : null;
+  const rideStart = chat.mode === 'follow_up' && chat.activity_uuid
+    ? await getRideStartAt(chat.activity_uuid)
+    : null;
   const summary = rawSummary ? withLocalActivityDate(rawSummary, rideStart) : null;
   return buildChatSystemSection(
     {

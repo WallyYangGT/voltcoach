@@ -12,11 +12,11 @@
  * node:test 注入假 io 即可全量断言。
  *
  * 约定：
- * - 所有工具返回 JSON 字符串；业务错误（file_name 不存在、参数非法）返回
+ * - 所有工具返回 JSON 字符串；业务错误（activity_id 不存在、参数非法）返回
  *   {error: "..."} JSON，不抛异常中断 agent 循环。
  * - 每个结果超过 AGENTIC.tool_result_max_chars 时走 compactJsonToLimit 结构化降级
  *   （数组抽样/长文本截短/顶层 _truncated 元信息），始终返回合法 JSON。
- * - file_name 参数一律经 safeName basename 校验，防路径穿越。
+ * - 活动句柄 activity_id 一律按 32 hex uuid 校验（v3；file_name 只作来源展示）。
  */
 
 import type { AthleteParams } from '../core/settings.ts';
@@ -26,7 +26,8 @@ import { t, type Lang } from '../core/i18n.ts';
 import { compactJsonToLimit } from './compact.ts';
 import { localDay, localDayFromUtc } from '../core/local-day.ts';
 import { addDaysStr } from '../core/dossier.ts';
-import { safeName, type ThinResult } from '../core/records.ts';
+import { isActivityUuid } from '../core/identity.ts';
+import { type ThinResult } from '../core/records.ts';
 import {
   formatPlanIssue,
   planValidity,
@@ -50,6 +51,9 @@ export interface ToolIo {
   /** 训练简明清单（日期倒序全量，工具内再过滤/截断；口径同旧版 listActivities(200)） */
   listActivities(): Promise<
     {
+      /** v3 活动身份（工具入参 activity_id） */
+      uuid: string;
+      /** 来源文件名（展示用，不作句柄） */
       file_name: string;
       date: string;
       sport: string;
@@ -62,17 +66,17 @@ export interface ToolIo {
     }[]
   >;
   /** 单次训练完整 summary；不存在返回 null */
-  getActivitySummary(fileName: string): Promise<object | null>;
+  getActivitySummary(activityId: string): Promise<object | null>;
   /**
    * 逐秒时序（已按 maxPoints 抽稀、支持时间窗）；文件不存在返回 null。
    * 绑定层：records-store 读取 → parseRecordsCsv → thinRecords（口径与旧 loadRecords 一致）。
    */
-  loadRecords(fileName: string, opts: { maxPoints: number; startSec?: number; endSec?: number }): Promise<ThinResult | null>;
+  loadRecords(activityId: string, opts: { maxPoints: number; startSec?: number; endSec?: number }): Promise<ThinResult | null>;
   /**
    * records 首帧时间戳（起骑时刻 ISO UTC；本地日历日换算的瞬间源）；无数据返回 null。
    * 绑定层：records-store.readStoredRecordStart（带进程内缓存，导入/删除/合并时失效）。
    */
-  readRecordStart(fileName: string): Promise<string | null>;
+  readRecordStart(activityId: string): Promise<string | null>;
   /** 最近 N 天逐日负荷序列 */
   recentFormDaily(days: number): Promise<{ date: string; tss: number; ctl: number; atl: number; tsb: number }[]>;
   /** 最近 N 个月汇总 */
@@ -99,9 +103,9 @@ export interface ToolIo {
     meta: { origin: 'adjust'; change_note: string | null; warnings: PlanIssue[] },
   ): Promise<number>;
   /** 标记/取消「功率不可信」（编排见 services/power-calib：db 标记 + 档案重建），返回结果对象 */
-  setPowerFlag(fileName: string, flagged: boolean, lang: Lang, reason: string | null): Promise<unknown>;
+  setPowerFlag(activityId: string, flagged: boolean, lang: Lang, reason: string | null): Promise<unknown>;
   /** 按系数缩放重算一次训练的功率派生指标并写回（编排见 services/power-calib），返回结果对象 */
-  recalibratePower(fileName: string, scaleFactor: number, lang: Lang): Promise<unknown>;
+  recalibratePower(activityId: string, scaleFactor: number, lang: Lang): Promise<unknown>;
   /**
    * AI 触发的 FTP 更新（估算 → 采纳门槛 → 写回，编排见 services/ftp-apply）。
    * 拒绝不抛错，返回 {applied:false, reason, estimate}；成功返回 {applied:true, ...}。
@@ -111,7 +115,7 @@ export interface ToolIo {
    * 按当前骑手参数重新分析一次训练并写回（编排见 services/reanalyze）。
    * 活动不存在/缺逐秒数据抛双语 Error，本层兜为 {error}。
    */
-  reanalyzeActivity(fileName: string, lang: Lang): Promise<unknown>;
+  reanalyzeActivity(activityId: string, lang: Lang): Promise<unknown>;
 }
 
 /** 执行上下文：source 场景标记（save_memory 写入 ai_memories.source），lang 消息语言；
@@ -131,6 +135,11 @@ function clampInt(v: unknown, min: number, max: number, fallback: number): numbe
   const n = Number(v);
   if (!Number.isFinite(n)) return fallback;
   return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/** 工具入参 activity_id：必须是 32 hex uuid（v3）；非法/缺失返回 null */
+function activityIdOf(v: unknown): string | null {
+  return isActivityUuid(v) ? v : null;
 }
 
 /**
@@ -171,34 +180,39 @@ const toolListActivities: ToolImpl = async (args, ctx, io) => {
   if (args?.category != null) list = list.filter((a) => a.category === args.category);
   const page = list.slice(0, limit);
   const starts = new Map<string, string | null>();
-  for (const a of page) starts.set(a.file_name, await io.readRecordStart(a.file_name));
-  return toResult({ count: page.length, activities: withLocalActivityDates(page, starts) }, lang);
+  for (const a of page) starts.set(a.uuid, await io.readRecordStart(a.uuid));
+  // 模型句柄统一叫 activity_id（与工具入参/提示词一致）；uuid 只作内部键不外露
+  const activities = withLocalActivityDates(page, starts).map(({ uuid, ...rest }) => ({
+    ...rest,
+    activity_id: uuid,
+  }));
+  return toResult({ count: activities.length, activities }, lang);
 };
 
 const toolGetActivitySummary: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
-  const name = safeName(String(args?.file_name ?? ''));
-  if (!name) return errResult(t(lang, 'tool.name_invalid'));
-  const summary = await io.getActivitySummary(name);
-  if (!summary) return errResult(t(lang, 'tool.summary_not_found', { name }));
+  const id = activityIdOf(args?.activity_id);
+  if (!id) return errResult(t(lang, 'tool.name_invalid'));
+  const summary = await io.getActivitySummary(id);
+  if (!summary) return errResult(t(lang, 'tool.summary_not_found', { name: id }));
   // 双口径统一：activity.date 经首帧时刻换算为本地日历日（与「当前时间」段同日历），
   // 缺首帧（如记录被清）保持 UTC 原值
   return toResult(
-    compactSummaryForPrompt(withLocalActivityDate(summary, await io.readRecordStart(name)), lang),
+    compactSummaryForPrompt(withLocalActivityDate(summary, await io.readRecordStart(id)), lang),
     lang,
   );
 };
 
 const toolGetActivityRecords: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
-  const name = safeName(String(args?.file_name ?? ''));
-  if (!name) return errResult(t(lang, 'tool.name_invalid'));
-  const data = await io.loadRecords(name, {
+  const id = activityIdOf(args?.activity_id);
+  if (!id) return errResult(t(lang, 'tool.name_invalid'));
+  const data = await io.loadRecords(id, {
     maxPoints: AGENTIC.records_max_points,
     startSec: args?.start_sec != null ? Number(args.start_sec) : undefined,
     endSec: args?.end_sec != null ? Number(args.end_sec) : undefined,
   });
-  if (!data) return errResult(t(lang, 'tool.records_not_found', { name }));
+  if (!data) return errResult(t(lang, 'tool.records_not_found', { name: id }));
   // 时序时间戳为 UTC 口径，提交前改写为本地时区偏移，AI 按本地时间解读时段
   return toResult(localizeTimestamps(data), lang);
 };
@@ -380,7 +394,7 @@ async function localDossierForPrompt(dossier: unknown, io: ToolIo): Promise<unkn
     const rides = await io.listActivities();
     const candidates = rides.filter((r) => r.sport === 'cycling' && r.date === d.anchor_date);
     for (const r of candidates) {
-      const local = localDayFromUtc(await io.readRecordStart(r.file_name));
+      const local = localDayFromUtc(await io.readRecordStart(r.uuid));
       if (local) {
         localAnchor = local;
         break;
@@ -539,21 +553,21 @@ const toolAdjustPlanSessions: ToolImpl = async (args, ctx, io) => {
 /** set_power_flag：标记/取消「功率不可信」（可逆；绑定层负责档案重建） */
 const toolSetPowerFlag: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
-  const name = safeName(String(args?.file_name ?? ''));
-  if (!name) return errResult(t(lang, 'tool.name_invalid'));
+  const id = activityIdOf(args?.activity_id);
+  if (!id) return errResult(t(lang, 'tool.name_invalid'));
   if (typeof args?.flagged !== 'boolean') return errResult(t(lang, 'tool.flag_invalid'));
   const reason = typeof args?.reason === 'string' ? args.reason.slice(0, 200) : null;
-  return toResult(await io.setPowerFlag(name, args.flagged, lang, reason), lang);
+  return toResult(await io.setPowerFlag(id, args.flagged, lang, reason), lang);
 };
 
 /** recalibrate_activity_power：按系数缩放重算并写回（夹逼界限在 settings.POWER_CALIBRATION，服务层执行） */
 const toolRecalibratePower: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
-  const name = safeName(String(args?.file_name ?? ''));
-  if (!name) return errResult(t(lang, 'tool.name_invalid'));
+  const id = activityIdOf(args?.activity_id);
+  if (!id) return errResult(t(lang, 'tool.name_invalid'));
   const scale = Number(args?.scale_factor);
   if (!Number.isFinite(scale)) return errResult(t(lang, 'tool.scale_invalid'));
-  return toResult(await io.recalibratePower(name, scale, lang), lang);
+  return toResult(await io.recalibratePower(id, scale, lang), lang);
 };
 
 /** update_ftp：AI 教练按当前最佳估算更新 FTP（零参——数值只来自估算器，模型无自定数值入口） */
@@ -565,9 +579,9 @@ const toolUpdateFtp: ToolImpl = async (_args, ctx, io) => {
 /** reanalyze_activity：按当前骑手参数重算一次训练并写回，返回新旧指标对比 */
 const toolReanalyzeActivity: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
-  const name = safeName(String(args?.file_name ?? ''));
-  if (!name) return errResult(t(lang, 'tool.name_invalid'));
-  return toResult(await io.reanalyzeActivity(name, lang), lang);
+  const id = activityIdOf(args?.activity_id);
+  if (!id) return errResult(t(lang, 'tool.name_invalid'));
+  return toResult(await io.reanalyzeActivity(id, lang), lang);
 };
 
 const TOOL_IMPL: Record<string, ToolImpl> = {

@@ -32,6 +32,8 @@ export interface DossierPeakEntry {
   window: PeakWindow;
   value_w: number;
   date: string;
+  /** 活动稳定身份（v3） */
+  uuid: string;
   file_name: string;
 }
 
@@ -96,6 +98,8 @@ export interface AthleteDossier {
 
 /** 档案聚合的单骑输入（db 层自 activities 行组装；summary 允许缺损坏行） */
 export interface DossierRideInput {
+  /** 活动稳定身份（v3；峰功率溯源用） */
+  uuid: string;
   file_name: string;
   date: string;
   sport: string;
@@ -169,6 +173,7 @@ export function buildDossier(
         window: w,
         value_w: Math.round(v),
         date: r.date,
+        uuid: r.uuid,
         file_name: r.file_name,
       };
       const cur = allTime.get(w);

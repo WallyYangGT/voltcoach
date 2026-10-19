@@ -93,7 +93,7 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'tp.tool.no_plan': '当前没有训练计划，无法局部调整（请先生成计划）',
     // ---- agentic 工具层消息（src/tools，M3 自 fit-reader Web 版 src/i18n.js 逐字搬运） ----
     'tool.date_invalid': '{key} 需为 YYYY-MM-DD',
-    'tool.name_invalid': 'file_name 非法',
+    'tool.name_invalid': 'activity_id 非法',
     'tool.summary_not_found': '训练库中找不到: {name}',
     'tool.records_not_found': '找不到时序数据: {name}',
     'tool.plan_array': 'plan 需为非空数组 [{date, tss}]',
@@ -320,7 +320,7 @@ export const DICT: Record<Lang, Record<string, string>> = {
     'tp.op.duration': 'Operation {i} ({op}) duration must be an integer from 10–600',
     'tp.tool.no_plan': 'There is no current training plan to adjust — generate one first',
     'tool.date_invalid': '{key} must be YYYY-MM-DD',
-    'tool.name_invalid': 'invalid file_name',
+    'tool.name_invalid': 'invalid activity_id',
     'tool.summary_not_found': 'not found in training library: {name}',
     'tool.records_not_found': 'time-series data not found: {name}',
     'tool.plan_array': 'plan must be a non-empty array of [{date, tss}]',

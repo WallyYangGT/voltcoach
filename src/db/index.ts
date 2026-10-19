@@ -5,8 +5,9 @@
  * （同步 API）换 expo-sqlite（异步 API）。差异：
  *  - SQLCipher 已拍板启用：db key 首次随机生成（expo-crypto）
  *    存 expo-secure-store（Android Keystore），密钥不落盘；
- *  - 从零建库，M1 版 schema 一次建齐（含旧版经 ALTER 迁移得到的列），
- *    PRAGMA user_version = 1 驱动未来备份导入的迁移链；
+ *  - 从零建库按最新 schema 整体创建（src/db/schema.ts），存量库由
+ *    src/db/migrate.ts 按 PRAGMA user_version 走编号迁移链（v3 = 活动 uuid 身份、
+ *    AI 报告/对话外键与指纹，decisions §34）；
  *  - 骑手参数不再用"全局可变对象原地合并"（旧版 syncAthleteFromDb 模式），
  *    改 getEffectiveAthlete() 显式返回合并值，由调用方（导入服务）注入 analyzeFile；
  *  - CTL/ATL/TSB 递推在 src/core/form.ts（纯函数），本层只做查询。
@@ -58,7 +59,10 @@ import {
   type SyncProviderId,
   type SyncState,
 } from '@/sync/state';
-import { migrationsFor, SCHEMA_VERSION } from './migrations';
+import { SCHEMA_VERSION } from './migrations';
+import { migrateSchema } from './migrate';
+import { ensureRecordFileLayout } from '@/records-store';
+import { isActivityUuid } from '@/core/identity';
 
 // 供编排层/设置页引用的配置类型（db 层是 AiConfig 的存取入口，re-export 同源导出）
 export type { AiConfig };
@@ -80,121 +84,6 @@ export async function getDbKey(): Promise<string> {
   return key;
 }
 
-/** 整体建表脚本（列内联到最新 schema，CREATE IF NOT EXISTS 幂等可重放；版本戳由调用方在成功后写） */
-const CREATE_SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS activities (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_name TEXT NOT NULL UNIQUE,
-    date TEXT NOT NULL,
-    sport TEXT,
-    duration_sec INTEGER,
-    distance_km REAL,
-    elevation_gain_m REAL,
-    tss REAL,
-    np REAL,
-    avg_power REAL,
-    intensity_factor REAL,
-    summary_json TEXT NOT NULL,
-    category TEXT DEFAULT 'training',
-    note TEXT,
-    power_flagged INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE INDEX IF NOT EXISTS idx_activities_date ON activities(date);
-
-  CREATE TABLE IF NOT EXISTS ai_reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    mode TEXT NOT NULL,
-    file_name TEXT,
-    race_date TEXT,
-    compare_with TEXT,
-    prompt TEXT NOT NULL,
-    markdown TEXT NOT NULL,
-    status TEXT DEFAULT 'completed',
-    error TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE INDEX IF NOT EXISTS idx_ai_reports_mode_created ON ai_reports(mode, created_at DESC);
-  CREATE INDEX IF NOT EXISTS idx_ai_reports_status ON ai_reports(status);
-
-  CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS ai_chats (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    mode TEXT NOT NULL,
-    report_id INTEGER,
-    file_name TEXT,
-    title TEXT,
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE INDEX IF NOT EXISTS idx_ai_chats_mode ON ai_chats(mode, id DESC);
-
-  CREATE TABLE IF NOT EXISTS ai_chat_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    chat_id INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    status TEXT DEFAULT 'completed',
-    error TEXT,
-    created_at TEXT DEFAULT (datetime('now'))
-  );
-  CREATE INDEX IF NOT EXISTS idx_ai_chat_messages_chat ON ai_chat_messages(chat_id, id);
-
-  CREATE TABLE IF NOT EXISTS ai_memories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content TEXT NOT NULL,
-    category TEXT DEFAULT 'general',
-    source TEXT,
-    scope TEXT NOT NULL DEFAULT 'long',
-    created_at TEXT DEFAULT (datetime('now')),
-    superseded_by INTEGER
-  );
-
-`;
-
-/**
- * 开库后的 schema 就位：读 user_version 分支——
- *  - 已是最新：无事可做（每次开库的最常见路径）；
- *  - 0 且无表：全新库，整体建表（脚本末尾盖版本戳）；
- *  - 0 但 activities 已存在：v1 建库脚本中途崩溃的残留（建表跑了、版本戳没写），
- *    按 v1 走迁移；
- *  - 0 < v < 最新：按 ./migrations 步进 ALTER 后盖戳。
- * ALTER 无幂等声明，「duplicate column」按已就位容错跳过（半新表二次进入时的自愈）。
- */
-async function migrateSchema(db: SQLite.SQLiteDatabase): Promise<void> {
-  const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
-  const current = row?.user_version ?? 0;
-  if (current === SCHEMA_VERSION) return;
-  const stamp = () => db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
-  if (current === 0) {
-    const hasTables = await db.getFirstAsync<{ name: string }>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'activities'`,
-    );
-    if (!hasTables) {
-      await db.execAsync(CREATE_SCHEMA_SQL);
-      await stamp();
-      return;
-    }
-    // user_version 0 但表已存在：v1 建库脚本中途崩溃的残留。先跑一遍幂等建表把
-    // 缺失的表补齐（残留库可能缺 ai_memories 等），再走步进 ALTER（新补的表已带
-    // 最新列，ALTER 报 duplicate column 由下方容错跳过）——code-review P2-2
-  }
-  await db.execAsync(CREATE_SCHEMA_SQL);
-  const steps = migrationsFor(current === 0 ? 1 : current, SCHEMA_VERSION);
-  for (const stmt of steps) {
-    try {
-      await db.execAsync(stmt);
-    } catch (e) {
-      if (!/duplicate column/i.test(String(e))) throw e;
-    }
-  }
-  // 版本戳只在全部步骤成功后写：半途失败重入时靠 duplicate column 容错续跑
-  await stamp();
-}
 
 /**
  * 懒打开数据库：SQLCipher 密钥就绪后开库（db 落在 expo-sqlite 默认的
@@ -210,6 +99,11 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
       const db = await SQLite.openDatabaseAsync(DB_NAME);
       await db.execAsync(`PRAGMA key = "${key}";`);
       await migrateSchema(db);
+      // v3 外键（ON DELETE SET NULL / CASCADE）必须在每个连接上显式开启；
+      // 迁移期间由 runMigrations 临时关闭，迁移完成后恢复。
+      await db.execAsync('PRAGMA foreign_keys = ON;');
+      // v2 → v3：records 文件从 <file_name> 基名迁移到 <uuid>（幂等，标记后跳过）
+      await ensureRecordFileLayout(db);
       return db;
     })();
     dbPromise = opening;
@@ -450,46 +344,135 @@ export async function setProfile(
   return { ...merged, configured: !isProfileEmpty(merged) };
 }
 
-// ---------------- 训练记录（M1：导入 / 列表 / 详情） ----------------
+// ---------------- 训练记录（v3：uuid 对外身份，file_name 为来源元数据） ----------------
 
-/** 分析结果入库：同一文件名重复分析时覆盖更新（口径与旧版一致） */
-export async function upsertActivity(fileName: string, summary: Summary): Promise<void> {
-  const db = await getDb();
+/** 活动对外身份：32 位小写 hex（形状校验单源在 core/identity） */
+export { isActivityUuid };
+
+/** 生成新活动 uuid（RFC 4122 randomUUID 去连字符 → 32 hex） */
+export function newActivityUuid(): string {
+  return Crypto.randomUUID().replace(/-/g, '').toLowerCase();
+}
+
+/** summary → activities 列值（插入/更新共用，口径与旧 upsert 一致） */
+function activityRowValues(summary: Summary) {
   const a = summary.activity;
   // 无功率数据的运动（跑步/游泳）没有 power 段；类型上以 Partial 放宽（旧版同款运行时口径）
   const p = (summary.power ?? {}) as Partial<NonNullable<Summary['power']>>;
-  await db.runAsync(
-    `INSERT INTO activities
-       (file_name, date, sport, duration_sec, distance_km, elevation_gain_m,
-        tss, np, avg_power, intensity_factor, summary_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(file_name) DO UPDATE SET
-       date = excluded.date,
-       sport = excluded.sport,
-       duration_sec = excluded.duration_sec,
-       distance_km = excluded.distance_km,
-       elevation_gain_m = excluded.elevation_gain_m,
-       tss = excluded.tss,
-       np = excluded.np,
-       avg_power = excluded.avg_power,
-       intensity_factor = excluded.intensity_factor,
-       summary_json = excluded.summary_json`,
-    fileName,
-    a.date,
-    a.sport ?? null,
-    a.duration_sec ?? null,
-    a.distance_km ?? null,
-    a.elevation_gain_m ?? null,
-    p.tss ?? null,
-    p.normalized_power ?? null,
-    p.avg ?? null,
-    p.intensity_factor ?? null,
-    JSON.stringify(summary),
-  );
+  return {
+    date: a.date,
+    sport: a.sport ?? null,
+    duration_sec: a.duration_sec ?? null,
+    distance_km: a.distance_km ?? null,
+    elevation_gain_m: a.elevation_gain_m ?? null,
+    tss: p.tss ?? null,
+    np: p.normalized_power ?? null,
+    avg_power: p.avg ?? null,
+    intensity_factor: p.intensity_factor ?? null,
+    summary_json: JSON.stringify(summary),
+  };
 }
 
-/** 训练清单（含文件名/运动类型/分类，界面列表展示，按日期倒序；口径与旧版 listActivities 一致） */
+/** 新活动入库（身份由本层生成，返回 uuid；同名不再覆盖——导入决策见 core/dedupe） */
+export async function insertActivity(input: {
+  fileName: string;
+  fingerprint: string;
+  source?: string | null;
+  summary: Summary;
+}): Promise<string> {
+  const db = await getDb();
+  const uuid = newActivityUuid();
+  const v = activityRowValues(input.summary);
+  await db.runAsync(
+    `INSERT INTO activities
+       (uuid, file_name, source, fingerprint, date, sport, duration_sec, distance_km,
+        elevation_gain_m, tss, np, avg_power, intensity_factor, summary_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    uuid,
+    input.fileName,
+    input.source ?? null,
+    input.fingerprint,
+    v.date,
+    v.sport,
+    v.duration_sec,
+    v.distance_km,
+    v.elevation_gain_m,
+    v.tss,
+    v.np,
+    v.avg_power,
+    v.intensity_factor,
+    v.summary_json,
+  );
+  return uuid;
+}
+
+/**
+ * 更新已有活动的分析结果（重导入/重算/功率校准共用）：保留 uuid、created_at、
+ * 分类/备注/功率标记；fingerprint 仅在显式提供时更新（重算不改变骑行身份）。
+ */
+export async function updateActivitySummary(
+  uuid: string,
+  summary: Summary,
+  opts?: { fingerprint?: string; lang?: Lang },
+): Promise<void> {
+  const db = await getDb();
+  const v = activityRowValues(summary);
+  const info = await db.runAsync(
+    `UPDATE activities SET
+       date = ?, sport = ?, duration_sec = ?, distance_km = ?, elevation_gain_m = ?,
+       tss = ?, np = ?, avg_power = ?, intensity_factor = ?, summary_json = ?,
+       fingerprint = COALESCE(?, fingerprint)
+     WHERE uuid = ?`,
+    v.date,
+    v.sport,
+    v.duration_sec,
+    v.distance_km,
+    v.elevation_gain_m,
+    v.tss,
+    v.np,
+    v.avg_power,
+    v.intensity_factor,
+    v.summary_json,
+    opts?.fingerprint ?? null,
+    uuid,
+  );
+  if (info.changes === 0) throw new Error(t(opts?.lang ?? 'zh', 'activity.not_found'));
+}
+
+/**
+ * 路由/深链标识 → 活动 uuid：uuid 形状直接校验存在；否则按 file_name 回退
+ * （兼容 v2 时代的 `/activity/<file_name>` 旧链接）。不存在返回 null。
+ */
+export async function resolveActivityUuid(identifier: string): Promise<string | null> {
+  const db = await getDb();
+  if (isActivityUuid(identifier)) {
+    const row = await db.getFirstAsync<{ uuid: string }>(
+      `SELECT uuid FROM activities WHERE uuid = ?`,
+      identifier,
+    );
+    return row?.uuid ?? null;
+  }
+  const row = await db.getFirstAsync<{ uuid: string }>(
+    `SELECT uuid FROM activities WHERE file_name = ? ORDER BY id DESC LIMIT 1`,
+    identifier,
+  );
+  return row?.uuid ?? null;
+}
+
+/** 按 uuid 取来源文件名（服务层向用户/模型转述时用；不存在返回 null） */
+export async function getActivityFileName(uuid: string): Promise<string | null> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ file_name: string }>(
+    `SELECT file_name FROM activities WHERE uuid = ?`,
+    uuid,
+  );
+  return row?.file_name ?? null;
+}
+
+/** 训练清单（含 uuid/file_name/运动类型/分类，界面列表展示，按日期倒序） */
 export interface ActivityListItem {
+  /** 对外稳定身份（路由、列表 key、AI 工具句柄） */
+  uuid: string;
   file_name: string;
   date: string;
   sport: string;
@@ -511,6 +494,7 @@ export const ACTIVITY_LIST_LIMIT = 200;
 export async function listActivities(n: number = ACTIVITY_LIST_LIMIT): Promise<ActivityListItem[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{
+    uuid: string;
     file_name: string;
     date: string;
     sport: string | null;
@@ -524,13 +508,14 @@ export async function listActivities(n: number = ACTIVITY_LIST_LIMIT): Promise<A
     intensity_factor: number | null;
     power_flagged: number | null;
   }>(
-    `SELECT file_name, date, sport, category, duration_sec, distance_km, elevation_gain_m,
+    `SELECT uuid, file_name, date, sport, category, duration_sec, distance_km, elevation_gain_m,
             tss, np, avg_power, intensity_factor, power_flagged
      FROM activities ORDER BY date DESC LIMIT ?`,
     n,
   );
   const r1 = (x: number | null) => (x == null ? null : Math.round(x * 10) / 10);
   return rows.map((r) => ({
+    uuid: r.uuid,
     file_name: r.file_name,
     date: r.date,
     sport: r.sport ?? 'unknown',
@@ -556,6 +541,7 @@ export async function listActivities(n: number = ACTIVITY_LIST_LIMIT): Promise<A
 export async function listActivitiesInRange(fromDay: string, toDay: string): Promise<ActivityListItem[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{
+    uuid: string;
     file_name: string;
     date: string;
     sport: string | null;
@@ -569,7 +555,7 @@ export async function listActivitiesInRange(fromDay: string, toDay: string): Pro
     intensity_factor: number | null;
     power_flagged: number | null;
   }>(
-    `SELECT file_name, date, sport, category, duration_sec, distance_km, elevation_gain_m,
+    `SELECT uuid, file_name, date, sport, category, duration_sec, distance_km, elevation_gain_m,
             tss, np, avg_power, intensity_factor, power_flagged
      FROM activities WHERE date >= ? AND date <= ? ORDER BY date DESC`,
     fromDay,
@@ -577,6 +563,7 @@ export async function listActivitiesInRange(fromDay: string, toDay: string): Pro
   );
   const r1 = (x: number | null) => (x == null ? null : Math.round(x * 10) / 10);
   return rows.map((r) => ({
+    uuid: r.uuid,
     file_name: r.file_name,
     date: r.date,
     sport: r.sport ?? 'unknown',
@@ -592,12 +579,12 @@ export async function listActivitiesInRange(fromDay: string, toDay: string): Pro
   }));
 }
 
-/** 按文件名取单条训练的完整 summary（详情页用），并把 category 与 note 合并进 activity；不存在返回 null */
-export async function getActivitySummary(fileName: string): Promise<Summary | null> {
+/** 按 uuid 取单条训练的完整 summary（详情页用），并把 category 与 note 合并进 activity；不存在返回 null */
+export async function getActivitySummary(uuid: string): Promise<Summary | null> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ summary_json: string; category: string | null; note: string | null }>(
-    `SELECT summary_json, category, note FROM activities WHERE file_name = ?`,
-    fileName,
+    `SELECT summary_json, category, note FROM activities WHERE uuid = ?`,
+    uuid,
   );
   if (!row) return null;
   try {
@@ -625,13 +612,13 @@ export function isValidCategory(category: unknown): boolean {
 }
 
 /** 更新训练分类（训练/比赛/恢复/休闲），非法值或训练不存在抛 Error */
-export async function setActivityCategory(fileName: string, category: string, lang: Lang = 'zh'): Promise<void> {
+export async function setActivityCategory(uuid: string, category: string, lang: Lang = 'zh'): Promise<void> {
   if (!isValidCategory(category)) throw new Error(t(lang, 'category.invalid'));
   const db = await getDb();
   const info = await db.runAsync(
-    `UPDATE activities SET category = ? WHERE file_name = ?`,
+    `UPDATE activities SET category = ? WHERE uuid = ?`,
     category,
-    fileName,
+    uuid,
   );
   if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
 }
@@ -640,15 +627,15 @@ export async function setActivityCategory(fileName: string, category: string, la
 const NOTE_MAX_LEN = 2000;
 
 /** 更新训练备注（空串/纯空白清除）；训练不存在抛 Error */
-export async function setActivityNote(fileName: string, note: string, lang: Lang = 'zh'): Promise<void> {
+export async function setActivityNote(uuid: string, note: string, lang: Lang = 'zh'): Promise<void> {
   const text = String(note ?? '').trim();
   if (text.length > NOTE_MAX_LEN)
     throw new Error(t(lang, 'note.too_long', { n: NOTE_MAX_LEN }));
   const db = await getDb();
   const info = await db.runAsync(
-    `UPDATE activities SET note = ? WHERE file_name = ?`,
+    `UPDATE activities SET note = ? WHERE uuid = ?`,
     text || null,
-    fileName,
+    uuid,
   );
   if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
 }
@@ -662,39 +649,42 @@ export async function setActivityNote(fileName: string, note: string, lang: Lang
  * 训练不存在抛 Error；调用方负责随后触发 rebuildDossierQuietly。
  */
 export async function setActivityPowerFlag(
-  fileName: string,
+  uuid: string,
   flagged: boolean,
   lang: Lang = 'zh',
 ): Promise<void> {
   const db = await getDb();
   const info = await db.runAsync(
-    `UPDATE activities SET power_flagged = ? WHERE file_name = ?`,
+    `UPDATE activities SET power_flagged = ? WHERE uuid = ?`,
     flagged ? 1 : 0,
-    fileName,
+    uuid,
   );
   if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
 }
 
 /** 该骑行是否被标记功率不可信（详情页横幅展示用；不存在返回 false） */
-export async function getActivityPowerFlag(fileName: string): Promise<boolean> {
+export async function getActivityPowerFlag(uuid: string): Promise<boolean> {
   const db = await getDb();
   const row = await db.getFirstAsync<{ power_flagged: number }>(
-    `SELECT power_flagged FROM activities WHERE file_name = ?`,
-    fileName,
+    `SELECT power_flagged FROM activities WHERE uuid = ?`,
+    uuid,
   );
   return !!row?.power_flagged;
 }
 
-// ---------------- 训练记录的去重 / 删除（M5） ----------------
+// ---------------- 训练记录的去重 / 删除 / 合并（M5，v3 改 uuid） ----------------
 
 /**
- * 全表骑行键（含用户数据列）：三处共用——导入查重（core/dedupe 判定）、
- * 数据管理页的重复检查、AI 报告标题取骑行信息。表规模为个人训练量（数百行），
- * 一次全量取回后在内存里比对，比在 SQL 里表达带容差的指纹简洁得多。
+ * 全表骑行键（含用户数据列）：导入查重（core/dedupe.decideImport）、数据管理页的
+ * 重复检查、AI 报告标题取骑行信息共用。表规模为个人训练量（数百行），一次全量
+ * 取回后在内存里比对，比在 SQL 里表达带容差的指纹简洁得多。
+ * id 仅作「最早入库」排序；uuid 是对外身份；fingerprint 供精确重挂。
  */
 export interface ActivityRideKey {
   id: number;
+  uuid: string;
   file_name: string;
+  fingerprint: string;
   date: string;
   sport: string;
   duration_sec: number | null;
@@ -708,7 +698,9 @@ export async function listActivityRideKeys(): Promise<ActivityRideKey[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{
     id: number;
+    uuid: string;
     file_name: string;
+    fingerprint: string;
     date: string;
     sport: string | null;
     duration_sec: number | null;
@@ -716,12 +708,14 @@ export async function listActivityRideKeys(): Promise<ActivityRideKey[]> {
     category: string | null;
     note: string | null;
   }>(
-    `SELECT id, file_name, date, sport, duration_sec, distance_km, category, note
+    `SELECT id, uuid, file_name, fingerprint, date, sport, duration_sec, distance_km, category, note
      FROM activities ORDER BY id ASC`,
   );
   return rows.map((r) => ({
     id: r.id,
+    uuid: r.uuid,
     file_name: r.file_name,
+    fingerprint: r.fingerprint,
     date: r.date,
     sport: r.sport ?? 'unknown',
     duration_sec: r.duration_sec,
@@ -733,61 +727,122 @@ export async function listActivityRideKeys(): Promise<ActivityRideKey[]> {
 
 /**
  * 删除单条训练（行 + 分类/备注随之消失），返回删除条数（0 = 不存在）。
- * 逐秒 records 文件与 AI 引用不在本层处理——前者由 records-store 删，后者按
- * 「报告保留」口径原样留着（引用指向已删训练时标题会退化为「训练已删除」）。
+ * 删除前把活动指纹覆盖到报告/对话引用上——外键 ON DELETE SET NULL
+ * 会把 uuid 清空，但指纹留下，重新导入同一趟骑行时才能自动重挂（v3）。
+ * 逐秒 records 文件不在本层处理（调用方按 uuid 删）。
  */
-export async function deleteActivity(fileName: string): Promise<number> {
+export async function deleteActivity(uuid: string): Promise<number> {
   const db = await getDb();
-  const info = await db.runAsync(`DELETE FROM activities WHERE file_name = ?`, fileName);
-  return info.changes;
+  let changes = 0;
+  await db.withTransactionAsync(async () => {
+    const row = await db.getFirstAsync<{ fingerprint: string }>(
+      `SELECT fingerprint FROM activities WHERE uuid = ?`,
+      uuid,
+    );
+    if (!row) return;
+    await db.runAsync(
+      `UPDATE ai_reports SET activity_fingerprint = ? WHERE activity_uuid = ?`,
+      row.fingerprint,
+      uuid,
+    );
+    await db.runAsync(
+      `UPDATE ai_reports SET compare_fingerprint = ? WHERE compare_uuid = ?`,
+      row.fingerprint,
+      uuid,
+    );
+    await db.runAsync(
+      `UPDATE ai_chats SET activity_fingerprint = ? WHERE activity_uuid = ?`,
+      row.fingerprint,
+      uuid,
+    );
+    const info = await db.runAsync(`DELETE FROM activities WHERE uuid = ?`, uuid);
+    changes = info.changes;
+  });
+  return changes;
 }
 
 /**
- * 合并重复记录时把 AI 引用改指保留项（报告与对话的 file_name、报告的第二趟
- * compare_with 都是无外键的松散引用）：不迁移的话，删掉副本会让原本挂在副本名下的
- * 报告变成"孤儿"——对比报告还会因 compare_with 指向已删训练而在重新生成时取不到数据。
- * 返回改动的报告数（对话引用一并改）。
+ * 孤儿报告/对话自动重挂：活动删除后引用变 NULL 但指纹留下；同一趟骑行重新导入
+ * （新 uuid）后，按精确指纹把悬空引用挂回新活动。返回重挂的引用条数。
  */
-export async function retargetActivityRefs(fromFileName: string, toFileName: string): Promise<number> {
+export async function reattachOrphanRefs(fingerprint: string, uuid: string): Promise<number> {
+  if (!fingerprint) return 0;
   const db = await getDb();
-  const reports = await db.runAsync(
-    `UPDATE ai_reports SET file_name = ? WHERE file_name = ?`,
-    toFileName,
-    fromFileName,
-  );
-  await db.runAsync(
-    `UPDATE ai_reports SET compare_with = ? WHERE compare_with = ?`,
-    toFileName,
-    fromFileName,
-  );
-  await db.runAsync(`UPDATE ai_chats SET file_name = ? WHERE file_name = ?`, toFileName, fromFileName);
-  return reports.changes;
+  let total = 0;
+  await db.withTransactionAsync(async () => {
+    for (const sql of [
+      `UPDATE ai_reports SET activity_uuid = ?
+       WHERE activity_uuid IS NULL AND activity_fingerprint = ?`,
+      `UPDATE ai_reports SET compare_uuid = ?
+       WHERE compare_uuid IS NULL AND compare_fingerprint = ?`,
+      `UPDATE ai_chats SET activity_uuid = ?
+       WHERE activity_uuid IS NULL AND activity_fingerprint = ?`,
+    ]) {
+      const info = await db.runAsync(sql, uuid, fingerprint);
+      total += info.changes;
+    }
+  });
+  return total;
 }
 
 /**
- * 合并重复前把副本上的用户数据补给保留项：仅在保留项仍为默认值时才接管
- * （分类仍为 training、备注为空），不覆盖用户已经设过的值。
+ * 合并重复的 DB 侧原子操作（extras → 引用重挂 → 删副本，一个事务）：
+ * 任一步失败整体回滚，避免「引用已改、行未删」的中间态。records 文件由调用方在
+ * 事务前后用 uuid 处理（复制在前、删除在后）。
+ * 返回被重挂的报告数。
  */
-export async function mergeActivityExtras(keepFileName: string, dropFileName: string): Promise<void> {
+export async function mergeActivityRows(keepUuid: string, dropUuid: string): Promise<number> {
   const db = await getDb();
-  const drop = await db.getFirstAsync<{ category: string | null; note: string | null; power_flagged: number }>(
-    `SELECT category, note, power_flagged FROM activities WHERE file_name = ?`,
-    dropFileName,
-  );
-  if (!drop) return;
-  await db.runAsync(
-    `UPDATE activities SET
-       category = CASE WHEN ? <> 'training' AND category = 'training' THEN ? ELSE category END,
-       note     = CASE WHEN ? IS NOT NULL AND (note IS NULL OR note = '') THEN ? ELSE note END,
-       power_flagged = CASE WHEN ? = 1 THEN 1 ELSE power_flagged END
-     WHERE file_name = ?`,
-    drop.category ?? 'training',
-    drop.category ?? 'training',
-    drop.note,
-    drop.note,
-    drop.power_flagged,
-    keepFileName,
-  );
+  let reports = 0;
+  await db.withTransactionAsync(async () => {
+    const drop = await db.getFirstAsync<{ fingerprint: string; category: string | null; note: string | null; power_flagged: number }>(
+      `SELECT fingerprint, category, note, power_flagged FROM activities WHERE uuid = ?`,
+      dropUuid,
+    );
+    if (!drop) return;
+    await db.runAsync(
+      `UPDATE activities SET
+         category = CASE WHEN ? <> 'training' AND category = 'training' THEN ? ELSE category END,
+         note     = CASE WHEN ? IS NOT NULL AND (note IS NULL OR note = '') THEN ? ELSE note END,
+         power_flagged = CASE WHEN ? = 1 THEN 1 ELSE power_flagged END
+       WHERE uuid = ?`,
+      drop.category ?? 'training',
+      drop.category ?? 'training',
+      drop.note,
+      drop.note,
+      drop.power_flagged,
+      keepUuid,
+    );
+    const keepFp = await db.getFirstAsync<{ fingerprint: string }>(
+      `SELECT fingerprint FROM activities WHERE uuid = ?`,
+      keepUuid,
+    );
+    if (!keepFp) throw new Error(t('zh', 'activity.not_found'));
+    const moved = await db.runAsync(
+      `UPDATE ai_reports SET activity_uuid = ?, activity_fingerprint = ?
+       WHERE activity_uuid = ?`,
+      keepUuid,
+      keepFp.fingerprint,
+      dropUuid,
+    );
+    reports = moved.changes;
+    await db.runAsync(
+      `UPDATE ai_reports SET compare_uuid = ?, compare_fingerprint = ?
+       WHERE compare_uuid = ?`,
+      keepUuid,
+      keepFp.fingerprint,
+      dropUuid,
+    );
+    await db.runAsync(
+      `UPDATE ai_chats SET activity_uuid = ?, activity_fingerprint = ?
+       WHERE activity_uuid = ?`,
+      keepUuid,
+      keepFp.fingerprint,
+      dropUuid,
+    );
+    await db.runAsync(`DELETE FROM activities WHERE uuid = ?`, dropUuid);
+  });
+  return reports;
 }
 
 
@@ -850,13 +905,14 @@ export async function cyclingSummariesSince(days = 42): Promise<CyclingRideInput
   since.setUTCDate(since.getUTCDate() - days);
   const sinceStr = since.toISOString().slice(0, 10);
   const rows = await db.getAllAsync<{
+    uuid: string;
     file_name: string;
     date: string;
     duration_sec: number | null;
     power_flagged: number;
     summary_json: string;
   }>(
-    `SELECT file_name, date, duration_sec, power_flagged, summary_json
+    `SELECT uuid, file_name, date, duration_sec, power_flagged, summary_json
      FROM activities
      WHERE sport = 'cycling' AND date >= ?
      ORDER BY date DESC`,
@@ -866,6 +922,7 @@ export async function cyclingSummariesSince(days = 42): Promise<CyclingRideInput
   for (const r of rows) {
     try {
       out.push({
+        uuid: r.uuid,
         file_name: r.file_name,
         date: r.date,
         duration_sec: r.duration_sec,
@@ -941,6 +998,13 @@ export async function listActivityFileNames(): Promise<string[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<{ file_name: string }>('SELECT file_name FROM activities');
   return rows.map((r) => r.file_name);
+}
+
+/** 全部活动 uuid（备份导出按它过滤 records 孤儿文件） */
+export async function listActivityUuids(): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ uuid: string }>('SELECT uuid FROM activities');
+  return rows.map((r) => r.uuid);
 }
 
 // ---------------- AI 服务配置（settings 表 ai 行 + SecureStore 存密钥，M3） ----------------
@@ -1047,27 +1111,29 @@ export async function setAiConfig(
 
 export type AiReportMode = 'review' | 'plan' | 'taper' | 'compare';
 
-/** 报告上下文（场景参数）：review 带文件名、taper 带比赛日期、compare 带对比文件 */
+/** 报告上下文（场景参数）：review 带活动 uuid、taper 带比赛日期、compare 带对比活动 uuid */
 export interface AiReportContext {
-  file_name?: string | null;
+  activity_uuid?: string | null;
   race_date?: string | null;
-  compare_with?: string | null;
+  compare_uuid?: string | null;
 }
 
 /** 报告列表项（不含 prompt/markdown 正文，列表页用） */
 export interface AiReportListItem {
   id: number;
   mode: AiReportMode;
-  file_name: string | null;
+  activity_uuid: string | null;
   race_date: string | null;
-  compare_with: string | null;
+  compare_uuid: string | null;
   status: string;
   error: string | null;
   created_at: string;
 }
 
-/** 完整报告行（含 prompt + markdown） */
+/** 完整报告行（含 prompt + markdown + 重挂指纹） */
 export interface AiReportRow extends AiReportListItem {
+  activity_fingerprint: string | null;
+  compare_fingerprint: string | null;
   prompt: string;
   markdown: string;
 }
@@ -1081,12 +1147,19 @@ export async function saveAiReport(
 ): Promise<number> {
   const db = await getDb();
   const info = await db.runAsync(
-    `INSERT INTO ai_reports (mode, file_name, race_date, compare_with, prompt, markdown, status)
-     VALUES (?, ?, ?, ?, ?, ?, 'completed')`,
+    `INSERT INTO ai_reports
+       (mode, activity_uuid, race_date, compare_uuid,
+        activity_fingerprint, compare_fingerprint, prompt, markdown, status)
+     VALUES (?, ?, ?, ?,
+             (SELECT fingerprint FROM activities WHERE uuid = ?),
+             (SELECT fingerprint FROM activities WHERE uuid = ?),
+             ?, ?, 'completed')`,
     mode,
-    context?.file_name ?? null,
+    context?.activity_uuid ?? null,
     context?.race_date ?? null,
-    context?.compare_with ?? null,
+    context?.compare_uuid ?? null,
+    context?.activity_uuid ?? null,
+    context?.compare_uuid ?? null,
     prompt ?? '',
     markdown ?? '',
   );
@@ -1103,12 +1176,19 @@ export async function createPendingAiReport(
 ): Promise<number> {
   const db = await getDb();
   const info = await db.runAsync(
-    `INSERT INTO ai_reports (mode, file_name, race_date, compare_with, prompt, markdown, status)
-     VALUES (?, ?, ?, ?, ?, '', 'pending')`,
+    `INSERT INTO ai_reports
+       (mode, activity_uuid, race_date, compare_uuid,
+        activity_fingerprint, compare_fingerprint, prompt, markdown, status)
+     VALUES (?, ?, ?, ?,
+             (SELECT fingerprint FROM activities WHERE uuid = ?),
+             (SELECT fingerprint FROM activities WHERE uuid = ?),
+             ?, '', 'pending')`,
     mode,
-    context?.file_name ?? null,
+    context?.activity_uuid ?? null,
     context?.race_date ?? null,
-    context?.compare_with ?? null,
+    context?.compare_uuid ?? null,
+    context?.activity_uuid ?? null,
+    context?.compare_uuid ?? null,
     prompt ?? '',
   );
   const id = Number(info.lastInsertRowId);
@@ -1174,12 +1254,12 @@ export async function listAiReports(
   const rows =
     mode === 'all'
       ? await db.getAllAsync<AiReportListItem & { prompt: string; markdown: string }>(
-          `SELECT id, mode, file_name, race_date, compare_with, status, error, created_at
+          `SELECT id, mode, activity_uuid, race_date, compare_uuid, status, error, created_at
            FROM ai_reports ORDER BY id DESC LIMIT ?`,
           n,
         )
       : await db.getAllAsync<AiReportListItem & { prompt: string; markdown: string }>(
-          `SELECT id, mode, file_name, race_date, compare_with, status, error, created_at
+          `SELECT id, mode, activity_uuid, race_date, compare_uuid, status, error, created_at
            FROM ai_reports WHERE mode = ? ORDER BY id DESC LIMIT ?`,
           mode,
           n,
@@ -1187,9 +1267,9 @@ export async function listAiReports(
   return rows.map((r) => ({
     id: r.id,
     mode: r.mode,
-    file_name: r.file_name,
+    activity_uuid: r.activity_uuid,
     race_date: r.race_date,
-    compare_with: r.compare_with,
+    compare_uuid: r.compare_uuid,
     status: r.status,
     error: r.error,
     created_at: r.created_at,
@@ -1207,28 +1287,37 @@ export async function getAiReport(id: number): Promise<AiReportRow | null> {
 
 /**
  * 某次训练的最新 review 报告（训练详情页内嵌展示用，口径同 Web 版
- * views/activities.js：按 file_name 过滤 review 列表取最新一条，含 pending/failed）。
+ * views/activities.js：按活动 uuid 过滤 review 列表取最新一条，含 pending/failed）。
  */
-export async function getLatestReviewReport(fileName: string): Promise<AiReportRow | null> {
+export async function getLatestReviewReport(activityUuid: string): Promise<AiReportRow | null> {
   const db = await getDb();
   const row = await db.getFirstAsync<
     AiReportListItem & { prompt: string; markdown: string }
   >(
-    `SELECT * FROM ai_reports WHERE mode = 'review' AND file_name = ?
+    `SELECT * FROM ai_reports WHERE mode = 'review' AND activity_uuid = ?
      ORDER BY id DESC LIMIT 1`,
-    fileName,
+    activityUuid,
   );
   return row ? toAiReportRow(row) : null;
 }
 
 /** ai_reports 行 → AiReportRow（SELECT * 或列裁剪结果皆可） */
-function toAiReportRow(row: AiReportListItem & { prompt: string; markdown: string }): AiReportRow {
+function toAiReportRow(
+  row: AiReportListItem & {
+    prompt: string;
+    markdown: string;
+    activity_fingerprint?: string | null;
+    compare_fingerprint?: string | null;
+  },
+): AiReportRow {
   return {
     id: row.id,
     mode: row.mode,
-    file_name: row.file_name,
+    activity_uuid: row.activity_uuid,
     race_date: row.race_date,
-    compare_with: row.compare_with,
+    compare_uuid: row.compare_uuid,
+    activity_fingerprint: row.activity_fingerprint ?? null,
+    compare_fingerprint: row.compare_fingerprint ?? null,
     prompt: row.prompt,
     markdown: row.markdown,
     status: row.status,
@@ -1263,7 +1352,8 @@ export interface AiChatListItem {
   id: number;
   mode: AiChatMode;
   report_id: number | null;
-  file_name: string | null;
+  /** 追问锚定的活动（v3；活动删除后置 NULL，靠 activity_fingerprint 重挂） */
+  activity_uuid: string | null;
   title: string | null;
   message_count: number;
   has_pending: boolean;
@@ -1288,19 +1378,22 @@ export interface AiChatRow extends Omit<AiChatListItem, 'message_count' | 'has_p
 }
 
 /**
- * 创建 AI 对话（mode: follow_up 报告追问 / chat 直接对话），返回 id。
+ * 创建 AI 对话（mode: follow_up 报告追问 / chat 直接对话 / plan 计划会话），返回 id。
  * 每个 mode 仅保留最近 50 个对话，超出的旧对话连同其全部消息一起删除（级联）。
+ * activity_uuid 非空时一并落活动指纹（删除后重挂用）。
  */
 export async function createAiChat(
   mode: AiChatMode,
-  meta: { report_id?: number | null; file_name?: string | null; title?: string | null } = {},
+  meta: { report_id?: number | null; activity_uuid?: string | null; title?: string | null } = {},
 ): Promise<number> {
   const db = await getDb();
   const info = await db.runAsync(
-    `INSERT INTO ai_chats (mode, report_id, file_name, title) VALUES (?, ?, ?, ?)`,
+    `INSERT INTO ai_chats (mode, report_id, activity_uuid, activity_fingerprint, title)
+     VALUES (?, ?, ?, (SELECT fingerprint FROM activities WHERE uuid = ?), ?)`,
     mode,
     meta.report_id ?? null,
-    meta.file_name ?? null,
+    meta.activity_uuid ?? null,
+    meta.activity_uuid ?? null,
     meta.title ?? null,
   );
   const id = Number(info.lastInsertRowId);
@@ -1402,14 +1495,14 @@ export async function listAiChats(mode: AiChatMode, n = AI_CHAT_KEEP): Promise<A
     id: number;
     mode: AiChatMode;
     report_id: number | null;
-    file_name: string | null;
+    activity_uuid: string | null;
     title: string | null;
     message_count: number;
     has_pending: number;
     created_at: string;
     updated_at: string;
   }>(
-    `SELECT c.id, c.mode, c.report_id, c.file_name, c.title, c.created_at, c.updated_at,
+    `SELECT c.id, c.mode, c.report_id, c.activity_uuid, c.title, c.created_at, c.updated_at,
             (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.chat_id = c.id) AS message_count,
             EXISTS(SELECT 1 FROM ai_chat_messages m
                    WHERE m.chat_id = c.id AND m.status = 'pending') AS has_pending
@@ -1422,7 +1515,7 @@ export async function listAiChats(mode: AiChatMode, n = AI_CHAT_KEEP): Promise<A
     id: r.id,
     mode: r.mode,
     report_id: r.report_id,
-    file_name: r.file_name,
+    activity_uuid: r.activity_uuid,
     title: r.title,
     message_count: r.message_count,
     has_pending: !!r.has_pending,
@@ -1438,7 +1531,7 @@ export async function getAiChat(id: number): Promise<AiChatRow | null> {
     id: number;
     mode: AiChatMode;
     report_id: number | null;
-    file_name: string | null;
+    activity_uuid: string | null;
     title: string | null;
     created_at: string;
     updated_at: string;
@@ -1453,7 +1546,7 @@ export async function getAiChat(id: number): Promise<AiChatRow | null> {
     id: row.id,
     mode: row.mode,
     report_id: row.report_id,
-    file_name: row.file_name,
+    activity_uuid: row.activity_uuid,
     title: row.title,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -1742,6 +1835,7 @@ export async function getDossier(): Promise<AthleteDossier | null> {
 async function loadDossierRides() {
   const db = await getDb();
   const rows = await db.getAllAsync<{
+    uuid: string;
     file_name: string;
     date: string;
     sport: string | null;
@@ -1750,7 +1844,7 @@ async function loadDossierRides() {
     power_flagged: number;
     summary_json: string;
   }>(
-    `SELECT file_name, date, sport, duration_sec, tss, power_flagged, summary_json
+    `SELECT uuid, file_name, date, sport, duration_sec, tss, power_flagged, summary_json
      FROM activities WHERE sport = 'cycling'
      ORDER BY date ASC, id ASC`,
   );
@@ -1762,6 +1856,7 @@ async function loadDossierRides() {
       // 存档 JSON 损坏：该行按无 summary 参与（只进时长/计数口径）
     }
     return {
+      uuid: r.uuid,
       file_name: r.file_name,
       date: r.date,
       sport: r.sport ?? 'unknown',

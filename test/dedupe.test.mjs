@@ -10,14 +10,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  decideImport,
   findDuplicateGroups,
-  findDuplicateOf,
   hasPositiveDistance,
   isSameRide,
   RIDE_DISTANCE_TOLERANCE_KM,
   RIDE_DURATION_TOLERANCE_SEC,
   RIDE_START_TOLERANCE_SEC,
+  rideFingerprint,
 } from '../src/core/dedupe.ts';
+
+/** 活动 uuid 夹具（32 hex） */
+const uid = (c) => c.repeat(32);
 
 /** 骑行键夹具（默认：2026-09-20 的一趟 1 小时 / 30km 骑行） */
 const ride = (overrides = {}) => ({
@@ -126,10 +130,76 @@ test('findDuplicateGroups：室内重复组按起骑时刻归组', () => {
   assert.deepEqual(groups[0].map((r) => r.file_name), ['a.fit', 'b.fit']);
 });
 
-test('findDuplicateOf：室内异名同起骑时刻让路，同名仍走 upsert', () => {
-  const rows = [{ file_name: 'lib.fit', ...indoor() }];
-  assert.equal(findDuplicateOf({ file_name: 'new.fit', ...indoor({ start_at: '2026-09-20T10:00:20Z' }) }, rows), 'lib.fit');
-  assert.equal(findDuplicateOf({ file_name: 'lib.fit', ...indoor({ start_at: '2026-09-20T18:00:00Z' }) }, rows), null);
+// ---------------- 导入决策（v3：uuid 身份 + 同名不覆盖） ----------------
+
+/** 库内行：带 uuid/file_name/fingerprint */
+const libRow = (c, overrides = {}) => {
+  const r = { ...ride(), file_name: `${c}.fit`, ...overrides };
+  return { uuid: uid(c), ...r, fingerprint: rideFingerprint(r) };
+};
+
+/** 候选：带 file_name/fingerprint */
+const candidate = (fileName, overrides = {}) => {
+  const r = { ...ride(), file_name: fileName, ...overrides };
+  return { ...r, fingerprint: rideFingerprint(r) };
+};
+
+test('decideImport: 异名但指纹精确一致 → 更新库内已有活动（保留其 uuid）', () => {
+  const rows = [libRow('a', { file_name: '云端名.fit' })];
+  assert.deepEqual(decideImport(candidate('本地名.fit'), rows), {
+    action: 'update',
+    uuid: uid('a'),
+    file_name: '云端名.fit',
+  });
+});
+
+test('decideImport: 同名且判为同趟骑行（指纹有容差差异）→ 更新同名行', () => {
+  const rows = [libRow('a', { file_name: 'ride.fit' })];
+  assert.equal(decideImport(candidate('ride.fit', { duration_sec: 3601 }), rows).action, 'update');
+});
+
+test('decideImport: 异名同趟骑行（指纹不精确但容差内）→ 跳过', () => {
+  const rows = [libRow('a', { file_name: '云端名.fit' })];
+  assert.deepEqual(decideImport(candidate('本地名.fit', { duration_sec: 3599 }), rows), {
+    action: 'skip',
+    uuid: uid('a'),
+    file_name: '云端名.fit',
+  });
+});
+
+test('decideImport: 同名但不同趟骑行 → 插入新行（v3 不再静默覆盖）', () => {
+  const rows = [libRow('a', { file_name: 'ride.fit' })];
+  assert.deepEqual(decideImport(candidate('ride.fit', { date: '2026-09-19' }), rows), { action: 'insert' });
+});
+
+test('decideImport: 同名多行时精确指纹优先选中真正的那一趟', () => {
+  const rows = [
+    libRow('a', { file_name: 'same.fit', date: '2026-09-18' }),
+    libRow('b', { file_name: 'same.fit' }),
+  ];
+  assert.deepEqual(decideImport(candidate('same.fit'), rows), {
+    action: 'update',
+    uuid: uid('b'),
+    file_name: 'same.fit',
+  });
+});
+
+test('decideImport: 无匹配 → 插入；空库也插入', () => {
+  assert.deepEqual(decideImport(candidate('new.fit'), []), { action: 'insert' });
+  assert.deepEqual(
+    decideImport(candidate('new.fit'), [libRow('a', { date: '2026-09-19' })]),
+    { action: 'insert' },
+  );
+});
+
+test('rideFingerprint: 户外只含日期/时长/米（与迁移回填一致），室内追加起骑时刻', () => {
+  assert.equal(rideFingerprint(ride()), '2026-09-20|3600|30000');
+  assert.equal(rideFingerprint(ride({ distance_km: null })), '2026-09-20|3600|');
+  assert.equal(rideFingerprint(indoor()), `2026-09-20|3600||${INDOOR_START}`);
+  assert.notEqual(
+    rideFingerprint(indoor()),
+    rideFingerprint(indoor({ start_at: '2026-09-20T18:00:00.000Z' })),
+  );
 });
 
 test('isSameRide: 空日期（未解析出行车时间）不判重', () => {
@@ -184,23 +254,18 @@ test('findDuplicateGroups: 多组重复分别成组且保持入参顺序', () =>
   assert.deepEqual(groups[1].map((r) => r.file_name), ['e1.fit', 'e2.fit']);
 });
 
-test('findDuplicateOf: 异名同指纹命中，返回库内已有的文件名', () => {
-  const rows = [{ file_name: '云端名.fit', ...ride() }];
-  assert.equal(findDuplicateOf({ file_name: '本地名.fit', ...ride() }, rows), '云端名.fit');
-  // 不同趟骑行（日期/时长/距离不在容差内）不拦
-  assert.equal(findDuplicateOf({ file_name: '新.fit', ...ride({ date: '2026-09-19' }) }, rows), null);
-  assert.equal(findDuplicateOf({ file_name: '新.fit', ...ride({ duration_sec: 1800 }) }, rows), null);
-  assert.equal(findDuplicateOf({ file_name: '新.fit', ...ride() }, []), null);
-});
-
-test('findDuplicateOf: 同名优先走 upsert 覆盖，不被异名副本顶掉', () => {
-  // 库里同时有手动导入的同名行与云同步副本（本 feature 要解决的并存态）
-  const rows = [
-    { file_name: 'ride.fit', ...ride() },
-    { file_name: 'mock-ride.fit', ...ride({ duration_sec: 3599 }) },
-  ];
-  // 再次导入 ride.fit：必须返回 null（走 upsert 更新），而不是指向 mock-ride.fit 被跳过
-  assert.equal(findDuplicateOf({ file_name: 'ride.fit', ...ride() }, rows), null);
-  // 导入第三个异名副本：仍按重复拦下（让用户去数据管理页合并，而不是越积越多）
-  assert.equal(findDuplicateOf({ file_name: 'third.fit', ...ride() }, rows), 'ride.fit');
+test('decideImport: 室内异名同起骑时刻 → 跳过；同名不同场次 → 插入新行', () => {
+  const rows = [{ uuid: uid('a'), file_name: 'lib.fit', ...indoor(), fingerprint: rideFingerprint(indoor()) }];
+  assert.equal(
+    decideImport(
+      { file_name: 'new.fit', ...indoor({ start_at: '2026-09-20T10:00:20Z' }), fingerprint: rideFingerprint(indoor({ start_at: '2026-09-20T10:00:20Z' })) },
+      rows,
+    ).action,
+    'skip',
+  );
+  const later = indoor({ start_at: '2026-09-20T18:00:00Z' });
+  assert.deepEqual(
+    decideImport({ file_name: 'lib.fit', ...later, fingerprint: rideFingerprint(later) }, rows),
+    { action: 'insert' },
+  );
 });

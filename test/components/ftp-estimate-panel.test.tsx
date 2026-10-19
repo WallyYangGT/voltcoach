@@ -45,7 +45,7 @@ function okResult(over: Partial<FtpEstimationResult> = {}): FtpEstimationResult 
       diff_w: 40,
       methods: {
         cp_model: null,
-        coggan_20min: { ftp_w: 260, peak_20min_w: 274, date: '2026-09-01', file_name: 'a.fit' },
+        coggan_20min: { ftp_w: 260, peak_20min_w: 274, date: '2026-09-01', uuid: 'a'.repeat(32), file_name: 'a.fit' },
         hr_check: {
           maximal_effort: true,
           best20_max_hr: 178,

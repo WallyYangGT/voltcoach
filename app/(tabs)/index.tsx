@@ -151,8 +151,8 @@ export default function HomeScreen() {
     : [];
   const labelNames = [
     ...new Set([
-      ...(data?.recent ?? []).map((r) => r.file_name),
-      ...healthCandidates.map((r) => r.file_name),
+      ...(data?.recent ?? []).map((r) => r.uuid),
+      ...healthCandidates.map((r) => r.uuid),
     ]),
   ];
   const dateLabels = useRideDateLabels(labelNames);
@@ -160,7 +160,7 @@ export default function HomeScreen() {
   const healthSummary = isAmateur
     ? summarizeWeeklyActivity(
         healthCandidates.map((r) => ({
-          date: dateLabels.get(r.file_name) ?? r.date,
+          date: dateLabels.get(r.uuid) ?? r.date,
           duration_sec: r.duration_sec,
           intensity_factor: r.intensity_factor,
           tss: r.tss,
@@ -176,7 +176,7 @@ export default function HomeScreen() {
   // 行级本地日的唯一瞬间源是 records 首帧（dateLabels 正是它的换算），标签未解析
   // 完成时回退存储 UTC 日比对（§24 展示层同款回退）
   const trainedToday = (data?.recent ?? []).some(
-    (r) => (dateLabels.has(r.file_name) ? dateLabels.get(r.file_name) : r.date) === today,
+    (r) => (dateLabels.has(r.uuid) ? dateLabels.get(r.uuid) : r.date) === today,
   );
 
   return (
@@ -291,16 +291,16 @@ export default function HomeScreen() {
         {data?.recent.length ? (
           data.recent.map((item) => (
             <Pressable
-              key={item.file_name}
+              key={item.uuid}
               style={({ pressed }) => [styles.recentRow, pressed && { opacity: 0.7 }]}
               onPress={() =>
                 router.push({
                   pathname: '/activity/[id]',
-                  params: { id: encodeURIComponent(item.file_name) },
+                  params: { id: encodeURIComponent(item.uuid) },
                 })
               }>
               <View style={styles.recentTop}>
-                <Text style={styles.recentDate}>{dateLabels.get(item.file_name) ?? item.date}</Text>
+                <Text style={styles.recentDate}>{dateLabels.get(item.uuid) ?? item.date}</Text>
                 <View style={styles.badges}>
                   <Text style={[styles.recentSport, item.category === 'race' && { color: palette.volt }]}>
                     {t(`cat.${item.category}` as never)}

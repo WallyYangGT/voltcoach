@@ -11,6 +11,7 @@
 
 import { ungzip } from 'pako';
 import type { SecRecord } from './analyze.ts';
+import { isActivityUuid } from './identity.ts';
 
 /** 抽稀后的时序点（图表/AI 工具的消费格式，与旧版 /api/records 输出字段一致） */
 export interface RecordPoint {
@@ -107,6 +108,55 @@ export function safeName(name: unknown): string | null {
   if (!name || typeof name !== 'string') return null;
   const base = name.split(/[\\/]/).pop() ?? name;
   return base === name && !base.includes('..') && base.length > 0 ? base : null;
+}
+
+// ---------------- 文件布局（v3：records 以活动 uuid 命名，迁移逻辑纯函数） ----------------
+
+/** records 存储基名是否为活动 uuid（与 db 身份同一形状，单源在 core/identity） */
+export function isActivityRecordBase(base: unknown): base is string {
+  return isActivityUuid(base);
+}
+
+/** 旧布局（v2 及以前）的活动文件名 → records 基名（去最后一个扩展名） */
+export function recordBaseFromFileName(fileName: string): string | null {
+  const safe = safeName(fileName);
+  if (!safe) return null;
+  return safe.replace(/\.[^.]+$/, '');
+}
+
+/** records 目录布局迁移计划（纯函数；执行侧只做 IO） */
+export interface RecordLayoutPlan {
+  /** 旧基名 → uuid 的复制（多条活动共享同一旧基名时会出现多条） */
+  copies: { from: string; to: string }[];
+  /** 全部复制完成后可删除的旧基名（不是任何活动的 uuid 目标） */
+  deletes: string[];
+}
+
+/**
+ * 计算 v2 → v3 records 布局迁移计划：
+ *  - 目标 `<uuid>` 已存在 → 不复制（幂等重跑）；
+ *  - 目标缺失且旧基名文件存在 → 复制（复制而非改名：`ride.fit`/`ride.FIT` 在旧
+ *    布局下会落到同一个 `ride` 基名，直接 rename 会丢掉其中一条）；
+ *  - 迁移完成后删除不再被任何活动 uuid 引用的旧基名；孤儿文件（无活动引用）不动。
+ */
+export function planRecordLayout(
+  activities: { uuid: string; file_name: string }[],
+  existingBases: string[],
+): RecordLayoutPlan {
+  const existing = new Set(existingBases);
+  const targets = new Set<string>();
+  const oldBases = new Set<string>();
+  const copies: { from: string; to: string }[] = [];
+  for (const a of activities) {
+    if (!isActivityRecordBase(a.uuid)) continue; // 防御：非法身份不参与改名
+    targets.add(a.uuid);
+    const old = recordBaseFromFileName(a.file_name);
+    if (!old || old === a.uuid) continue;
+    oldBases.add(old);
+    if (!existing.has(a.uuid) && existing.has(old)) copies.push({ from: old, to: a.uuid });
+  }
+  const deletes = [...oldBases].filter((b) => existing.has(b) && !targets.has(b)).sort();
+  return { copies, deletes };
 }
 
 // ---------------- 首帧时间戳（起骑时刻，M5：AI 报告标题用） ----------------
