@@ -21,7 +21,8 @@
  *   MOCK_CHUNK_DELAY_MS=N —— 流式块间隔毫秒数（默认 30），放慢观察增量落库实时预览与取消窗口。
  *   MOCK_TOOL_SCRIPT=ftp —— M5 FTP 剧本：estimate_ftp → update_ftp → reanalyze_activity
  *   （目标文件用 MOCK_REANALYZE_FILE=<file_name> 指定）三轮工具后回正文，
- *   用于「AI 更新 FTP + 重新分析」端到端冒烟。
+ *   用于「AI 更新 FTP + 重新分析」端到端冒烟。MOCK_FTP_WATTS=N 时 update_ftp
+ *   带 ftp_watts=N（演练「估算区间内自选 → 夹逼」路径；不设则缺省取两法均值）。
  *   MOCK_TOOL_SCRIPT=plan —— v2 计划剧本：get_training_plan → 末轮正文附
  *   ```plan-json 块（3 周基础期，过 App 侧确定性校验），用于「周期规划 → 计划落库」冒烟。
  *   MOCK_TOOL_SCRIPT=plan_adjust —— 计划会话调整剧本：get_training_plan →
@@ -62,6 +63,8 @@ const CHUNK_DELAY_MS = Number(process.env.MOCK_CHUNK_DELAY_MS || 30); // 流式�
 // 三轮后回正文。用于「AI 更新 FTP + 重新分析」端到端冒烟。
 const TOOL_SCRIPT = process.env.MOCK_TOOL_SCRIPT || '';
 const REANALYZE_FILE = process.env.MOCK_REANALYZE_FILE || '';
+// MOCK_FTP_WATTS：update_ftp 的自选值（不设 = 缺省两法均值；设了走区间夹逼路径）
+const FTP_WATTS = process.env.MOCK_FTP_WATTS ? Number(process.env.MOCK_FTP_WATTS) : null;
 const FTP_REPLY =
   '已检查你的 FTP 数据：窗口内骑行功率-心率交叉验证通过，' +
   'FTP 已按当前最佳估算更新，并已对目标训练按新参数重新分析，TSS 与区间分布已对齐。';
@@ -334,7 +337,7 @@ const server = http.createServer((req, res) => {
       const toolMsgCount = (parsed.messages ?? []).filter((m) => m.role === 'tool').length;
       const plan = [
         { name: 'estimate_ftp', args: {} },
-        { name: 'update_ftp', args: {} },
+        { name: 'update_ftp', args: FTP_WATTS != null && Number.isFinite(FTP_WATTS) ? { ftp_watts: FTP_WATTS } : {} },
         { name: 'reanalyze_activity', args: { file_name: REANALYZE_FILE } },
       ];
       if (toolMsgCount < plan.length) {

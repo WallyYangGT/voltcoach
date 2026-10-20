@@ -107,6 +107,31 @@ describe('AiFtpUpdateBanner', () => {
     expect(undoAiFtpUpdate).not.toHaveBeenCalled();
   });
 
+  it('快照带区间自选（requested_w + 区间）：披露「在估算区间内自选」', async () => {
+    // 2026-10-20：自选与默认均值两种更新文案分开；自选值落在区间内且等于最终值
+    const chosen = { ...snap, new_ftp_w: 258, requested_w: 258, range_low_w: 250, range_high_w: 262 };
+    const { getByText } = await renderWithProviders(
+      <AiFtpUpdateBanner snapshot={chosen} currentFtp={258} />,
+    );
+    await flushAsync();
+    expect(
+      getByText(
+        'AI 教练已于 2026-10-14 将 FTP 从 245W 调整为 258W（在估算区间 250–262W 内自选，依据见会话）',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('快照只有 requested_w 缺区间（字段不完整）：回退默认均值文案', async () => {
+    const partial = { ...snap, requested_w: 250 };
+    const { getByText } = await renderWithProviders(
+      <AiFtpUpdateBanner snapshot={partial} currentFtp={258} />,
+    );
+    await flushAsync();
+    expect(
+      getByText('AI 教练已于 2026-10-14 将 FTP 从 245W 调整为 258W（数据自动估算，依据见会话）'),
+    ).toBeTruthy();
+  });
+
   it('确认分支：调 undoAiFtpUpdate 并回调 onChanged（首页据此重取快照与 FTP 收敛显示）', async () => {
     const onChanged = jest.fn();
     const { getByText, rerender, queryByText } = await renderWithProviders(

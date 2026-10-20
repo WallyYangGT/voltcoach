@@ -30,7 +30,12 @@ import { parseRecordsCsv, thinRecords, safeName, firstTimestampFromCsvHead, firs
 import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '../src/core/form.ts';
 import { formNote, formatAnomaly } from '../src/core/i18n.ts';
 import { DICT } from '../src/i18n/dict.ts';
-import { estimateFtpFromHistory, evaluateFtpApply } from '../src/core/ftp.ts';
+import {
+  estimateFtpFromHistory,
+  evaluateFtpApply,
+  isFtpCalibratedFrom,
+  selectFtpFromEstimate,
+} from '../src/core/ftp.ts';
 import { monthlySummaryFromRows } from '../src/core/monthly.ts';
 import {
   buildActivityMetrics,
@@ -677,6 +682,129 @@ test('evaluateFtpApply: 估值越采纳范围 → 拒绝', () => {
   const check = evaluateFtpApply(r, '2026-07-05', '2026-07-10');
   assert.equal(check.reason_key, 'ftp.apply.range');
   assert.equal(check.reason_vars.w, 30);
+});
+
+// ---------------- 区间自选（selectFtpFromEstimate + evaluateFtpApply chosenW，2026-10-20） ----------------
+
+test('isFtpCalibratedFrom: 溯源戳或非默认值 → 已校准；默认值无戳 → 未校准', () => {
+  const D = 106; // 出厂默认 FTP
+  assert.equal(isFtpCalibratedFrom(D, null, D), false); // 新装用户（可能只改过体重）
+  assert.equal(isFtpCalibratedFrom(D, undefined, D), false);
+  assert.equal(isFtpCalibratedFrom(D, '', D), false); // 空串不当作戳
+  assert.equal(isFtpCalibratedFrom(D, '   ', D), false); // 纯空白不当作戳
+  assert.equal(isFtpCalibratedFrom(150, null, D), true); // 旧库改过值、无溯源戳
+  assert.equal(isFtpCalibratedFrom(D, '2026-07-01T00:00:00.000Z', D), true); // 明确设回过默认值
+  // code-review P1 回归点：撤销 AI 更新恢复「默认值 + 无戳」→ 必须重新判未校准
+  assert.equal(isFtpCalibratedFrom(D, null, D), false);
+});
+
+test('isFtpCalibratedFrom: 默认值 + manual 戳需无 AI 快照才算假戳（旧版撤销归一化）', () => {
+  const D = 106;
+  const stamp = '2026-07-01T00:00:00.000Z';
+  // 旧版 undo 恢复默认值留下 manual 戳、快照已清 → 读时归一化为未校准（P2）
+  assert.equal(isFtpCalibratedFrom(D, stamp, D, { source: 'manual', hasAiUpdate: false }), false);
+  // 快照仍在（AI 更新未撤销）或戳来自 AI/估算 → 仍算校准
+  assert.equal(isFtpCalibratedFrom(D, stamp, D, { source: 'manual', hasAiUpdate: true }), true);
+  assert.equal(isFtpCalibratedFrom(D, stamp, D, { source: 'ai_coach' }), true);
+  assert.equal(isFtpCalibratedFrom(D, stamp, D, { source: 'estimate' }), true);
+  // 非默认值不受归一化影响（值判据已足够）
+  assert.equal(isFtpCalibratedFrom(150, stamp, D, { source: 'manual', hasAiUpdate: false }), true);
+});
+
+test('selectFtpFromEstimate: 缺省/非有限数取两法均值；区间内自选取整；越界夹逼标记 clamped', () => {
+  const r = baseApplyResult(); // 两法 123/124 → 均值 124，区间 [123,124]
+  assert.equal(r.estimate.range_low, 123);
+  assert.equal(r.estimate.range_high, 124);
+  // 缺省 / null / NaN → 均值，无 requested
+  for (const req of [undefined, null, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.deepEqual(selectFtpFromEstimate(r, req), {
+      ftp_w: 124,
+      requested_w: null,
+      clamped: false,
+    });
+  }
+  // 区间内：取整后原样采纳
+  assert.deepEqual(selectFtpFromEstimate(r, 123.4), {
+    ftp_w: 123,
+    requested_w: 123,
+    clamped: false,
+  });
+  // 越界：夹逼到区间边界（上/下）
+  assert.deepEqual(selectFtpFromEstimate(r, 300), {
+    ftp_w: 124,
+    requested_w: 300,
+    clamped: true,
+  });
+  assert.deepEqual(selectFtpFromEstimate(r, 90), {
+    ftp_w: 123,
+    requested_w: 90,
+    clamped: true,
+  });
+  // 夹逼后落在边界不视为 clamped（requested 恰为边界值）
+  assert.deepEqual(selectFtpFromEstimate(r, 123), {
+    ftp_w: 123,
+    requested_w: 123,
+    clamped: false,
+  });
+  // 小数：先四舍五入再夹逼（123.5→124 在区间内；124.5→125 越上界夹回 124）
+  assert.deepEqual(selectFtpFromEstimate(r, 123.5), {
+    ftp_w: 124,
+    requested_w: 124,
+    clamped: false,
+  });
+  assert.deepEqual(selectFtpFromEstimate(r, 124.5), {
+    ftp_w: 124,
+    requested_w: 125,
+    clamped: true,
+  });
+  // 负数/0 夹到区间低端（不是类型错误，最终值仍受 50–500W 闸约束）
+  assert.deepEqual(selectFtpFromEstimate(r, 0), {
+    ftp_w: 123,
+    requested_w: 0,
+    clamped: true,
+  });
+  assert.deepEqual(selectFtpFromEstimate(r, -5), {
+    ftp_w: 123,
+    requested_w: -5,
+    clamped: true,
+  });
+  // 数据不足（estimate=null）→ null（调用方按拒绝路径处理）
+  assert.equal(selectFtpFromEstimate(estimateFtpFromHistory(threeRides({ p20: null }), FTP_ATHLETE)), null);
+});
+
+test('selectFtpFromEstimate: 单法（仅 Coggan）区间退化为单点，自选仍被夹到该点', () => {
+  const r = estimateFtpFromHistory(threeRides({ p5: null }), FTP_ATHLETE);
+  assert.equal(r.estimate.range_low, r.estimate.range_high);
+  const sel = selectFtpFromEstimate(r, 100);
+  assert.equal(sel.ftp_w, r.estimate.ftp_w);
+  assert.equal(sel.clamped, true);
+});
+
+test('evaluateFtpApply: chosenW 决定 no_change 与 range 闸（自选可绕过均值 diff=0，也可触发 no_change）', () => {
+  // 均值 124 = 当前值 → 缺省 diff=0 拒；自选区间内 123（≠当前）→ 放行
+  const sameMean = estimateFtpFromHistory(threeRides(), { ftp_watts: 124, max_hr: 195 });
+  assert.equal(evaluateFtpApply(sameMean, '2026-07-05', '2026-07-10').reason_key, 'ftp.apply.no_change');
+  assert.deepEqual(
+    evaluateFtpApply(sameMean, '2026-07-05', '2026-07-10', undefined, 123),
+    { ok: true, reason_key: null },
+  );
+  // 均值 ≠ 当前，但自选值恰等于当前 → no_change
+  const r = baseApplyResult(); // 均值 124，当前 118
+  assert.equal(
+    evaluateFtpApply(r, '2026-07-05', '2026-07-10', undefined, 118).reason_key,
+    'ftp.apply.no_change',
+  );
+  // 自选值越 50–500W 采纳范围 → 按最终值拒绝（夹逼层已保证在估算区间内，此处防御非法直调）
+  const wide = evaluateFtpApply(r, '2026-07-05', '2026-07-10', undefined, 600);
+  assert.equal(wide.reason_key, 'ftp.apply.range');
+  assert.equal(wide.reason_vars.w, 600);
+  // 一致性闸不受 chosenW 影响：两法互斥仍先拒（chosenW 不能"洗白"估算质量）
+  const bad = baseApplyResult();
+  bad.estimate.methods.cp_model.ftp_w = 260;
+  assert.equal(
+    evaluateFtpApply(bad, '2026-07-05', '2026-07-10', undefined, 124).reason_key,
+    'ftp.apply.inconsistent',
+  );
 });
 
 // ---------------- 月度汇总（M2 搬运：monthly.ts，归并口径同源自 fit-reader Web 版 src/db.js monthlySummary） ----------------

@@ -12,6 +12,13 @@
  *  3. 功率不可信（未校准/被标记）或数据缺失：category='race' 视为高强度，其余按中等
  *     计（宽松口径：数据不足时不惩罚用户；提示词侧仍要求校准心率/功率锚点）。
  *
+ * 披露口径（2026-10-20，decisions §35）：power_state 三态把「FTP 未校准」与
+ * 「近 7 天无功率数据」分开——未校准可行动（去设置页/AI 估算），无功率计则只能
+ * 用心率/体感口径，两者的用户建议不同。优先级：窗口内无任何功率痕迹（IF/TSS 均缺）
+ * → no_power（无论 FTP 是否已校准，这段时间的强度都是估计口径）；有功率痕迹但 FTP
+ * 未校准 → uncalibrated；有功率痕迹且已校准 → calibrated。被 power_flagged 的行也
+ * 算功率痕迹（flag 语义是「失真」不是「无功率计」），但该行本身不参与 IF 分档。
+ *
  * 阈值从 POWER_ZONES 派生（Z2 下沿 = 中等、Z4 下沿 = 高强度），与训练分区单源。
  * 窗口：以本地日历日「今天」为末端的近 N 天（默认 7，含今天）；日期必须已是
  * 本地日（调用方经 useRideDateLabels/localDayFromUtc 换算，与 §24 展示口径一致）。
@@ -42,6 +49,9 @@ export interface HealthActivityRow {
   power_flagged?: boolean;
 }
 
+/** 功率采信状态（三态：已校准 / 未校准但有功率数据 / 无功率数据） */
+export type HealthPowerState = 'calibrated' | 'uncalibrated' | 'no_power';
+
 export interface WeeklyActivitySummary {
   /** 窗口天数（含今天） */
   days: number;
@@ -57,13 +67,17 @@ export interface WeeklyActivitySummary {
   equivalent_min: number;
   target_min: number;
   extra_min: number;
-  /** FTP 是否已校准（false 时 IF 未参与分档，UI 据此披露估计口径） */
-  power_trusted: boolean;
+  /**
+   * 功率采信状态：no_power=窗口内无功率痕迹（强度全按兜底口径）；
+   * uncalibrated=有功率痕迹但 FTP 未校准（IF 未参与分档，可去校准）；
+   * calibrated=有功率痕迹且 FTP 已校准（被 flag 的行仍不参与 IF 分档）
+   */
+  power_state: HealthPowerState;
 }
 
 export interface WeeklyActivityOptions {
-  /** FTP 是否已校准；false 时忽略 IF/TSS（默认 true） */
-  powerTrusted?: boolean;
+  /** FTP 是否已校准（db.isFtpCalibrated 同口径）；false 时忽略 IF/TSS（默认 true） */
+  ftpCalibrated?: boolean;
 }
 
 /** TSS + 时长反推 IF（TSS = h × IF² × 100） */
@@ -83,19 +97,21 @@ export function summarizeWeeklyActivity(
   opts: WeeklyActivityOptions = {},
 ): WeeklyActivitySummary {
   const span = Number.isInteger(days) && days > 0 ? days : 7;
-  const powerTrusted = opts.powerTrusted !== false;
+  const ftpCalibrated = opts.ftpCalibrated !== false;
   const start = addDaysStr(today, -(span - 1));
   let moderateSec = 0;
   let vigorousSec = 0;
   let lightSec = 0;
+  let powerSeen = false; // 窗口内是否有功率痕迹（IF/TSS 存在，含被 flag 的行）
   for (const r of rows) {
     if (!r || typeof r.date !== 'string' || r.date < start || r.date > today) continue;
     const seconds = Number(r.duration_sec);
     if (!Number.isFinite(seconds) || seconds <= 0) continue;
     const minutes = seconds / 60;
+    if (r.intensity_factor != null || r.tss != null) powerSeen = true;
 
     // 功率不可信（未校准 FTP / 该次骑行被标记）：IF/TSS 不参与分档
-    const powerUsable = powerTrusted && !r.power_flagged;
+    const powerUsable = ftpCalibrated && !r.power_flagged;
     const ifv = powerUsable
       ? (r.intensity_factor != null && Number.isFinite(Number(r.intensity_factor))
           ? Number(r.intensity_factor)
@@ -111,6 +127,13 @@ export function summarizeWeeklyActivity(
       moderateSec += seconds; // 数据不足时的宽松口径：按中等计
     }
   }
+  // 三态（功率痕迹优先）：窗口内完全无功率痕迹 → no_power（无论 FTP 是否已校准，
+  // 这段时间的强度都是估计口径）；有功率痕迹但 FTP 未校准 → uncalibrated（可行动）
+  const powerState: HealthPowerState = !powerSeen
+    ? 'no_power'
+    : ftpCalibrated
+      ? 'calibrated'
+      : 'uncalibrated';
   return {
     days: span,
     moderate_min: Math.round(moderateSec / 60),
@@ -120,6 +143,6 @@ export function summarizeWeeklyActivity(
     equivalent_min: Math.round((moderateSec + 2 * vigorousSec) / 60),
     target_min: WHO_ACTIVITY_TARGET.moderate_min,
     extra_min: WHO_ACTIVITY_TARGET.extra_min,
-    power_trusted: powerTrusted,
+    power_state: powerState,
   };
 }

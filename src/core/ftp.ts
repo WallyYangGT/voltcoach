@@ -382,6 +382,71 @@ const applyReject = (
 ): FtpApplyCheck => ({ ok: false, reason_key: key, reason_vars: vars });
 
 /**
+ * FTP 校准判据（2026-10-20 收紧，decisions §35）：健康瓦片 IF 采信与 AI 侧
+ * `athlete_configured` 的统一口径（实现在 db.isFtpCalibrated）。
+ *
+ * 两半：
+ *  - 溯源戳 ftp_updated_at 非空 —— 曾有一次 FTP 值实际变更（manual/estimate/ai_coach）；
+ *  - FTP 值不等于出厂默认 —— 兼容引入溯源戳之前的存量库。
+ * 已知边界：用户把 FTP 恰好设为出厂默认值（106W）时值未变、不盖戳，会被判未校准——
+ * 无法区分「从未设置」与「明确设成默认值」，按保守口径处理（不采信 IF）。
+ *
+ * 旧版撤销的假戳（≤0.4.0）：旧 undo 恢复默认值时因值变化盖 `manual` 戳，但撤销不是
+ * 校准。值=默认 + `manual` 戳 + 无待处理 AI 快照 → 按「无戳」判未校准（读时归一化，
+ * 不改写存量数据）；代价是「用户明确从别的值改回 106W」也判未校准——与上一条的保守
+ * 口径一致。AI 更新留下的 `ai_coach` 戳（快照可撤销）仍算校准。
+ *
+ * AI 更新被撤销时由 undoAiFtpUpdate 恢复撤销前的溯源戳，避免「撤销回默认值」被
+ * 误判为已校准（code-review P1）。
+ */
+export function isFtpCalibratedFrom(
+  ftpWatts: number,
+  ftpUpdatedAt: string | null | undefined,
+  defaultFtpWatts: number,
+  opts?: { source?: string | null; hasAiUpdate?: boolean },
+): boolean {
+  const stamped = typeof ftpUpdatedAt === 'string' && ftpUpdatedAt.trim().length > 0;
+  const valueCalibrated = ftpWatts !== defaultFtpWatts;
+  if (!valueCalibrated && stamped && opts?.source === 'manual' && !opts?.hasAiUpdate) {
+    // 默认值 + manual 戳 + 无 AI 快照：旧撤销假戳（或无法证明的「明确设为默认值」）
+    return false;
+  }
+  return stamped || valueCalibrated;
+}
+
+/** 写入值选定结果：requested_w 为调用方给的原值（缺省 null），clamped 表示被夹逼到区间边界 */
+export interface FtpSelection {
+  /** 最终写入值（恒在估算区间内） */
+  ftp_w: number;
+  /** 模型自选的原值（取整后；缺省/非有限数为 null） */
+  requested_w: number | null;
+  /** 自选值被夹逼到 range_low/range_high 边界 */
+  clamped: boolean;
+}
+
+/**
+ * 从估算结果选定写入值（AI 教练在估算区间内自选 FTP，2026-10-20）。
+ *
+ * 缺省（requested 省略/非有限数）取估算器输出（两法均值）；给了 requested 时
+ * **夹逼到本次估算区间 [range_low, range_high]**——模型只能在科学估算的区间内
+ * 表达保守/激进的取舍，永远写不出区间外的值（幻觉写值防护不弱化）。
+ * 写入前的 50–500W 采纳范围闸仍由 evaluateFtpApply 在最终值上执行。
+ */
+export function selectFtpFromEstimate(
+  result: FtpEstimationResult,
+  requested?: number | null,
+): FtpSelection | null {
+  const e = result.estimate;
+  if (result.status !== 'ok' || !e) return null;
+  if (requested == null || !Number.isFinite(requested)) {
+    return { ftp_w: e.ftp_w, requested_w: null, clamped: false };
+  }
+  const want = Math.round(requested);
+  const ftp_w = Math.min(Math.max(want, e.range_low), e.range_high);
+  return { ftp_w, requested_w: want, clamped: ftp_w !== want };
+}
+
+/**
  * 「AI 教练自动更新 FTP」的采纳门槛（纯函数，从估算结果的结构化字段重新推导）。
  *
  * 与 FtpEstimatePanel 的 UI 门控（仅 confidence === 'high'）刻意不同：置信度口径
@@ -389,18 +454,21 @@ const applyReject = (
  * 分级——zone_mismatch（功率-心率区间错位）/ drift / hr_coverage 是「当前 FTP 配置
  * 漂移」的信号、正是该更新的依据，由其降级的 medium 放行；而数据单薄（few_rides
  * →low）、两法互斥（inconsistent）、锚点明确非全力（not_maximal）才真正不可信，拦下。
- * 数值始终取估算器输出（调用方不给模型自定数值的入口），工具侧零参。
+ * 数值默认取估算器输出；2026-10-20 起 AI 可在估算区间内自选（selectFtpFromEstimate
+ * 夹逼，chosenW 即夹逼后的最终值）——no_change 与 50–500W 范围闸按最终值判定。
  *
  * @param result estimateFtpFromHistory 的返回
  * @param latestRideDate 窗口内最近一次骑行日期（YYYY-MM-DD；无骑行为 null）
  * @param today 今日日期（YYYY-MM-DD，调用方注入以便测试）
  * @param cfg 阈值配置（freshness_days 为 AI 采纳专属门槛）
+ * @param chosenW 自选后的最终写入值（缺省取 e.ftp_w，即两法均值）
  */
 export function evaluateFtpApply(
   result: FtpEstimationResult,
   latestRideDate: string | null,
   today: string,
   cfg: FtpEstimationConfig = FTP_ESTIMATION,
+  chosenW?: number | null,
 ): FtpApplyCheck {
   const e = result.estimate;
   if (result.status !== 'ok' || !e) return applyReject('ftp.apply.no_data');
@@ -431,10 +499,11 @@ export function evaluateFtpApply(
   );
   if (days > cfg.freshness_days)
     return applyReject('ftp.apply.stale', { n: cfg.freshness_days });
-  if (e.diff_w === 0) return applyReject('ftp.apply.no_change');
-  if (e.ftp_w < cfg.apply_min_w || e.ftp_w > cfg.apply_max_w)
+  const target = chosenW != null && Number.isFinite(chosenW) ? chosenW : e.ftp_w;
+  if (target === e.current_ftp_w) return applyReject('ftp.apply.no_change');
+  if (target < cfg.apply_min_w || target > cfg.apply_max_w)
     return applyReject('ftp.apply.range', {
-      w: e.ftp_w,
+      w: target,
       lo: cfg.apply_min_w,
       hi: cfg.apply_max_w,
     });

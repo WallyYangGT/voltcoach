@@ -17,7 +17,7 @@ const base = {
   equivalent_min: 300,
   target_min: 150,
   extra_min: 300,
-  power_trusted: true,
+  power_state: 'calibrated' as const,
 };
 
 describe('WeeklyActivityTile', () => {
@@ -59,10 +59,27 @@ describe('WeeklyActivityTile', () => {
     expect(at.getByText('已达成')).toBeTruthy();
   });
 
-  it('FTP 未校准：显示估计口径披露', async () => {
+  it('FTP 未校准（有功率数据）：显示「未校准」披露', async () => {
     const screen = await renderWithProviders(
-      <WeeklyActivityTile summary={{ ...base, power_trusted: false }} />,
+      <WeeklyActivityTile summary={{ ...base, power_state: 'uncalibrated' }} />,
     );
-    expect(screen.getByText('功率数据未校准/不可用：强度按保守口径估算，校准后更准确')).toBeTruthy();
+    expect(
+      screen.getByText('检测到功率数据，但 FTP 未校准：强度按保守口径估算，校准后更准确'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/近 7 天无功率数据/)).toBeNull();
+  });
+
+  it('无功率数据：显示「无功率」披露（与未校准分开）', async () => {
+    const screen = await renderWithProviders(
+      <WeeklyActivityTile summary={{ ...base, power_state: 'no_power' }} />,
+    );
+    expect(screen.getByText('近 7 天无功率数据：强度按保守口径估算')).toBeTruthy();
+    expect(screen.queryByText(/FTP 未校准/)).toBeNull();
+  });
+
+  it('已校准：两种披露都不显示', async () => {
+    const screen = await renderWithProviders(<WeeklyActivityTile summary={base} />);
+    expect(screen.queryByText(/FTP 未校准/)).toBeNull();
+    expect(screen.queryByText(/无功率数据/)).toBeNull();
   });
 });
