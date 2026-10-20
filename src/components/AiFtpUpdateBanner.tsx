@@ -1,9 +1,12 @@
 /**
  * AiFtpUpdateBanner.tsx — AI 教练 FTP 更新披露条（架构评审 S3「审计追认」入口）。
  *
- * update_ftp 工具对模型零参、执行结果只进会话正文——数值层面的问责与可逆落在
- * FTP 真源处：首页 hero 下方常驻披露「AI 于何时把 FTP 从多少改到多少」，撤销走
- * undoAiFtpUpdate（恢复快照 old 值 + 清快照 + 重建档案）。
+ * update_ftp 的执行结果只进会话正文——数值层面的问责与可逆落在 FTP 真源处：
+ * 首页 hero 下方常驻披露「AI 于何时把 FTP 从多少改到多少」，撤销走
+ * undoAiFtpUpdate（恢复快照 old 值 + 清快照 + 重建档案)。
+ *
+ * 2026-10-20 起区分两种更新：快照带 requested_w（模型在估算区间内自选）时披露
+ * 「在区间 lo–hi 内自选」，否则披露默认口径（两法均值）。旧快照无该字段，走原文案。
  *
  * 数据（快照 + 当前 FTP）由首页经 props 下传（首页 load() 在 useFocusEffect 里
  * 每次回焦点重取）——tab 常驻挂载、组件不因切换重建，若在组件内部自查只在挂载
@@ -71,11 +74,22 @@ export function AiFtpUpdateBanner({
   return (
     <View style={styles.banner}>
       <Text style={styles.text}>
-        {t('ftp.ai_update.banner', {
-          date: dayjs(snapshot.updated_at).format('YYYY-MM-DD'),
-          old: snapshot.old_ftp_w,
-          new: snapshot.new_ftp_w,
-        })}
+        {/* 自选（快照带 requested_w 与区间）与默认均值走不同文案；旧快照缺字段走原文案 */}
+        {snapshot.requested_w != null &&
+        snapshot.range_low_w != null &&
+        snapshot.range_high_w != null
+          ? t('ftp.ai_update.banner_chosen', {
+              date: dayjs(snapshot.updated_at).format('YYYY-MM-DD'),
+              old: snapshot.old_ftp_w,
+              new: snapshot.new_ftp_w,
+              lo: snapshot.range_low_w,
+              hi: snapshot.range_high_w,
+            })
+          : t('ftp.ai_update.banner', {
+              date: dayjs(snapshot.updated_at).format('YYYY-MM-DD'),
+              old: snapshot.old_ftp_w,
+              new: snapshot.new_ftp_w,
+            })}
       </Text>
       <Pressable
         style={styles.undoBtn}

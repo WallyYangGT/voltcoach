@@ -36,6 +36,7 @@ import {
   getAiFtpUpdate,
   getAthleteState,
   getProfile,
+  isFtpCalibrated,
   listActivities,
   listActivitiesInRange,
   monthlySummary,
@@ -63,8 +64,8 @@ interface HomeData {
   aiFtpUpdate: AiFtpUpdateSnapshot | null;
   /** 教练模式：amateur 时显示 WHO 健康活动量瓦片（未设置/standard 不显示） */
   coachMode: CoachMode | null;
-  /** FTP 是否已校准（未校准则健康瓦片不采信 IF，按保守口径估计） */
-  athleteConfigured: boolean;
+  /** FTP 是否已校准（db.isFtpCalibrated：溯源戳或非出厂默认值；未校准则健康瓦片不采信 IF） */
+  ftpCalibrated: boolean;
 }
 
 export default function HomeScreen() {
@@ -97,8 +98,11 @@ export default function HomeScreen() {
             .then((rows) => ({ rows, ok: true }))
             .catch(() => ({ rows: [] as ActivityListItem[], ok: false }))
         : Promise.resolve({ rows: [] as ActivityListItem[], ok: true });
-      const [athleteState, daily, monthly, recent, healthRes, cfg, aiFtpUpdate] = await Promise.all([
+      const [athleteState, ftpCalibrated, daily, monthly, recent, healthRes, cfg, aiFtpUpdate] = await Promise.all([
         getAthleteState(),
+        // FTP 校准判据与 AI 侧 athlete_configured 同源（decisions §35）；读取失败按未校准
+        // 兜底——保守口径宁可不采信 IF，也不把默认 106W 当真值
+        isFtpCalibrated().catch(() => false),
         recentFormDaily(90),
         monthlySummary(6),
         listActivities(6),
@@ -108,7 +112,7 @@ export default function HomeScreen() {
       ]);
       setData({
         athlete: athleteState.athlete,
-        athleteConfigured: athleteState.configured,
+        ftpCalibrated,
         daily,
         monthly,
         recent,
@@ -122,7 +126,7 @@ export default function HomeScreen() {
       console.warn('仪表盘加载失败:', e);
       setData({
         athlete: ATHLETE,
-        athleteConfigured: false,
+        ftpCalibrated: false,
         daily: [],
         monthly: [],
         recent: [],
@@ -156,7 +160,7 @@ export default function HomeScreen() {
     ]),
   ];
   const dateLabels = useRideDateLabels(labelNames);
-  // 业余模式健康瓦片：读档失败/未校准 FTP 时不采信 IF（按保守口径估计）
+  // 业余模式健康瓦片：FTP 未校准（含未设置）时不采信 IF（按保守口径估计）
   const healthSummary = isAmateur
     ? summarizeWeeklyActivity(
         healthCandidates.map((r) => ({
@@ -169,7 +173,7 @@ export default function HomeScreen() {
         })),
         today,
         7,
-        { powerTrusted: data?.athleteConfigured !== false },
+        { ftpCalibrated: data?.ftpCalibrated === true },
       )
     : null;
   // 今天是否已练（今日建议卡免扰档输入）：最近几行里有本地日=今天的骑行即算；

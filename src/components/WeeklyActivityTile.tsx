@@ -4,6 +4,10 @@
  * 纯展示组件：分钟口径由 core/health-activity 汇总（WHO 150–300 中等强度/周，
  * 高强度按 1:2 折算），本组件不做业务判断。只在骑手档案 coach_mode='amateur'
  * 时由首页渲染——标准模式用户看训练指标（CTL/TSS），不叠加健康口径避免噪声。
+ *
+ * 功率披露三态（2026-10-20，decisions §35）：calibrated 不披露；uncalibrated
+ * （有功率数据但 FTP 未校准——可行动）与 no_power（近 7 天无功率数据——只能走
+ * 心率/体感口径）分别给不同文案，避免旧版把两种情况混为一句。
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -46,8 +50,11 @@ export function WeeklyActivityTile({ summary }: { summary: WeeklyActivitySummary
       {summary.light_min > 0 && (
         <Text style={styles.meta}>{t('dash.who.light', { min: summary.light_min })}</Text>
       )}
-      {!summary.power_trusted && (
+      {summary.power_state === 'uncalibrated' && (
         <Text style={styles.meta}>{t('dash.who.uncalibrated')}</Text>
+      )}
+      {summary.power_state === 'no_power' && (
+        <Text style={styles.meta}>{t('dash.who.no_power', { days: summary.days })}</Text>
       )}
       <Text style={styles.note}>{t('dash.who.note')}</Text>
     </View>

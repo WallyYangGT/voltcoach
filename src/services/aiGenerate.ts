@@ -34,6 +34,7 @@ import {
   getDossier,
   getEffectiveAthlete,
   getAthleteState,
+  isFtpCalibrated,
   getProfile,
   listActivities,
   listMemories,
@@ -101,6 +102,7 @@ function buildToolIo(): ToolIo {
     recentFormDaily: (days) => recentFormDaily(days),
     monthlySummary: (n) => monthlySummary(n),
     getAthleteState: () => getAthleteState(),
+    isFtpCalibrated: () => isFtpCalibrated(),
     getProfile: () => getProfile(),
     setRiderProfile: (partial, lang) => setProfile(partial, lang),
     cyclingSummariesSince: (days) => cyclingSummariesSince(days),
@@ -111,7 +113,7 @@ function buildToolIo(): ToolIo {
     savePlanVersion,
     setPowerFlag: (name, flagged, lang, reason) => setPowerFlagAndRefresh(name, flagged, lang, reason),
     recalibratePower: (name, scale, lang) => recalibrateActivityPower(name, scale, lang),
-    applyFtpUpdate: (lang) => applyAiFtpUpdate(lang),
+    applyFtpUpdate: (lang, opts) => applyAiFtpUpdate(lang, opts),
     reanalyzeActivity: (name, lang) => reanalyzeActivity(name, lang),
   };
 }

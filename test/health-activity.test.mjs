@@ -2,7 +2,8 @@
  * health-activity.test.mjs — WHO 周活动量口径（src/core/health-activity）。
  *
  * 钉住：近 7 天本地日窗口（含今天/边界外剔除）、IF 直接分档、TSS+时长反推 IF、
- * 无功率 race 兜底、轻松骑单列不计入、等效分钟 = 中等 + 2×高强度、缺时长跳过。
+ * 无功率 race 兜底、轻松骑单列不计入、等效分钟 = 中等 + 2×高强度、缺时长跳过；
+ * 功率采信三态（calibrated / uncalibrated / no_power——2026-10-20 判据收紧）。
  */
 
 import { test } from 'node:test';
@@ -37,7 +38,7 @@ test('7 天窗口：中等/高强度/轻松分档与 WHO 2 倍折算', () => {
   assert.equal(s.equivalent_min, 300); // 120 + 2×90
   assert.equal(s.target_min, WHO_ACTIVITY_TARGET.moderate_min);
   assert.equal(s.extra_min, 300);
-  assert.equal(s.power_trusted, true);
+  assert.equal(s.power_state, 'calibrated');
 });
 
 test('强度边界：IF 0.9 高强度、0.55 中等、0.54 轻松；无功率无 TSS 按中等', () => {
@@ -82,7 +83,7 @@ test('空输入/负时长返回全零；非法 days 回退 7', () => {
     equivalent_min: 0,
     target_min: 150,
     extra_min: 300,
-    power_trusted: true,
+    power_state: 'no_power', // 无骑行 = 无功率痕迹（披露强度为估计口径）
   });
   const negative = summarizeWeeklyActivity(
     [{ date: '2026-10-17', duration_sec: -60, intensity_factor: 0.8, tss: 10 }],
@@ -99,10 +100,11 @@ test('功率不可信：未校准 FTP 或被标记的骑行不采信 IF（按保
     // 比赛仍按高强度
     { date: '2026-10-16', duration_sec: 1800, intensity_factor: 0.95, tss: 50, category: 'race' },
   ];
-  const uncal = summarizeWeeklyActivity(rows, '2026-10-17', 7, { powerTrusted: false });
+  const uncal = summarizeWeeklyActivity(rows, '2026-10-17', 7, { ftpCalibrated: false });
   assert.equal(uncal.moderate_min, 60);
   assert.equal(uncal.vigorous_min, 30);
-  assert.equal(uncal.power_trusted, false);
+  // 窗口内有 IF/TSS（功率痕迹）→ 未校准（可行动：去校准），不是「无功率数据」
+  assert.equal(uncal.power_state, 'uncalibrated');
   // 未校准 + 单次骑行被标记：同样按兜底口径
   const flagged = summarizeWeeklyActivity(
     [
@@ -112,6 +114,50 @@ test('功率不可信：未校准 FTP 或被标记的骑行不采信 IF（按保
   );
   assert.equal(flagged.moderate_min, 60);
   assert.equal(flagged.vigorous_min, 0);
+});
+
+test('功率采信三态：已校准 / 未校准（窗口内有功率痕迹）/ 无功率数据', () => {
+  // 无任何功率痕迹（无 IF/TSS）→ no_power：用户可能根本没功率计，建议是心率/体感口径
+  const noPower = summarizeWeeklyActivity(
+    [{ date: '2026-10-17', duration_sec: 3600, intensity_factor: null, tss: null, category: 'leisure' }],
+    '2026-10-17',
+    7,
+    { ftpCalibrated: false },
+  );
+  assert.equal(noPower.power_state, 'no_power');
+  assert.equal(noPower.moderate_min, 60); // 宽松口径不因状态改变
+  // 被标记「功率不可信」的行仍有 IF/TSS → 算功率证据（flag 语义是失真，不是无功率计）
+  const flaggedOnly = summarizeWeeklyActivity(
+    [{ date: '2026-10-17', duration_sec: 3600, intensity_factor: 0.95, tss: 110, category: 'training', power_flagged: true }],
+    '2026-10-17',
+    7,
+    { ftpCalibrated: false },
+  );
+  assert.equal(flaggedOnly.power_state, 'uncalibrated');
+  assert.equal(flaggedOnly.vigorous_min, 0); // 被标记行的 IF 仍不参与分档
+  // 窗口外的功率行走不进证据集
+  const outOfWindow = summarizeWeeklyActivity(
+    [{ date: '2026-10-01', duration_sec: 3600, intensity_factor: 0.9, tss: 90, category: 'training' }],
+    '2026-10-17',
+    7,
+    { ftpCalibrated: false },
+  );
+  assert.equal(outOfWindow.power_state, 'no_power');
+  // 有功率痕迹 + 已校准 → calibrated（IF 确实参与分档）
+  assert.equal(
+    summarizeWeeklyActivity(
+      [{ date: '2026-10-17', duration_sec: 3600, intensity_factor: 0.7, tss: 60 }],
+      '2026-10-17',
+      7,
+      { ftpCalibrated: true },
+    ).power_state,
+    'calibrated',
+  );
+  // 已校准但窗口内无功率痕迹 → no_power（功率痕迹优先：这段时间强度仍是估计口径）
+  assert.equal(
+    summarizeWeeklyActivity([], '2026-10-17', 7, { ftpCalibrated: true }).power_state,
+    'no_power',
+  );
 });
 
 test('分钟取整按秒累加：两条 30 秒短途合计 1 分钟（不逐条向上取整）', () => {

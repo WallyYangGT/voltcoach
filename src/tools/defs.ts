@@ -27,7 +27,7 @@ const TOOL_TEXT: Record<Lang, Record<string, string>> = {
     'get_form_series.days': '回看天数，最大 {n}',
     get_monthly_summary: '取逐月训练汇总（TSS/时长/距离/强度分布类型），用于长期负荷趋势。',
     'get_monthly_summary.months': '回看月数，最大 {n}',
-    get_athlete_profile: '取骑手参数（FTP/最大心率/体重，含 athlete_configured 是否已校准）与用户档案：身份、训练目标、教练模式（coach_mode，null=未设置）、每周可用时间档（weekly_hours）、可骑的星期（available_days，空数组=未设置/不限）、单次时长上限（session_max_min）。',
+    get_athlete_profile: '取骑手参数（FTP/最大心率/体重，含 athlete_configured 表示 FTP 是否已校准——未校准时会用出厂默认值）与用户档案：身份、训练目标、教练模式（coach_mode，null=未设置）、每周可用时间档（weekly_hours）、可骑的星期（available_days，空数组=未设置/不限）、单次时长上限（session_max_min）。',
     update_rider_profile: '更新骑手档案中的教练模式与时间预算（业余教练模式的结构化字段）：coach_mode（amateur 业余/健康导向、standard 系统训练提升）、weekly_hours（每周可用时间档）、available_days（可骑的星期 1=周一…7=周日，空数组=不限）、session_max_min（单次时长上限）。仅在用户明确回答首次模式询问、或主动提出「最近每周只能骑 X 小时」等变更时调用。⚠️ 确认协议：调用前先向用户复述将写入的内容（模式/时长档/可用日/单次上限）并获得用户肯定答复，不要抢跑；用户没提到的字段不要传（undefined = 不修改）。清空：coach_mode/weekly_hours 传空字符串；session_max_min 传 0；available_days 传空数组。',
     'update_rider_profile.coach_mode': 'amateur = 业余/健康导向（用户期望与可用时间主导）；standard = 系统训练提升（传统教练口径；档案未设置时不视为默认，须先询问用户）；传空字符串清空为未设置',
     'update_rider_profile.weekly_hours': '每周可用时间档：lt3 = 不足 3 小时；3to5 = 3–5 小时；5to8 = 5–8 小时；gt8 = 8 小时以上；传空字符串清空',
@@ -64,7 +64,8 @@ const TOOL_TEXT: Record<Lang, Record<string, string>> = {
     recalibrate_activity_power: '按系数缩放重算某次骑行的全部功率派生指标并写回（功率计系统性校准偏差的修正）：逐秒功率 × scale 后重算 NP/平均/峰值功率/峰曲线/IF/TSS/区间/间歇/踏频-功率等，返回新旧指标对比。系数范围 0.5–1.5（越界被夹逼）；逐秒原始数据不改写，重导原文件或换系数重跑即可回退。仅在能给出可信依据（心率-功率交叉印证或用户明确告知偏差）时使用；拿不准时先 set_power_flag 标记。',
     'recalibrate_activity_power.activity_id': '活动 id（list_activities 返回的 activity_id）',
     'recalibrate_activity_power.scale_factor': '缩放系数：真实功率 = 记录功率 × 系数（0.5–1.5）。如功率计普遍偏低 5%，传 1.05',
-    update_ftp: '按当前最佳科学估算更新用户的 FTP 配置（无需参数，数值始终来自估算器而非模型自拟）。工具内部重新估算并硬校验数据量、两法一致性、全力锚点与数据新鲜度，不满足时返回拒绝原因与数据需求清单。',
+    update_ftp: '按当前最佳科学估算更新用户的 FTP 配置。缺省取估算结果（两种方法均值）；可选传 ftp_watts 在估算区间内自选（如业余/新手用户偏保守取区间低端）——数值会被夹逼到本次估算区间 [range_low, range_high] 内，无法写入区间外的值。工具内部重新估算并硬校验数据量、两法一致性、全力锚点与数据新鲜度，不满足时返回拒绝原因与数据需求清单。',
+    'update_ftp.ftp_watts': '可选自选值（瓦特）：须先经 estimate_ftp 知道本次估算的参考区间，只在有明确依据时指定（用户偏保守/激进、新手入门取低端、心率与体感显示高估取低端）；缺省则取两法均值。结果若被夹逼到区间边界会以 clamped=true 返回',
     reanalyze_activity: '按当前骑手参数（FTP/最大心率/体重）重新分析一次训练并写回训练库：从已存逐秒数据重算 IF/TSS/功率心率区间/间歇识别等并覆盖该训练的分析结果，返回新旧指标对比。FTP 更新后可对受影响的训练（如估算锚点骑行）或用户指名的训练使用。',
     'reanalyze_activity.activity_id': '活动 id（list_activities 返回的 activity_id）',
   },
@@ -85,7 +86,7 @@ const TOOL_TEXT: Record<Lang, Record<string, string>> = {
     'get_form_series.days': 'Days to look back, up to {n}',
     get_monthly_summary: 'Get the monthly training summary (TSS/hours/distance/intensity distribution type) for long-term load trends.',
     'get_monthly_summary.months': 'Months to look back, up to {n}',
-    get_athlete_profile: 'Get athlete parameters (FTP/max HR/weight, including athlete_configured) plus the rider profile: identity, training goal, coaching mode (coach_mode, null = unset), weekly available-time tier (weekly_hours), available days (available_days; empty array = unset/unrestricted), and per-session time cap (session_max_min).',
+    get_athlete_profile: 'Get athlete parameters (FTP/max HR/weight; athlete_configured means FTP is calibrated — otherwise the factory default is in use) plus the rider profile: identity, training goal, coaching mode (coach_mode, null = unset), weekly available-time tier (weekly_hours), available days (available_days; empty array = unset/unrestricted), and per-session time cap (session_max_min).',
     update_rider_profile: "Update the rider profile fields for amateur coaching mode: coach_mode (amateur = health/time-first, standard = systematic training), weekly_hours (weekly available-time tier), available_days (1=Monday … 7=Sunday; empty array = unrestricted), session_max_min (per-session time cap in minutes). Call only when the rider answers the first-time mode question or proactively reports a change such as \"only 2 hours a week now\". ⚠️ Confirmation protocol: restate exactly what will be written (mode / hours tier / days / cap) and get the rider's explicit agreement before calling; never change the profile preemptively. Omit fields the rider did not mention (undefined = leave unchanged). Clearing: pass an empty string for coach_mode/weekly_hours, 0 for session_max_min, or an empty array for available_days.",
     'update_rider_profile.coach_mode': 'amateur = health/time-first (rider expectations and available time lead); standard = systematic performance training (the traditional coaching default, but NOT the default when the profile is unset — ask the rider first); pass an empty string to clear to unset',
     'update_rider_profile.weekly_hours': 'Weekly available-time tier: lt3 = under 3 h; 3to5 = 3–5 h; 5to8 = 5–8 h; gt8 = 8 h+; pass an empty string to clear',
@@ -122,7 +123,8 @@ const TOOL_TEXT: Record<Lang, Record<string, string>> = {
     recalibrate_activity_power: "Rescale and recompute all power-derived metrics of one ride and write back (corrects a systematic power-meter calibration offset): per-second power × scale, then recompute NP/avg/peak power/peak curve/IF/TSS/zones/intervals/cadence-power etc., returning an old-vs-new diff. Scale range 0.5–1.5 (clamped); raw per-second data is not rewritten — re-import the original file or re-run with another factor to revert. Use only with a credible basis (HR-power cross-check or a user-stated offset); when unsure, set_power_flag first.",
     'recalibrate_activity_power.activity_id': 'Activity id (activity_id from list_activities)',
     'recalibrate_activity_power.scale_factor': 'Scale factor: true power = recorded power × factor (0.5–1.5). E.g. if the meter reads ~5% low, pass 1.05',
-    update_ftp: "Update the user's FTP configuration from the current best scientific estimate (no arguments; the value always comes from the estimator, never invented by the model). The tool re-estimates internally and hard-validates data volume, method consistency, all-out anchor and data freshness; when unmet it returns the refusal reason and data-needs list.",
+    update_ftp: "Update the user's FTP from the current best scientific estimate. By default the estimator's output (mean of both methods) is used; optionally pass ftp_watts to choose a value inside the estimate range (e.g. the lower end for amateurs/beginners) — the value is clamped into this run's estimate range [range_low, range_high], so values outside it can never be written. The tool re-estimates and hard-validates data volume / method consistency / all-out anchor / freshness, returning the refusal reason and data needs when unmet.",
+    'update_ftp.ftp_watts': "Optional chosen value (watts): first use estimate_ftp to learn this run's reference range, and only specify it with a clear basis (rider is conservative/aggressive, beginner taking the low end, HR/perceived effort suggesting an overestimate); omit to use the mean of both methods. Returns clamped=true when the value was clipped to a range boundary",
     reanalyze_activity: "Re-analyze one activity with the current athlete parameters (FTP/max HR/weight) and write it back to the library: recomputes IF/TSS/power-HR zones/interval detection etc. from stored per-second data, overwrites that activity's analysis results, and returns an old-vs-new metrics diff. Use after an FTP update for affected rides (e.g. the anchor ride) or rides the user names.",
     'reanalyze_activity.activity_id': 'Activity id (activity_id from list_activities)',
   },
@@ -456,8 +458,14 @@ export function toolDefs(lang: Lang = 'zh'): ToolDef[] {
       function: {
         name: 'update_ftp',
         description: L('update_ftp'),
-        // 零参：数值只来自估算器，模型没有自定 FTP 的入口
-        parameters: { type: 'object', properties: {} },
+        // 可选 ftp_watts：模型可在估算区间内自选（服务层夹逼到 [range_low, range_high]），
+        // 区间外的数值写不进去——缺省取两法均值（2026-10-20，decisions §35）
+        parameters: {
+          type: 'object',
+          properties: {
+            ftp_watts: { type: 'number', description: L('update_ftp.ftp_watts') },
+          },
+        },
       },
     },
     {

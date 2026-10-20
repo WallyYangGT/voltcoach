@@ -46,6 +46,8 @@ function fakeIo(overrides = {}) {
     recentFormDaily: async (days) => [{ date: '2026-03-25', tss: 100, ctl: 50, atl: 45, tsb: 5, _days: days }],
     monthlySummary: async (months) => [{ month: '2026-03', tss: 900, _months: months }],
     getAthleteState: async () => ({ athlete: { ftp_watts: 210, max_hr: 190, weight_kg: 65 }, configured: true }),
+    // FTP 校准判据（与首页瓦片同源；测试可覆写验证收紧后的 athlete_configured）
+    isFtpCalibrated: async () => io._ftpCalibrated ?? true,
     getProfile: async () => ({
       identity: '上班族骑手',
       goal: '200km 骑游',
@@ -68,8 +70,9 @@ function fakeIo(overrides = {}) {
       io._savedMemory = input; // 供断言 source 标记
       return 42;
     },
-    applyFtpUpdate: async (lang) => {
+    applyFtpUpdate: async (lang, opts) => {
       io._ftpUpdateLang = lang;
+      io._ftpUpdateOpts = opts ?? null;
       return { applied: true, old_ftp_w: 210, new_ftp_w: 224, updated_at: '2026-03-25T10:00:00.000Z' };
     },
     getDossier: async () => io._dossier ?? null,
@@ -130,7 +133,9 @@ test('toolDefs：19 个工具、双语描述、schema 关键字段', () => {
   assert.deepEqual(byName.update_training_plan.function.parameters.required, ['plan']);
   assert.deepEqual(byName.adjust_plan_sessions.function.parameters.required, ['ops']);
   assert.match(byName.adjust_plan_sessions.function.description, /肯定答复/); // 确认落实协议进工具描述
-  assert.deepEqual(Object.keys(byName.update_ftp.function.parameters.properties), []); // 零参
+  // update_ftp：可选 ftp_watts（估算区间内自选；非必填 = 缺省取两法均值）
+  assert.deepEqual(Object.keys(byName.update_ftp.function.parameters.properties), ['ftp_watts']);
+  assert.equal(byName.update_ftp.function.parameters.required, undefined);
   assert.deepEqual(Object.keys(byName.get_dossier.function.parameters.properties), []); // 零参
   assert.deepEqual(Object.keys(byName.get_training_plan.function.parameters.properties), []); // 零参
 });
@@ -481,19 +486,44 @@ test('recalibrate_activity_power：数值校验、透传服务层；训练不存
   assert.match(missing.error, /训练库中找不到/);
 });
 
-test('update_ftp：零参透传编排层结果，lang 随 ctx 注入；en 场景同构', async () => {
+test('update_ftp：缺省不传 opts（取两法均值）、自选值透传、非法数值报错、lang 随 ctx 注入', async () => {
   const io = fakeIo();
   const exec = createExecuteTool(io, { lang: 'zh' });
   const ok = JSON.parse(await exec('update_ftp', {}));
   assert.equal(ok.applied, true);
   assert.equal(ok.new_ftp_w, 224);
   assert.equal(io._ftpUpdateLang, 'zh');
+  assert.equal(io._ftpUpdateOpts, null); // 缺省不构造 opts（服务层走估算均值）
+  // 自选值（夹逼在服务层做，工具层只做数值校验后透传）
+  const chosen = JSON.parse(await exec('update_ftp', { ftp_watts: 218.6 }));
+  assert.equal(chosen.applied, true);
+  assert.deepEqual(io._ftpUpdateOpts, { ftp_watts: 218.6 });
+  // 非数值 → {error}（不落服务层）。空串/布尔/数组也拒绝——Number() 宽容解析会把
+  // 「未填的可选参数」静默变成 0 并夹到区间低端（code-review P2）
+  for (const bad of ['abc', '', ' ', true, [], {}]) {
+    const r = JSON.parse(await exec('update_ftp', { ftp_watts: bad }));
+    assert.match(r.error, /ftp_watts 需为数值/, JSON.stringify(bad));
+  }
+  // null 视同缺省（模型传 null 不报错）
+  const nulled = JSON.parse(await exec('update_ftp', { ftp_watts: null }));
+  assert.equal(nulled.applied, true);
+  assert.equal(io._ftpUpdateOpts, null);
+  // 0/负数是被允许的请求（服务层夹逼到区间边界），不是类型错误
+  await exec('update_ftp', { ftp_watts: 0 });
+  assert.deepEqual(io._ftpUpdateOpts, { ftp_watts: 0 });
+  await exec('update_ftp', { ftp_watts: -5 });
+  assert.deepEqual(io._ftpUpdateOpts, { ftp_watts: -5 });
   const ioEn = fakeIo();
   await createExecuteTool(ioEn, { lang: 'en' })('update_ftp', {});
   assert.equal(ioEn._ftpUpdateLang, 'en');
-  // 传了参数也不影响（零参工具，多余键被忽略）
-  const ignored = JSON.parse(await exec('update_ftp', { ftp_watts: 999 }));
-  assert.equal(ignored.applied, true);
+});
+
+test('get_athlete_profile：athlete_configured 走 FTP 校准判据（非「有 athlete 行」）', async () => {
+  // 只改过体重/最大心率、FTP 仍出厂默认 → configured=false（与健康瓦片同源判据）
+  const uncalibrated = createExecuteTool(fakeIo({ isFtpCalibrated: async () => false }), { lang: 'zh' });
+  const p = JSON.parse(await uncalibrated('get_athlete_profile', {}));
+  assert.equal(p.athlete_configured, false);
+  assert.deepEqual(p.athlete, { ftp_watts: 210, max_hr: 190, weight_kg: 65 });
 });
 
 test('reanalyze_activity：activity_id 形状校验；不存在兜 {error}；成功返回新旧对比', async () => {

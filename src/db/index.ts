@@ -30,6 +30,7 @@ import {
 import { buildDossier, type AthleteDossier } from '@/core/dossier';
 import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '@/core/form';
 import type { CyclingRideInput } from '@/core/ftp';
+import { isFtpCalibratedFrom } from '@/core/ftp';
 import { t, type Lang } from '@/core/i18n';
 import { isShortMemoryExpired, type MemoryScope } from '@/core/memory';
 import { localDay } from '@/core/local-day';
@@ -195,7 +196,10 @@ export async function getFtpMeta(): Promise<FtpMeta> {
   try {
     const p = JSON.parse(row.value);
     return {
-      updated_at: typeof p.ftp_updated_at === 'string' ? p.ftp_updated_at : null,
+      updated_at:
+        typeof p.ftp_updated_at === 'string' && p.ftp_updated_at.length > 0
+          ? p.ftp_updated_at
+          : null,
       source: (p.ftp_source ?? null) as FtpSource | null,
     };
   } catch {
@@ -203,11 +207,57 @@ export async function getFtpMeta(): Promise<FtpMeta> {
   }
 }
 
+/**
+ * FTP 是否已校准（2026-10-20 判据收紧，decisions §35）：健康瓦片 IF 采信与
+ * AI 侧 athlete_configured 的统一口径（纯判据见 core/ftp.isFtpCalibratedFrom）。
+ *
+ * `getAthleteState().configured` 是「有 athlete 行」（用户可能只改过体重/最大心率，
+ * FTP 仍是出厂默认 106W），不能作为「FTP 已校准」使用。单次读取 athlete 行
+ * （含溯源戳与 AI 快照标记），读时归一化旧版撤销留下的 manual 假戳。
+ */
+export async function isFtpCalibrated(): Promise<boolean> {
+  const db = await getDb();
+  const row = await db.getFirstAsync<{ value: string }>(
+    `SELECT value FROM settings WHERE key = 'athlete'`,
+  );
+  let ftpWatts = ATHLETE.ftp_watts;
+  let updatedAt: string | null = null;
+  let source: FtpSource | null = null;
+  let hasAiUpdate = false;
+  if (row) {
+    try {
+      const p = JSON.parse(row.value);
+      if (Number.isFinite(Number(p.ftp_watts))) ftpWatts = Number(p.ftp_watts);
+      updatedAt = typeof p.ftp_updated_at === 'string' ? p.ftp_updated_at : null;
+      source = (p.ftp_source ?? null) as FtpSource | null;
+      hasAiUpdate = !!p.ai_ftp_update && typeof p.ai_ftp_update === 'object';
+    } catch {
+      // 行损坏：按出厂默认 + 无戳处理（保守判未校准）
+    }
+  }
+  return isFtpCalibratedFrom(ftpWatts, updatedAt, ATHLETE.ftp_watts, {
+    source,
+    hasAiUpdate,
+  });
+}
+
 /** AI 教练更新 FTP 的快照（athlete JSON 扩展字段 ai_ftp_update；首页披露条与撤销入口用，S3） */
 export interface AiFtpUpdateSnapshot {
   old_ftp_w: number;
   new_ftp_w: number;
   updated_at: string;
+  /** 模型自选的原值（2026-10-20 起；缺省=按估算均值更新，旧快照无此字段） */
+  requested_w?: number;
+  /** 自选所依据的估算区间（披露条展示「在区间内自选」） */
+  range_low_w?: number;
+  range_high_w?: number;
+  /**
+   * AI 更新前的溯源戳（撤销恢复用，2026-10-20 code-review P1）：撤销把 FTP 恢复成
+   * 默认 106W 时，setAthlete 会因值变化重新盖戳 → 校准判据误判为已校准；撤销据此
+   * 把溯源戳恢复到 AI 更新前的状态（旧快照无此字段按「无戳」处理，保守判未校准）。
+   */
+  old_ftp_updated_at?: string | null;
+  old_ftp_source?: FtpSource | null;
 }
 
 /** 读 AI 更新快照（无行/损坏/字段不全返回 null） */
@@ -257,11 +307,16 @@ export async function setAiFtpUpdate(snapshot: AiFtpUpdateSnapshot | null): Prom
  * opts.source：FTP 值实际变更时在 athlete JSON 上盖溯源戳（ftp_updated_at/ftp_source），
  * 供「AI 已代为更新」的追溯与后续展示； athlete JSON 的扩展字段经 getEffectiveAthlete
  * 的 Object.assign 天然保活（不加列、不动 SCHEMA_VERSION）。
+ * opts.stamps：显式覆盖溯源戳（仅撤销路径用）——恢复撤销前的戳或清除（null），
+ * 避免「撤销回默认值」被 setAthlete 的自动盖戳误判为已校准。
  */
 export async function setAthlete(
   partial: Partial<AthleteParams>,
   lang: Lang = 'zh',
-  opts?: { source?: FtpSource },
+  opts?: {
+    source?: FtpSource;
+    stamps?: { updated_at: string | null; source: FtpSource | null };
+  },
 ): Promise<AthleteParams> {
   const updates: Record<string, number> = {};
   for (const key of Object.keys(ATHLETE_LIMITS) as (keyof typeof ATHLETE_LIMITS)[]) {
@@ -278,7 +333,13 @@ export async function setAthlete(
     ...current,
     ...updates,
   };
-  if (updates.ftp_watts != null && updates.ftp_watts !== current.ftp_watts) {
+  if (opts?.stamps) {
+    // 撤销路径：显式恢复（null = 清除该字段，回到「从未变更」状态）
+    if (opts.stamps.updated_at) merged.ftp_updated_at = opts.stamps.updated_at;
+    else delete merged.ftp_updated_at;
+    if (opts.stamps.source) merged.ftp_source = opts.stamps.source;
+    else delete merged.ftp_source;
+  } else if (updates.ftp_watts != null && updates.ftp_watts !== current.ftp_watts) {
     merged.ftp_updated_at = new Date().toISOString();
     merged.ftp_source = opts?.source ?? 'manual';
   }

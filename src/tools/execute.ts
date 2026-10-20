@@ -4,8 +4,9 @@
  * 三类工具：只读查询（数据经 ToolIo 注入，不重复实现查询逻辑）、纯计算
  * （simulate_form / generate_workout → src/planning 纯函数，simulate_form 未显式给
  * 起始 CTL/ATL 时经 ToolIo 读一次训练库当前值）、写（save_memory 写 ai_memories，
- * 带 source 场景标记；M5 追加 update_ftp——数值只来自估算器、采纳门槛在 core/ftp
- * 硬校验；reanalyze_activity 重算写回单次训练。两者编排均在 services 层，本层薄壳）。
+ * 带 source 场景标记；M5 追加 update_ftp——数值出自估算区间（缺省两法均值，模型
+ * 可在区间内自选、服务层夹逼），采纳门槛在 core/ftp 硬校验；reanalyze_activity
+ * 重算写回单次训练。两者编排均在 services 层，本层薄壳）。
  *
  * 与旧版的差异（其余逐字平移）：旧版直接调 db.js 同步查询并读全局同步过的 ATHLETE；
  * App 版所有 IO 异步、生效骑手参数显式注入——由 createExecuteTool(io) 工厂闭包持有，
@@ -81,8 +82,10 @@ export interface ToolIo {
   recentFormDaily(days: number): Promise<{ date: string; tss: number; ctl: number; atl: number; tsb: number }[]>;
   /** 最近 N 个月汇总 */
   monthlySummary(months: number): Promise<unknown[]>;
-  /** 骑手参数生效值与是否已配置 */
+  /** 骑手参数生效值与是否已配置（configured = 「有 athlete 行」，首开引导用） */
   getAthleteState(): Promise<{ athlete: AthleteParams; configured: boolean }>;
+  /** FTP 是否已校准（判据见 db.isFtpCalibrated：溯源戳或非出厂默认值；AI 侧 athlete_configured 用它） */
+  isFtpCalibrated(): Promise<boolean>;
   /** 用户背景与训练目标（含教练模式与时间预算） */
   getProfile(): Promise<PromptProfile>;
   /** 更新骑手档案（校验/合并口径在 core/profile；非法值抛双语 Error，本层兜为 {error}） */
@@ -107,10 +110,11 @@ export interface ToolIo {
   /** 按系数缩放重算一次训练的功率派生指标并写回（编排见 services/power-calib），返回结果对象 */
   recalibratePower(activityId: string, scaleFactor: number, lang: Lang): Promise<unknown>;
   /**
-   * AI 触发的 FTP 更新（估算 → 采纳门槛 → 写回，编排见 services/ftp-apply）。
-   * 拒绝不抛错，返回 {applied:false, reason, estimate}；成功返回 {applied:true, ...}。
+   * AI 触发的 FTP 更新（估算 → 区间夹逼 → 采纳门槛 → 写回，编排见 services/ftp-apply）。
+   * opts.ftp_watts 为模型自选值（夹逼到估算区间内）；拒绝不抛错，返回
+   * {applied:false, reason, estimate}；成功返回 {applied:true, ...}。
    */
-  applyFtpUpdate(lang: Lang): Promise<unknown>;
+  applyFtpUpdate(lang: Lang, opts?: { ftp_watts?: number }): Promise<unknown>;
   /**
    * 按当前骑手参数重新分析一次训练并写回（编排见 services/reanalyze）。
    * 活动不存在/缺逐秒数据抛双语 Error，本层兜为 {error}。
@@ -228,7 +232,10 @@ const toolGetMonthlySummary: ToolImpl = async (args, ctx, io) => {
 };
 
 const toolGetAthleteProfile: ToolImpl = async (_args, ctx, io) => {
-  const { athlete, configured } = await io.getAthleteState();
+  const { athlete } = await io.getAthleteState();
+  // athlete_configured 的语义是「FTP 已校准」（2026-10-20 收紧，decisions §35）——
+  // 旧口径「有 athlete 行」会把只改过体重的用户当成已校准，与技能 10 的描述不一致
+  const configured = await io.isFtpCalibrated();
   const profile = await io.getProfile();
   return toResult(
     {
@@ -570,10 +577,18 @@ const toolRecalibratePower: ToolImpl = async (args, ctx, io) => {
   return toResult(await io.recalibratePower(id, scale, lang), lang);
 };
 
-/** update_ftp：AI 教练按当前最佳估算更新 FTP（零参——数值只来自估算器，模型无自定数值入口） */
-const toolUpdateFtp: ToolImpl = async (_args, ctx, io) => {
+/** update_ftp：AI 教练按当前最佳估算更新 FTP；可选 ftp_watts 在估算区间内自选（夹逼后写入） */
+const toolUpdateFtp: ToolImpl = async (args, ctx, io) => {
   const lang = ctx?.lang || 'zh';
-  return toResult(await io.applyFtpUpdate(lang), lang);
+  let requested: number | undefined;
+  if (args?.ftp_watts != null) {
+    // 严格类型：Number('')/Number(true)/Number([]) 都是有限数，宽容解析会把「未填的
+    // 可选参数」（空串）静默变成 0 → 夹到区间低端并真实写库（code-review P2）
+    if (typeof args.ftp_watts !== 'number' || !Number.isFinite(args.ftp_watts))
+      return errResult(t(lang, 'tool.ftp_invalid'));
+    requested = args.ftp_watts;
+  }
+  return toResult(await io.applyFtpUpdate(lang, requested != null ? { ftp_watts: requested } : undefined), lang);
 };
 
 /** reanalyze_activity：按当前骑手参数重算一次训练并写回，返回新旧指标对比 */
