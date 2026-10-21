@@ -14,7 +14,14 @@ src/
                         （教练模式与时间预算校验/合并）、对话滚动摘要形状
                         （chat-summary）——
                         不 import 任何 RN/Expo 模块，node:test 直接覆盖
-  db/                   训练库（expo-sqlite + SQLCipher；开库后第一条语句必须是 PRAGMA key）
+  db/                   训练库（expo-sqlite + SQLCipher；开库后第一条语句必须是 PRAGMA key）。
+                        实现按业务域拆分：client.ts（连接生命周期/密钥/迁移接线）、
+                        athlete（骑手参数与档案）、activities（训练记录与统计查询）、
+                        prefs（语言/同步态/披露条锚）、aiconfig、reports、chats（含滚动
+                        摘要）、memories、dossier、plans；index.ts 只做 re-export barrel
+                        （'@/db' 是历史统一出口，域模块函数集合即仓储端口）。
+                        域函数的 SQL 行为（滚动清理/事务/守卫/指纹）由 jest 侧真 SQL
+                        假库（node:sqlite 适配）覆盖：test/db/*
   records-store.ts      逐秒数据 gzip 文件落盘/读取（不进 SQLite，与库行一一对应）
   services/             编排层：导入管线（解析→查重→入库→落盘→快照）、室内判重
                         起骑时刻补齐（dedupe.ts）、云同步编排
@@ -40,7 +47,9 @@ modules/                本地 Expo 原生模块（generation-keepalive：AI 生
 plugins/                本地 config plugin（with-generation-keepalive.js：prebuild 时向
                         AndroidManifest 注入 service 声明；gradle 注入仍走 scripts/ 补丁）
 scripts/                守卫与工具脚本（除 fflate——备份层同用的 zip 库——外仅用 Node 内置库）
-test/                   node:test 纯函数测试（含合成 FIT 二进制生成器 make_test_fit.mjs）
+test/                   两套并行：node:test 纯函数测试（*.test.mjs，含合成 FIT 二进制
+                        生成器 make_test_fit.mjs）+ jest 组件/服务/db 测试
+                        （*.test.ts(x)：components、services、db 真 SQL 假库）
 docs/                   本公开文档体系
 assets/brand/           品牌 mark（logo.svg，App 图标由 scripts/make-app-icons.mjs 从它生成）
 ```

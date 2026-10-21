@@ -26,9 +26,9 @@ import {
   rebuildDossierQuietly,
   updateActivitySummary,
 } from '@/db';
+import { invalidateDb } from '@/db/notify';
 import { saveRecords } from '@/records-store';
 import { enrichRideKeysForDedupe } from './dedupe';
-import { invalidateReportTitles } from './aiTitle';
 
 /** 单次导入结果（导入页逐文件进度展示） */
 export interface ImportOutcome {
@@ -107,12 +107,12 @@ async function decideExistingRide(
  * 按内容指纹把孤儿 AI 引用挂回指定活动（best-effort，失败不影响导入）。
  * 插入/更新/跳过三条路径都调用：库里可能已存在同趟骑行的另一份副本，
  * 而被删掉的那份才是报告原先锚定的活动。
+ * 标题缓存失效由 db 层事件承担（reattachOrphanRefs 成功后发 activities 域事件）。
  */
 async function reattachQuietly(fingerprint: string, uuid: string): Promise<void> {
   try {
     const reattached = await reattachOrphanRefs(fingerprint, uuid);
     if (reattached > 0) {
-      invalidateReportTitles();
       console.info(`孤儿 AI 引用已重挂: ${reattached} 条 → ${uuid}`);
     }
   } catch (e) {
@@ -190,8 +190,11 @@ export async function importFitBytes(
 
   // 触发点：入库成功后静默滚一份本地快照（fire-and-forget 串行链，失败仅警告）
   void rollLocalSnapshotQuietly();
-  // 同名重导入可能换了内容 → 起骑时刻缓存失效（v3 起缓存键是 uuid）
-  invalidateReportTitles(uuid);
+  // 补充失效：入库/更新的 db 写已经发过一次 activities 事件，但那可能早于 records
+  // 落盘（保存逐秒数据是本层职责，不在 db 域内）——标题的起骑时刻来自 records 首帧，
+  // 早发的那次事件清完缓存后若立刻重读，会读到旧/缺失文件并把 null 缓存下来。
+  // 这里在 records 落盘之后再发一次，保证订阅方重取时数据已完整（v3 起缓存键是 uuid）。
+  invalidateDb('activities', uuid);
   // 更新/插入都可能正是某份孤儿报告/对话等待重挂的同一趟骑行
   await reattachQuietly(fingerprint, uuid);
   void rebuildDossierQuietly(); // 训练档案基线随之更新（fire-and-forget，指纹兜底自愈）

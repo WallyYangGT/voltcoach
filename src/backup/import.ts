@@ -14,6 +14,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as SQLite from 'expo-sqlite';
 import { closeDb, countActivities, getDbKey, SCHEMA_VERSION } from '@/db';
+import { invalidateAllDb } from '@/db/notify';
 import { runMigrations } from '@/db/migrations';
 import { CREATE_V2_COMPAT_SQL } from '@/db/schema';
 import { recordBaseFromFileName } from '@/core/records';
@@ -128,6 +129,10 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
     await closeDb();
     removeWalSiblings();
     await importedTmp.move(appDbFile(), { overwrite: true });
+    // 换库窗口内可能有并发读（事件驱动的页面重取、AI 生成的进度写）经 getDb() 又开了
+    // **旧文件**并把句柄缓存进单例——旧文件此时已被覆盖，句柄指向失效 inode，后续读全部
+    // 停在旧数据直到重启。再关一次（幂等）把这种偷开的句柄丢弃，让下一次读重开新库。
+    await closeDb();
 
     clearStoredRecords();
     let restored = 0;
@@ -148,12 +153,26 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
         }
       }
     }
-    return { activities: await countActivities(), records: restored };
+    return finish(restored);
   } finally {
     await closeQuietly(conn);
     cleanup(staged);
     cleanup(new File(dir, importedTmpName)); // 新实例恒指原临时名：成功路径 no-op，失败路径清真临时文件
   }
+}
+
+/**
+ * 收尾：统计新库活动数 → 全域失效 → 返回。
+ *
+ * 整库替换后**所有**域的数据都变了（含 records 已写完这一前提——详情页图表
+ * 读到的是新库对应的逐秒数据）。此前的口径是「单例复位 + 各页 useFocusEffect
+ * 聚焦自刷新」，但导入完成后用户可能正停在首页/列表上（备份导入入口在数据页，
+ * 返回栈里其它 tab 仍挂载），focus 不会触发 → 停在旧数据。失效事件补上这条路径。
+ */
+async function finish(restored: number): Promise<ImportOutcome> {
+  const activities = await countActivities();
+  invalidateAllDb();
+  return { activities, records: restored };
 }
 
 /**

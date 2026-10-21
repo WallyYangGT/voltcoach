@@ -49,6 +49,7 @@ import { FtpEstimatePanel } from '@/components/FtpEstimatePanel';
 import { GlossaryModal } from '@/components/GlossaryModal';
 import { PlanAdjustBanner } from '@/components/PlanAdjustBanner';
 import { TodayAdviceCard } from '@/components/TodayAdviceCard';
+import { useDbInvalidation } from '@/components/useDbInvalidation';
 import { WeeklyActivityTile } from '@/components/WeeklyActivityTile';
 import { useI18n } from '@/i18n';
 import { useRideDateLabels } from '@/services/aiTitle';
@@ -143,6 +144,13 @@ export default function HomeScreen() {
     useCallback(() => {
       load();
     }, [load]),
+  );
+
+  // 写入发生时页面可能正可见（focus 不触发）：云同步后台导入、AI 工具改 FTP/档案、
+  // 另一 tab 的操作都靠这里补刷。域覆盖面＝本页全部读函数的数据源。
+  useDbInvalidation(
+    ['activities', 'athlete', 'profile', 'plans', 'aiconfig'],
+    load,
   );
 
   const last = data && data.daily.length ? data.daily[data.daily.length - 1] : null;

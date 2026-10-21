@@ -20,8 +20,9 @@ import {
   type ActivityListItem,
 } from '@/db';
 import { useI18n } from '@/i18n';
+import { useDbInvalidation } from '@/components/useDbInvalidation';
 import { deleteStoredRecord } from '@/records-store';
-import { invalidateReportTitles, useRideDateLabels } from '@/services/aiTitle';
+import { useRideDateLabels } from '@/services/aiTitle';
 import { palette } from '@/theme';
 
 export default function ActivitiesScreen() {
@@ -52,6 +53,9 @@ export default function ActivitiesScreen() {
     }, [load]),
   );
 
+  // 写入发生时列表可能正可见（云同步后台导入、AI 工具改分类/备注/功率标记）
+  useDbInvalidation(['activities'], load);
+
   /** 收起除 keep 之外的所有左滑行（打开新行时调用） */
   const closeOthers = (keep: string) => {
     for (const [name, methods] of swipeRefs.current) {
@@ -80,7 +84,7 @@ export default function ActivitiesScreen() {
             } catch (e) {
               console.warn('逐秒数据清理失败（训练已删除）:', e);
             }
-            invalidateReportTitles(activityId);
+            // 标题缓存与该页列表由 deleteActivity 的 activities 域事件带出
             void rebuildDossierQuietly(); // 档案基线剔除该骑行（fire-and-forget）
             await load();
           })();

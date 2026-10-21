@@ -25,7 +25,8 @@ import { bytesToBase64, unpackBackup } from '@/backup/archive';
 import { findDuplicateGroups } from '@/core/dedupe';
 import { formatDuration } from '@/core/metrics';
 import { copyStoredRecord, deleteStoredRecord } from '@/records-store';
-import { invalidateReportTitles, useRideDateLabels } from '@/services/aiTitle';
+import { useRideDateLabels } from '@/services/aiTitle';
+import { invalidateAllDb } from '@/db/notify';
 import { listRideKeysForDedupe } from '@/services/dedupe';
 import {
   SCHEMA_VERSION,
@@ -178,7 +179,7 @@ export default function DataScreen() {
     importBackupFile(uri, pass)
       .then((outcome) => {
         setPendingImport(null);
-        invalidateReportTitles(); // 整库被替换：活动行与 records 全变了，标题缓存必须全清
+        // 整库替换后的全域失效由 importBackupFile 在 records 恢复完成后发出（见 finish）
         Alert.alert(t('data.backup.confirmTitle'), t('data.backup.importDone', { acts: outcome.activities, recs: outcome.records }));
       })
       .catch((e) => {
@@ -187,8 +188,9 @@ export default function DataScreen() {
         else {
           setPendingImport(null);
           // 非可重试失败可能发生在整库替换之后（如 records 落盘/迁移中途出错）：
-          // 起骑时刻缓存可能已陈旧，照样清掉——室内判重/标题都依赖它
-          invalidateReportTitles();
+          // 起骑时刻缓存可能已陈旧，照样清掉——室内判重/标题都依赖它。
+          // 走全域失效（成功路径的 invalidateAllDb 在 finish 里，失败路径到不了）
+          invalidateAllDb();
         }
         Alert.alert(t('data.err.generic'), describeError(e));
       })
@@ -283,7 +285,8 @@ export default function DataScreen() {
       Alert.alert(t('data.dupe.failed'), describeError(e));
       void scanDuplicates(true);
     } finally {
-      invalidateReportTitles(); // 保留项可能接管了副本的逐秒数据/引用 → 标题缓存全清
+      // 标题缓存与各页数据由 mergeActivityRows 的 activities 域事件带出（副本 uuid 与
+      // 保留项 uuid 都在 payload 里）；records 在 merge 之前已复制到保留项，顺序正确
       void rebuildDossierQuietly(); // 副本行已删，档案基线随之更新
       setMerging(false);
       load();

@@ -42,8 +42,8 @@ import { HR_ZONES, PEDAL_TIME, POWER_ZONES, type Zone } from '@/core/settings';
 import { CATEGORY_KEYS, deleteActivity, getActivityPowerFlag, getActivitySummary, rebuildDossierQuietly, resolveActivityUuid, setActivityCategory, setActivityNote } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import { MetricGrid } from '@/components/MetricGrid';
+import { useDbInvalidation } from '@/components/useDbInvalidation';
 import { deleteStoredRecord, loadStoredRecords } from '@/records-store';
-import { invalidateReportTitles } from '@/services/aiTitle';
 import { setPowerFlagAndRefresh } from '@/services/power-calib';
 import { palette } from '@/theme';
 
@@ -119,6 +119,11 @@ export default function ActivityDetailScreen() {
   // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
   const [note, setNote] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
+  // 挂载标记 + 重取序号：失效事件触发的重取可能晚于卸载/下一次重取（见 loadDetail）
+  const mountedRef = useRef(true);
+  const seqRef = useRef(0);
+  // 备注草稿已播种到哪个活动（幂等播种，见 loadDetail 的说明）
+  const noteSeededRef = useRef<string | null>(null);
   // 异常细则折叠（M5）：默认收起只看摘要行（含总暂停秒数），点击展开逐条标注
   const [dqOpen, setDqOpen] = useState(false);
   // AI 复盘面板：顶部按钮触发生成/露出面板，panelY 记录面板位置供滚动定位
@@ -187,39 +192,83 @@ export default function ActivityDetailScreen() {
     }, [activityId]),
   );
 
-  useEffect(() => {
-    let alive = true;
-    if (!activityId) {
-      return () => {
-        alive = false;
-      };
-    }
-    (async () => {
+  // 详情数据装载（挂载 + 数据失效事件共用）：
+  // resetNote=false 时**不**重灌备注输入框——事件可能由别处的写触发，用户正在编辑的
+  // 草稿不能因此被库值覆盖。摘要/图表/功率标记仍照常重取（AI 重算/校准后要对上）。
+  //
+  // 请求序号（seqRef）：事件化后同一骑行可能在毫秒级连发两次重取（reanalyze /
+  // recalibrate 各有两次 updateActivitySummary），先发起的读可能后完成——不加序号
+  // 会把旧 summary/旧逐秒序列写回并停在那里。每次 await 之后都校验「仍是最新一轮
+  // 且已挂载」才写 state。
+  const loadDetail = useCallback(
+    async (resetNote: boolean) => {
+      if (!activityId) return;
+      const seq = (seqRef.current += 1);
+      const fresh = () => seqRef.current === seq && mountedRef.current;
       try {
         const s = await getActivitySummary(activityId);
-        if (!alive) return;
+        if (!fresh()) return;
         setSummary(s);
-        setNote(s?.activity.note ?? '');
-        setPowerFlagged(await getActivityPowerFlag(activityId));
-        if (s) {
+        // 备注草稿的播种只做一次（每个骑行一次）：resetNote 只在挂载时传 true，但那次
+        // 读可能被先到的失效事件顶成 stale 而丢弃——没有这条兜底，本有备注的骑行会
+        // 显示空输入框（用户随手保存就覆盖旧备注）。noteSeededRef 记已播种的 uuid。
+        if (resetNote || noteSeededRef.current !== activityId) {
+          noteSeededRef.current = activityId;
+          setNote(s?.activity.note ?? '');
+        }
+        // 功率标记单独兜错：它失败不该把已读到的 summary 清成空态
+        try {
+          const flagged = await getActivityPowerFlag(activityId);
+          if (fresh()) setPowerFlagged(flagged);
+        } catch (e) {
+          console.warn('读取功率标记失败（保留已加载的详情）:', e);
+        }
+        if (!s) return;
+        // 逐秒数据同样单独兜错（同功率标记口径）：records 读失败只降级图表，不清 summary
+        try {
           const stored = await loadStoredRecords(activityId);
-          if (alive) {
-            setThinned(stored ? thinRecords(stored) : null);
-            // 0W 根治后 summary.pedal_time 为权威数据源（与 AI 同源）；旧数据（升级前
-            // 入库的 summary 无该字段）回退 records 现算，口径同 core/pedalTime
-            setPedal(s.pedal_time ?? (stored ? pedalTimeBreakdown(stored) : null));
-            setDateLabel(stored?.length ? localDayFromUtc(stored[0].timestamp) : null);
+          if (!fresh()) return;
+          setThinned(stored ? thinRecords(stored) : null);
+          // 0W 根治后 summary.pedal_time 为权威数据源（与 AI 同源）；旧数据（升级前
+          // 入库的 summary 无该字段）回退 records 现算，口径同 core/pedalTime
+          setPedal(s.pedal_time ?? (stored ? pedalTimeBreakdown(stored) : null));
+          setDateLabel(stored?.length ? localDayFromUtc(stored[0].timestamp) : null);
+        } catch (e) {
+          console.warn('读取逐秒数据失败（图表降级为空，摘要保留）:', e);
+          if (fresh()) {
+            setThinned(null);
+            setPedal(s.pedal_time ?? null);
+            setDateLabel(null);
           }
         }
       } catch (e) {
         console.warn('加载训练详情失败:', e);
-        if (alive) setSummary(null);
+        if (fresh()) setSummary(null);
       }
+    },
+    [activityId],
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void (async () => {
+      await loadDetail(true);
     })();
     return () => {
-      alive = false;
+      mountedRef.current = false;
+      seqRef.current += 1; // 卸载后作废在途请求
     };
-  }, [activityId]);
+  }, [loadDetail]);
+
+  // 本骑行被写入（AI set_power_flag / 重算 / 校准 / 分类备注等他处改动）时重取：
+  // 拆分前主 summary 只在挂载时读一次，AI 在对话里改完回到本页仍显示旧值。
+  // 事件带 uuid 时只认本次骑行；`activityUuids` 为空 = 域级/整库级事件（合并重复
+  // 也带 uuid，这里只在空列表时全量重取），一律重取。
+  useDbInvalidation(['activities'], (ev) => {
+    if (!activityId) return;
+    if (ev.activityUuids.length > 0 && !ev.activityUuids.includes(activityId)) return;
+    void loadDetail(false);
+  });
 
   // 「已保存 ✓」flash 的定时器：组件卸载时清理（否则卸载后 setState）
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -257,7 +306,7 @@ export default function ActivityDetailScreen() {
             } catch (e) {
               console.warn('逐秒数据清理失败（训练已删除）:', e);
             }
-            invalidateReportTitles(activityId);
+            // 标题缓存与列表由 deleteActivity 的 activities 域事件带出
             void rebuildDossierQuietly(); // 档案基线剔除该骑行（fire-and-forget）
             router.back();
           })();
