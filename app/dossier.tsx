@@ -56,9 +56,13 @@ export default function DossierScreen() {
     }, [load]),
   );
 
-  // 档案重建完成（导入/删除/合并/FTP 变更等触发）或训练数据变化时本页可能正开着，
-  // focus 不会触发 → 事件补刷（重建慢于写事件，两者都会到，最多多读一次缓存行）
-  useDbInvalidation(['dossier', 'activities'], load);
+  // 档案重建完成（'dossier' 由 rebuildDossierQuietly 在链尾发）或骑手参数变化
+  // （FTP 影响档案基线）时本页可能正开着，focus 不会触发 → 事件补刷。
+  // **不订阅 'activities'**：导入/删除的 activities 事件早于 quiet rebuild 完成，
+  // 那时 getDossier 指纹 miss 会就地全量重建一遍（全表 cycling 行 + JSON 解析），
+  // 随后 quiet rebuild 再跑一遍——批量同步时是可感知的重复开销，而 'dossier'
+  // 事件已经覆盖「档案已更新」这一个本页真正关心的事实。
+  useDbInvalidation(['dossier', 'athlete'], load);
 
   const rebuild = () => {
     setRefreshing(true);
