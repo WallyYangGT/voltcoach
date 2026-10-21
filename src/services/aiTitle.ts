@@ -183,7 +183,7 @@ function sportLabelOf(t: (key: never) => string, sport: string): string | null {
 }
 
 /**
- * 批量装配报告标题（AI 列表用）：一次全表取活动行，review/compare 再各读一次
+ * 批量装配报告标题（对话页列表用）：一次全表取活动行，review/compare 再各读一次
  * records 首帧（带缓存）。返回 map：报告 id → 标题。
  */
 export async function buildReportTitles(

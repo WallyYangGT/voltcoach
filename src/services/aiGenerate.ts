@@ -1102,7 +1102,7 @@ const RESUME_WINDOW_MS = 30 * 60_000;
 /**
  * 恢复被进程死亡打断的生成（根布局在冷启动 + 每次 background→active 时调度）：
  * - 未配置 AI 密钥时整体跳过（不把 pending 扫成 failed，等用户进页面自行处理）；
- * - 只补跑窗口内的 pending——窗口外的维持"进 AI 页面时补跑"的现状（此前唯一恢复
+ * - 只补跑窗口内的 pending——窗口外的维持"进对话页时补跑"的现状（此前唯一恢复
  *   路径），避免为用户早已放弃的任务重复消耗 token；SSE 无法续传，续跑 = 整份
  *   重新生成，token 重复消耗已知并接受；
  * - 进程内已在跑的任务由 generateReport/runChatGeneration 的注册表防双跑，无需在此判断。
