@@ -9,6 +9,7 @@
  */
 
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 import { isFtpCalibratedFrom } from '@/core/ftp';
 import { t, type Lang } from '@/core/i18n';
 import {
@@ -177,6 +178,7 @@ export async function setAiFtpUpdate(snapshot: AiFtpUpdateSnapshot | null): Prom
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     JSON.stringify(merged),
   );
+  invalidateDb('athlete'); // 首页 hero FTP 瓦片 / 健康瓦片 / 详情页功率口径都读 athlete
 }
 
 /**
@@ -227,6 +229,7 @@ export async function setAthlete(
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     JSON.stringify(merged),
   );
+  invalidateDb('athlete'); // FTP/体重/心率变更影响首页瓦片与后续分析口径
   return merged;
 }
 
@@ -280,5 +283,6 @@ export async function setProfile(
       JSON.stringify(merged),
     );
   }
+  invalidateDb('profile'); // 首页「今日建议」/ 计划页头 / AI 场景装配都读档案
   return { ...merged, configured: !isProfileEmpty(merged) };
 }

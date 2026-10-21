@@ -42,8 +42,8 @@ import { HR_ZONES, PEDAL_TIME, POWER_ZONES, type Zone } from '@/core/settings';
 import { CATEGORY_KEYS, deleteActivity, getActivityPowerFlag, getActivitySummary, rebuildDossierQuietly, resolveActivityUuid, setActivityCategory, setActivityNote } from '@/db';
 import { useI18n, type DictKey } from '@/i18n';
 import { MetricGrid } from '@/components/MetricGrid';
+import { useDbInvalidation } from '@/components/useDbInvalidation';
 import { deleteStoredRecord, loadStoredRecords } from '@/records-store';
-import { invalidateReportTitles } from '@/services/aiTitle';
 import { setPowerFlagAndRefresh } from '@/services/power-calib';
 import { palette } from '@/theme';
 
@@ -119,6 +119,8 @@ export default function ActivityDetailScreen() {
   // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
   const [note, setNote] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
+  // 挂载标记：失效事件触发的重取可能晚于卸载（setState on unmounted 的护栏）
+  const mountedRef = useRef(true);
   // 异常细则折叠（M5）：默认收起只看摘要行（含总暂停秒数），点击展开逐条标注
   const [dqOpen, setDqOpen] = useState(false);
   // AI 复盘面板：顶部按钮触发生成/露出面板，panelY 记录面板位置供滚动定位
@@ -187,23 +189,21 @@ export default function ActivityDetailScreen() {
     }, [activityId]),
   );
 
-  useEffect(() => {
-    let alive = true;
-    if (!activityId) {
-      return () => {
-        alive = false;
-      };
-    }
-    (async () => {
+  // 详情数据装载（挂载 + 数据失效事件共用）：
+  // resetNote=false 时**不**重灌备注输入框——事件可能由别处的写触发，用户正在编辑的
+  // 草稿不能因此被库值覆盖。摘要/图表/功率标记仍照常重取（AI 重算/校准后要对上）。
+  const loadDetail = useCallback(
+    async (resetNote: boolean) => {
+      if (!activityId) return;
       try {
         const s = await getActivitySummary(activityId);
-        if (!alive) return;
+        if (!mountedRef.current) return;
         setSummary(s);
-        setNote(s?.activity.note ?? '');
+        if (resetNote) setNote(s?.activity.note ?? '');
         setPowerFlagged(await getActivityPowerFlag(activityId));
         if (s) {
           const stored = await loadStoredRecords(activityId);
-          if (alive) {
+          if (mountedRef.current) {
             setThinned(stored ? thinRecords(stored) : null);
             // 0W 根治后 summary.pedal_time 为权威数据源（与 AI 同源）；旧数据（升级前
             // 入库的 summary 无该字段）回退 records 现算，口径同 core/pedalTime
@@ -213,13 +213,30 @@ export default function ActivityDetailScreen() {
         }
       } catch (e) {
         console.warn('加载训练详情失败:', e);
-        if (alive) setSummary(null);
+        if (mountedRef.current) setSummary(null);
       }
+    },
+    [activityId],
+  );
+
+  useEffect(() => {
+    mountedRef.current = true;
+    void (async () => {
+      await loadDetail(true);
     })();
     return () => {
-      alive = false;
+      mountedRef.current = false;
     };
-  }, [activityId]);
+  }, [loadDetail]);
+
+  // 本骑行被写入（AI set_power_flag / 重算 / 校准 / 分类备注等他处改动）时重取：
+  // 拆分前主 summary 只在挂载时读一次，AI 在对话里改完回到本页仍显示旧值。
+  // 事件带 uuid 时只认本次骑行；域级事件（合并/备份整库替换）一律重取。
+  useDbInvalidation(['activities'], (ev) => {
+    if (!activityId) return;
+    if (ev.activityUuids.length > 0 && !ev.activityUuids.includes(activityId)) return;
+    void loadDetail(false);
+  });
 
   // 「已保存 ✓」flash 的定时器：组件卸载时清理（否则卸载后 setState）
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -257,7 +274,7 @@ export default function ActivityDetailScreen() {
             } catch (e) {
               console.warn('逐秒数据清理失败（训练已删除）:', e);
             }
-            invalidateReportTitles(activityId);
+            // 标题缓存与列表由 deleteActivity 的 activities 域事件带出
             void rebuildDossierQuietly(); // 档案基线剔除该骑行（fire-and-forget）
             router.back();
           })();

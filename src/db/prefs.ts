@@ -9,6 +9,7 @@
  */
 
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 import type { Lang } from '@/core/i18n';
 import {
   DEFAULT_SYNC_STATE,
@@ -40,6 +41,7 @@ export async function setLang(lang: Lang): Promise<Lang> {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     lang,
   );
+  invalidateDb('prefs');
   return lang;
 }
 
@@ -71,6 +73,7 @@ export async function setSyncState(state: SyncState): Promise<void> {
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     JSON.stringify(state),
   );
+  invalidateDb('prefs');
 }
 
 // ---------------- AI 调整披露条已读锚（settings 松散 KV 行，一次性披露） ----------------
@@ -116,4 +119,5 @@ export async function markAdjustNoticeSeen(
     ADJUST_NOTICE_SEEN_PREFIX + kind,
     JSON.stringify({ identity, seen_at: new Date().toISOString() }),
   );
+  invalidateDb('prefs');
 }

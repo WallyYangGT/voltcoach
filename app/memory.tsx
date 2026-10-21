@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { deleteMemory, listAllMemories, type AiMemoryRow } from '@/db';
 import { localDayFromUtc } from '@/core/local-day';
 import { useI18n } from '@/i18n';
+import { useDbInvalidation } from '@/components/useDbInvalidation';
 import { palette } from '@/theme';
 
 export default function MemoryScreen() {
@@ -36,6 +37,9 @@ export default function MemoryScreen() {
       load();
     }, [load]),
   );
+
+  // AI 生成收尾的记忆回顾轮会写库（save_memory），本页可能正开着 → 重取
+  useDbInvalidation(['memories'], load);
 
   const confirmDelete = (m: AiMemoryRow) => {
     Alert.alert(t('mem.delete'), t('mem.deleteMsg'), [

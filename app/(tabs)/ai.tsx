@@ -23,6 +23,7 @@ import { getAiConfig, listActivities, listAiChats, listAiReports, deleteAiChat, 
 import { buildReportPrompt, createReportDraft, generateReport } from '@/services/aiGenerate';
 import { buildReportTitles, useRideDateLabels } from '@/services/aiTitle';
 import { useI18n } from '@/i18n';
+import { useDbInvalidation } from '@/components/useDbInvalidation';
 import { palette } from '@/theme';
 
 /** 统一列表条目（报告 / 对话混排） */
@@ -84,6 +85,9 @@ export default function AiCenterScreen() {
       load();
     }, [load]),
   );
+
+  // 生成中/完成后列表可能正可见（报告状态回写、新对话），事件补刷
+  useDbInvalidation(['reports', 'chats'], load);
 
   /** 场景弹层：打开时拉取活动清单（选择器数据源）并重置选择 */
   const openSheet = useCallback(async () => {

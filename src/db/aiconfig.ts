@@ -8,6 +8,7 @@
 
 import * as SecureStore from 'expo-secure-store';
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 import { t, type Lang } from '@/core/i18n';
 import { AI_CONFIG, type AiConfig } from '@/core/settings';
 
@@ -109,5 +110,6 @@ export async function setAiConfig(
      ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     JSON.stringify(dbPart),
   );
+  invalidateDb('aiconfig');
   return merged;
 }

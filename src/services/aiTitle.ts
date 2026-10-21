@@ -8,11 +8,14 @@
  * v3（2026-10-19，decisions §34）：所有缓存键从 file_name 换成 activity uuid——
  * file_name 可同名并存，不能再当唯一键。
  *
- * 两级进程内缓存（训练库是唯一数据源，改动点全部由本模块的失效函数收口）：
+ * 两级进程内缓存（训练库是唯一数据源，失效由 db 失效事件收口）：
  *  - startCache：uuid → 首帧 ISO（null 也缓存，避免反复读不存在的文件）；
  *  - titleCache：标题键（lang + 报告标识字段）→ 标题文本，让「报告详情页 1.5s 轮询
  *    刷新」这类同内容重算只花一次 Map 查找，不再重查库/读盘。
- * 导入、删除、合并重复、孤儿重挂都会改数据，各自调用 invalidateReportTitles()。
+ *
+ * 失效机制（架构评审 A3，2026-10）：订阅 `@/db/notify` 的 activities 域事件——
+ * 导入/删除/合并/重挂等任何写路径的 db 层事件都会带 uuid 自动清这里（此前靠 7 处
+ * 散点手工调用 invalidateReportTitles，漏一处就停旧值）。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -20,6 +23,7 @@ import type { Lang } from '@/core/i18n';
 import { localDayFromUtc } from '@/core/local-day';
 import { reportTitle, type ReportTitleTranslate, type RideBrief } from '@/core/reportTitle';
 import { listActivityRideKeys } from '@/db';
+import { subscribeDbInvalidation } from '@/db/notify';
 import { useI18n } from '@/i18n';
 import { readStoredRecordStart } from '@/records-store';
 
@@ -42,14 +46,22 @@ let cacheEpoch = 0;
 const cacheListeners = new Set<() => void>();
 
 /**
- * 清缓存：数据变更（导入/删除/合并重复/孤儿重挂）后调用，否则标题与起骑时刻会停在
- * 旧值（合并时逐秒数据从副本接管到保留项、同名重导入换了内容都属于这类）。
+ * 清缓存：数据变更后由 db 失效事件自动调用（见文件末的订阅）。
  * 传 uuid 只清该活动的起骑时刻；不传则全清。标题缓存一律全清（compare 跨两条记录）。
+ *
+ * 仍是导出的公共入口：批量清理与测试直接调用；业务写入路径**不再**手工调用——
+ * 架构评审 A3 后由 `subscribeDbInvalidation` 收口（此前 7 处散点调用，漏一处标题
+ * 就停在旧值）。
  */
-export function invalidateReportTitles(uuid?: string): void {
+export function invalidateReportTitles(uuid?: string | readonly string[]): void {
   titleCache = new Map();
-  if (uuid) startCache.delete(uuid);
-  else startCache = new Map();
+  if (typeof uuid === 'string') {
+    startCache.delete(uuid);
+  } else if (uuid) {
+    for (const id of uuid) startCache.delete(id); // 批量（一行级事件带多个 uuid）
+  } else {
+    startCache = new Map();
+  }
   cacheEpoch += 1;
   for (const fn of cacheListeners) fn();
 }
@@ -268,3 +280,17 @@ export function useReportTitle(report: ReportTitleSource | null): string | null 
 
   return title;
 }
+
+// ---------------- 失效订阅（模块级，一次） ----------------
+//
+// activities 域的写都意味着「活动行或逐秒数据变了」：导入/同名重导入/重算/校准/
+// 分类备注/功率标记/删除/合并/重挂。行级事件带 uuid，只清那几条的起骑时刻；
+// 域级事件（合并/重挂/备份整库替换）不带 uuid，全清。
+//
+// 订阅放在模块加载时是因为 db 写可能在没有任何标题组件挂载时发生（后台云同步
+// 导入），此时缓存也必须失效，否则下次挂载读到的是旧值。
+subscribeDbInvalidation((ev) => {
+  if (!ev.domains.has('activities')) return;
+  if (ev.activityUuids.length) invalidateReportTitles(ev.activityUuids);
+  else invalidateReportTitles();
+});

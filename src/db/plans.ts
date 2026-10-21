@@ -15,6 +15,7 @@
  */
 
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 import { PLAN_VALIDATION } from '@/core/settings';
 import type { PlanIssue, TrainingPlan } from '@/core/training-plan';
 
@@ -136,6 +137,7 @@ export async function savePlanVersion(
     );
     versionsTotal = 1 + versions.length;
   });
+  invalidateDb('plans');
   return versionsTotal;
 }
 
@@ -190,6 +192,7 @@ export async function recordPlanReportLink(reportId: number, planCreatedAt: stri
       JSON.stringify(links),
     );
   });
+  invalidateDb('plans');
 }
 
 /**
@@ -220,5 +223,6 @@ export async function undoLastPlanVersion(): Promise<boolean> {
     );
     undone = true;
   });
+  if (undone) invalidateDb('plans');
   return undone;
 }

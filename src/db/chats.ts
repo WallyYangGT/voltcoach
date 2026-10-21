@@ -10,6 +10,7 @@
  */
 
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 import {
   CHAT_SUMMARY_SHAPE,
   parseChatSummary,
@@ -93,6 +94,7 @@ export async function createAiChat(
     mode,
   );
   await pruneOrphanChatSummaries(); // 被挤出对话的滚动摘要行一并清理
+  invalidateDb('chats');
   return id;
 }
 
@@ -111,6 +113,7 @@ export async function addAiChatMessage(
     String(content ?? ''),
     status,
   );
+  invalidateDb('chats');
   return Number(info.lastInsertRowId);
 }
 
@@ -131,6 +134,7 @@ export async function updateAiChatMessage(
     patch.error ?? null,
     id,
   );
+  invalidateDb('chats');
 }
 
 /** 用户取消对话消息生成（同 cancelPendingAiReport 的 pending 守卫口径），返回是否取消成功 */
@@ -140,6 +144,7 @@ export async function cancelPendingChatMessage(id: number): Promise<boolean> {
     `UPDATE ai_chat_messages SET status = 'cancelled', error = NULL WHERE id = ? AND status = 'pending'`,
     id,
   );
+  if (r.changes > 0) invalidateDb('chats');
   return r.changes > 0;
 }
 
@@ -147,6 +152,7 @@ export async function cancelPendingChatMessage(id: number): Promise<boolean> {
 export async function touchAiChat(chatId: number): Promise<void> {
   const db = await getDb();
   await db.runAsync(`UPDATE ai_chats SET updated_at = datetime('now') WHERE id = ?`, chatId);
+  invalidateDb('chats');
 }
 
 /**
@@ -260,6 +266,7 @@ export async function deleteAiChat(id: number): Promise<number> {
   const info = await db.runAsync(`DELETE FROM ai_chats WHERE id = ?`, id);
   // 滚动摘要行随对话删除（settings KV，无外键；不删会成为孤儿行）
   await db.runAsync(`DELETE FROM settings WHERE key = ?`, chatSummaryKey(id));
+  if (info.changes > 0) invalidateDb('chats');
   return info.changes;
 }
 

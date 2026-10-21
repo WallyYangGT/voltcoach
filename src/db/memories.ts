@@ -7,6 +7,7 @@
  */
 
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 import { t, type Lang } from '@/core/i18n';
 import { isShortMemoryExpired, type MemoryScope } from '@/core/memory';
 
@@ -99,6 +100,7 @@ export async function saveMemory(
       );
     }
   }
+  invalidateDb('memories');
   return id;
 }
 
@@ -150,5 +152,6 @@ async function listActivityCreatedAts(): Promise<string[]> {
 export async function deleteMemory(id: number): Promise<number> {
   const db = await getDb();
   const info = await db.runAsync(`DELETE FROM ai_memories WHERE id = ?`, id);
+  if (info.changes > 0) invalidateDb('memories');
   return info.changes;
 }

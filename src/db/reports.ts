@@ -6,6 +6,7 @@
 
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 
 export type AiReportMode = 'review' | 'plan' | 'taper' | 'compare';
 
@@ -75,6 +76,7 @@ export async function saveAiReport(
   );
   const id = Number(info.lastInsertRowId);
   await trimAiReports(db, mode);
+  invalidateDb('reports');
   return id;
 }
 
@@ -103,6 +105,7 @@ export async function createPendingAiReport(
   );
   const id = Number(info.lastInsertRowId);
   await trimAiReports(db, mode);
+  invalidateDb('reports');
   return id;
 }
 
@@ -123,6 +126,7 @@ export async function updateAiReport(
     patch.error ?? null,
     id,
   );
+  invalidateDb('reports');
 }
 
 /**
@@ -137,6 +141,7 @@ export async function cancelPendingAiReport(id: number): Promise<boolean> {
     `UPDATE ai_reports SET status = 'cancelled', error = NULL WHERE id = ? AND status = 'pending'`,
     id,
   );
+  if (r.changes > 0) invalidateDb('reports');
   return r.changes > 0;
 }
 

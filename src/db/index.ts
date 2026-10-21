@@ -25,6 +25,7 @@
  */
 
 export * from './client';
+export * from './notify';
 export * from './athlete';
 export * from './activities';
 export * from './prefs';

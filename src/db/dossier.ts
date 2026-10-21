@@ -7,6 +7,7 @@
  */
 
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 import type { Summary } from '@/core/analyze';
 import { buildDossier, type AthleteDossier } from '@/core/dossier';
 import { countActivities, monthlySummary } from './activities';
@@ -145,4 +146,6 @@ export async function rebuildDossierQuietly(): Promise<void> {
   } finally {
     dossierRolling = false;
   }
+  // 重建完成才发（档案页/首页健康瓦片订阅；重建期间读到的仍是旧缓存）
+  invalidateDb('dossier');
 }

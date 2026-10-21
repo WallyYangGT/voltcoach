@@ -8,6 +8,7 @@
 
 import * as Crypto from 'expo-crypto';
 import { getDb } from './client';
+import { invalidateDb } from './notify';
 import type { Summary } from '@/core/analyze';
 import { fillDailyTss, formSeriesDaily, formSnapshotAtEnd } from '@/core/form';
 import type { CyclingRideInput } from '@/core/ftp';
@@ -80,6 +81,7 @@ export async function insertActivity(input: {
     v.intensity_factor,
     v.summary_json,
   );
+  invalidateDb('activities', uuid); // 列表/首页/详情/AI 标题按行失效
   return uuid;
 }
 
@@ -114,6 +116,7 @@ export async function updateActivitySummary(
     uuid,
   );
   if (info.changes === 0) throw new Error(t(opts?.lang ?? 'zh', 'activity.not_found'));
+  invalidateDb('activities', uuid);
 }
 
 /**
@@ -298,6 +301,7 @@ export async function setActivityCategory(uuid: string, category: string, lang: 
     uuid,
   );
   if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
+  invalidateDb('activities', uuid);
 }
 
 // 备注长度上限（自由文本：体感/路况等），防止误贴大段内容撑爆训练库与提示词
@@ -315,6 +319,7 @@ export async function setActivityNote(uuid: string, note: string, lang: Lang = '
     uuid,
   );
   if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
+  invalidateDb('activities', uuid);
 }
 
 // ---------------- 功率可信度标记（v2：activities.power_flagged） ----------------
@@ -337,6 +342,8 @@ export async function setActivityPowerFlag(
     uuid,
   );
   if (info.changes === 0) throw new Error(t(lang, 'activity.not_found'));
+  // 功率标记改变档案聚合口径（详情页横幅 + 首页健康瓦片 + 档案页都要重取）
+  invalidateDb('activities', uuid);
 }
 
 /** 该骑行是否被标记功率不可信（详情页横幅展示用；不存在返回 false） */
@@ -435,6 +442,12 @@ export async function deleteActivity(uuid: string): Promise<number> {
     const info = await db.runAsync(`DELETE FROM activities WHERE uuid = ?`, uuid);
     changes = info.changes;
   });
+  // 事务已提交才发（订阅方重查要看到已提交状态）；删除同时改了报告/对话的引用列
+  if (changes > 0) {
+    invalidateDb('activities', uuid);
+    invalidateDb('reports');
+    invalidateDb('chats');
+  }
   return changes;
 }
 
@@ -459,6 +472,12 @@ export async function reattachOrphanRefs(fingerprint: string, uuid: string): Pro
       total += info.changes;
     }
   });
+  // 重挂把孤儿报告/对话挂回活动：报告标题与活动列表的关联展示都要重取
+  if (total > 0) {
+    invalidateDb('activities', uuid);
+    invalidateDb('reports');
+    invalidateDb('chats');
+  }
   return total;
 }
 
@@ -519,6 +538,11 @@ export async function mergeActivityRows(keepUuid: string, dropUuid: string): Pro
     );
     await db.runAsync(`DELETE FROM activities WHERE uuid = ?`, dropUuid);
   });
+  // 合并改了保留项的 extras、删了副本、把引用重挂到保留项：三条域都要重取
+  invalidateDb('activities', keepUuid);
+  invalidateDb('activities', dropUuid);
+  invalidateDb('reports');
+  invalidateDb('chats');
   return reports;
 }
 

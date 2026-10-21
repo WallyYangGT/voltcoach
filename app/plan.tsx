@@ -51,6 +51,7 @@ import { PlanReportSection } from '@/components/PlanReportSection';
 import { ResetFollowUpButton } from '@/components/ResetFollowUpButton';
 import { AskInput } from '@/components/AskInput';
 import { ChatBubbles } from '@/components/ChatBubbles';
+import { useDbInvalidation } from '@/components/useDbInvalidation';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
 
@@ -145,6 +146,12 @@ export default function PlanScreen() {
       void load();
     }, [load]),
   );
+
+  // 计划版本被他处替换（AI 对话里 update_training_plan、首页披露条的撤销入口）时
+  // 本页可能正可见 → 重取；会话轮询已有收尾重取，这里是事件侧的兜底补位
+  useDbInvalidation(['plans', 'chats'], () => {
+    void load();
+  });
 
   // 深链版本定位（U1③）：历史加载后把 version 序号换算为 history 下标消费一次，
   // 越界/已被 history_keep 裁剪 → 静默停在当前版；历史条目点击同款（setViewing + 长期视图）
