@@ -56,7 +56,9 @@ let port: DbPort | null = null;
 
 /** 重建空库（每个测试 beforeEach 调用，测试间零串味） */
 export function resetTestDb(): void {
-  raw = new DatabaseSync(':memory:');
+  // 显式开启外键（对齐生产 client.ts 的 `PRAGMA foreign_keys = ON`，不依赖
+  // node:sqlite 的默认值——默认值未来可能变，且与 expo-sqlite 的「显式开启」不同源）
+  raw = new DatabaseSync(':memory:', { enableForeignKeyConstraints: true });
   raw.exec(CREATE_SCHEMA_SQL);
   port = portOf(raw);
 }

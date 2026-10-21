@@ -57,10 +57,10 @@ export function invalidateReportTitles(uuid?: string | readonly string[]): void 
   titleCache = new Map();
   if (typeof uuid === 'string') {
     startCache.delete(uuid);
-  } else if (uuid) {
-    for (const id of uuid) startCache.delete(id); // 批量（一行级事件带多个 uuid）
+  } else if (uuid && uuid.length > 0) {
+    for (const id of uuid) startCache.delete(id); // 批量（行级事件带多个 uuid）
   } else {
-    startCache = new Map();
+    startCache = new Map(); // 省略 / 空数组 = 域级或整库级：全清
   }
   cacheEpoch += 1;
   for (const fn of cacheListeners) fn();
@@ -284,8 +284,9 @@ export function useReportTitle(report: ReportTitleSource | null): string | null 
 // ---------------- 失效订阅（模块级，一次） ----------------
 //
 // activities 域的写都意味着「活动行或逐秒数据变了」：导入/同名重导入/重算/校准/
-// 分类备注/功率标记/删除/合并/重挂。行级事件带 uuid，只清那几条的起骑时刻；
-// 域级事件（合并/重挂/备份整库替换）不带 uuid，全清。
+// 分类备注/功率标记/删除/合并/重挂。行级事件带受影响的活动 uuid，只清那几条的
+// 起骑时刻；**uuid 列表为空 = 域级或整库级变更**（合并重复也带 uuid，备份换库与
+// 域级失效不带），此时全清。
 //
 // 订阅放在模块加载时是因为 db 写可能在没有任何标题组件挂载时发生（后台云同步
 // 导入），此时缓存也必须失效，否则下次挂载读到的是旧值。

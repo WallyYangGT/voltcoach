@@ -53,7 +53,11 @@ const ALL_DOMAINS: readonly DbDomain[] = [
 export interface DbInvalidation {
   /** 本批受影响的域（已去重） */
   domains: ReadonlySet<DbDomain>;
-  /** 受影响的单个活动 uuid（行级失效用：标题/起骑时刻缓存按行清） */
+  /**
+   * 受影响的单个活动 uuid（行级失效用：标题/起骑时刻缓存按行清）。
+   * **空数组 = 域级/整库级变更**，订阅方必须放弃按行过滤、做全量重取。
+   * 整库失效（备份导入换库）与行级写同批合并时，这里一律清空（见 pendingAll）。
+   */
   activityUuids: readonly string[];
 }
 
@@ -64,6 +68,12 @@ const listeners = new Set<Listener>();
 /** 待冲刷的累积状态（queueMicrotask 合并同一 tick 的多次写） */
 let pendingDomains = new Set<DbDomain>();
 let pendingUuids = new Set<string>();
+/**
+ * 本批含整库失效（备份导入换库）。**与行级写同批合并时必须压掉 uuid**：
+ * 否则 (a) 按 uuid 过滤的订阅方（详情页）会把整库变更误判成「别的骑行变了」而跳过重取；
+ * (b) aiTitle 只清那几个 uuid 的起骑时刻，其余活动继续用旧库的缓存（标题/本地日错误）。
+ */
+let pendingAll = false;
 let flushScheduled = false;
 
 const EMPTY_INVALIDATION: DbInvalidation = {
@@ -76,10 +86,11 @@ function flush(): void {
   if (!pendingDomains.size && !pendingUuids.size) return;
   const ev: DbInvalidation = {
     domains: pendingDomains,
-    activityUuids: [...pendingUuids],
+    activityUuids: pendingAll ? [] : [...pendingUuids],
   };
   pendingDomains = new Set();
   pendingUuids = new Set();
+  pendingAll = false;
   // listener 抛错不影响其他订阅方，更不影响调用方的写操作结果
   for (const fn of listeners) {
     try {
@@ -106,6 +117,7 @@ export function invalidateDb(domain: DbDomain, activityUuid?: string): void {
 /** 全部域失效（备份导入整库替换：数据全换，任何缓存都不可信） */
 export function invalidateAllDb(): void {
   for (const d of ALL_DOMAINS) pendingDomains.add(d);
+  pendingAll = true;
   if (flushScheduled) return;
   flushScheduled = true;
   queueMicrotask(flush);
@@ -130,6 +142,7 @@ export function resetDbInvalidationForTesting(): void {
   listeners.clear();
   pendingDomains = new Set();
   pendingUuids = new Set();
+  pendingAll = false;
   flushScheduled = false;
 }
 

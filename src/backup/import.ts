@@ -129,6 +129,10 @@ export async function importBackupFile(uri: string, passphrase: string | null): 
     await closeDb();
     removeWalSiblings();
     await importedTmp.move(appDbFile(), { overwrite: true });
+    // 换库窗口内可能有并发读（事件驱动的页面重取、AI 生成的进度写）经 getDb() 又开了
+    // **旧文件**并把句柄缓存进单例——旧文件此时已被覆盖，句柄指向失效 inode，后续读全部
+    // 停在旧数据直到重启。再关一次（幂等）把这种偷开的句柄丢弃，让下一次读重开新库。
+    await closeDb();
 
     clearStoredRecords();
     let restored = 0;

@@ -76,3 +76,23 @@ it('空域列表不订阅（不产生无谓回调）', async () => {
   await flush();
   expect(events).toHaveLength(0);
 });
+
+it('回调身份变化后调用的是最新回调（ref 保鲜）', async () => {
+  const first: DbInvalidation[] = [];
+  const second: DbInvalidation[] = [];
+  const { rerender } = await renderHook(
+    ({ tag }: { tag: 'a' | 'b' }) =>
+      useDbInvalidation(['athlete'], (ev) => (tag === 'a' ? first : second).push(ev)),
+    { initialProps: { tag: 'a' as 'a' | 'b' } },
+  );
+  invalidateDb('athlete');
+  await flush();
+  expect(first).toHaveLength(1);
+  expect(second).toHaveLength(0);
+
+  await rerender({ tag: 'b' });
+  invalidateDb('athlete');
+  await flush();
+  expect(first).toHaveLength(1); // 旧回调不再被调用
+  expect(second).toHaveLength(1);
+});

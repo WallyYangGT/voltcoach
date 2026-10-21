@@ -119,8 +119,9 @@ export default function ActivityDetailScreen() {
   // 分类与备注草稿（M2：备注点「保存」写库，分类点 chip 即时生效）
   const [note, setNote] = useState('');
   const [savedFlash, setSavedFlash] = useState(false);
-  // 挂载标记：失效事件触发的重取可能晚于卸载（setState on unmounted 的护栏）
+  // 挂载标记 + 重取序号：失效事件触发的重取可能晚于卸载/下一次重取（见 loadDetail）
   const mountedRef = useRef(true);
+  const seqRef = useRef(0);
   // 异常细则折叠（M5）：默认收起只看摘要行（含总暂停秒数），点击展开逐条标注
   const [dqOpen, setDqOpen] = useState(false);
   // AI 复盘面板：顶部按钮触发生成/露出面板，panelY 记录面板位置供滚动定位
@@ -192,28 +193,39 @@ export default function ActivityDetailScreen() {
   // 详情数据装载（挂载 + 数据失效事件共用）：
   // resetNote=false 时**不**重灌备注输入框——事件可能由别处的写触发，用户正在编辑的
   // 草稿不能因此被库值覆盖。摘要/图表/功率标记仍照常重取（AI 重算/校准后要对上）。
+  //
+  // 请求序号（seqRef）：事件化后同一骑行可能在毫秒级连发两次重取（reanalyze /
+  // recalibrate 各有两次 updateActivitySummary），先发起的读可能后完成——不加序号
+  // 会把旧 summary/旧逐秒序列写回并停在那里。每次 await 之后都校验「仍是最新一轮
+  // 且已挂载」才写 state。
   const loadDetail = useCallback(
     async (resetNote: boolean) => {
       if (!activityId) return;
+      const seq = (seqRef.current += 1);
+      const fresh = () => seqRef.current === seq && mountedRef.current;
       try {
         const s = await getActivitySummary(activityId);
-        if (!mountedRef.current) return;
+        if (!fresh()) return;
         setSummary(s);
         if (resetNote) setNote(s?.activity.note ?? '');
-        setPowerFlagged(await getActivityPowerFlag(activityId));
-        if (s) {
-          const stored = await loadStoredRecords(activityId);
-          if (mountedRef.current) {
-            setThinned(stored ? thinRecords(stored) : null);
-            // 0W 根治后 summary.pedal_time 为权威数据源（与 AI 同源）；旧数据（升级前
-            // 入库的 summary 无该字段）回退 records 现算，口径同 core/pedalTime
-            setPedal(s.pedal_time ?? (stored ? pedalTimeBreakdown(stored) : null));
-            setDateLabel(stored?.length ? localDayFromUtc(stored[0].timestamp) : null);
-          }
+        // 功率标记单独兜错：它失败不该把已读到的 summary 清成空态
+        try {
+          const flagged = await getActivityPowerFlag(activityId);
+          if (fresh()) setPowerFlagged(flagged);
+        } catch (e) {
+          console.warn('读取功率标记失败（保留已加载的详情）:', e);
         }
+        if (!s) return;
+        const stored = await loadStoredRecords(activityId);
+        if (!fresh()) return;
+        setThinned(stored ? thinRecords(stored) : null);
+        // 0W 根治后 summary.pedal_time 为权威数据源（与 AI 同源）；旧数据（升级前
+        // 入库的 summary 无该字段）回退 records 现算，口径同 core/pedalTime
+        setPedal(s.pedal_time ?? (stored ? pedalTimeBreakdown(stored) : null));
+        setDateLabel(stored?.length ? localDayFromUtc(stored[0].timestamp) : null);
       } catch (e) {
         console.warn('加载训练详情失败:', e);
-        if (mountedRef.current) setSummary(null);
+        if (fresh()) setSummary(null);
       }
     },
     [activityId],
@@ -226,12 +238,14 @@ export default function ActivityDetailScreen() {
     })();
     return () => {
       mountedRef.current = false;
+      seqRef.current += 1; // 卸载后作废在途请求
     };
   }, [loadDetail]);
 
   // 本骑行被写入（AI set_power_flag / 重算 / 校准 / 分类备注等他处改动）时重取：
   // 拆分前主 summary 只在挂载时读一次，AI 在对话里改完回到本页仍显示旧值。
-  // 事件带 uuid 时只认本次骑行；域级事件（合并/备份整库替换）一律重取。
+  // 事件带 uuid 时只认本次骑行；`activityUuids` 为空 = 域级/整库级事件（合并重复
+  // 也带 uuid，这里只在空列表时全量重取），一律重取。
   useDbInvalidation(['activities'], (ev) => {
     if (!activityId) return;
     if (ev.activityUuids.length > 0 && !ev.activityUuids.includes(activityId)) return;

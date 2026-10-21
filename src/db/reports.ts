@@ -109,7 +109,13 @@ export async function createPendingAiReport(
   return id;
 }
 
-/** 更新报告（后台生成成功/失败时回填；COALESCE 语义与旧版一致，null 字段不覆盖） */
+/**
+ * 更新报告（后台生成成功/失败时回填；COALESCE 语义与旧版一致，null 字段不覆盖）。
+ *
+ * 失效事件只在**状态变化**时发：流式增量落库每 ~2s 写一次 markdown（部分正文），
+ * 列表页不展示正文，逐次发事件会让会话中心每 2s 整页重查（含全表骑行键），
+ * 而列表要的是「生成中 / 完成 / 失败」的状态翻转。正文的实时预览走详情页轮询。
+ */
 export async function updateAiReport(
   id: number,
   patch: { markdown?: string; status?: string; error?: string | null },
@@ -126,7 +132,7 @@ export async function updateAiReport(
     patch.error ?? null,
     id,
   );
-  invalidateDb('reports');
+  if (patch.status !== undefined) invalidateDb('reports');
 }
 
 /**

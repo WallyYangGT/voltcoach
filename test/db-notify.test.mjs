@@ -118,6 +118,29 @@ test('invalidateAllDb 覆盖全部域且不带 uuid（整库替换语义）', as
   off();
 });
 
+test('整库失效与行级写同批合并时压掉 uuid（防订阅方误判为行级事件）', async () => {
+  resetDbInvalidationForTesting();
+  const seen = [];
+  const off = subscribeDbInvalidation((ev) => seen.push(ev));
+  // 备份导入换库（全域）与并发行级写落在同一 tick：uuid 必须清空，
+  // 否则详情页会因「当前 uuid 不在列表」跳过重取、aiTitle 只清部分起骑时刻缓存
+  invalidateAllDb();
+  invalidateDb('activities', 'uuid-from-row-write');
+  await tick();
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].activityUuids, []);
+  // 反向顺序同样压掉
+  invalidateDb('activities', 'uuid-x');
+  invalidateAllDb();
+  await tick();
+  assert.deepEqual(seen[1].activityUuids, []);
+  // 整库失效之后的新一轮行级写恢复正常语义（pendingAll 已复位）
+  invalidateDb('activities', 'uuid-y');
+  await tick();
+  assert.deepEqual(seen[2].activityUuids, ['uuid-y']);
+  off();
+});
+
 test('无订阅方时写不报错（后台写入早于任何页面挂载）', async () => {
   resetDbInvalidationForTesting();
   assert.doesNotThrow(() => invalidateDb('activities', 'x'));

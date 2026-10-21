@@ -490,6 +490,7 @@ export async function reattachOrphanRefs(fingerprint: string, uuid: string): Pro
 export async function mergeActivityRows(keepUuid: string, dropUuid: string): Promise<number> {
   const db = await getDb();
   let reports = 0;
+  let changed = false;
   await db.withTransactionAsync(async () => {
     const drop = await db.getFirstAsync<{ fingerprint: string; category: string | null; note: string | null; power_flagged: number }>(
       `SELECT fingerprint, category, note, power_flagged FROM activities WHERE uuid = ?`,
@@ -537,12 +538,16 @@ export async function mergeActivityRows(keepUuid: string, dropUuid: string): Pro
       dropUuid,
     );
     await db.runAsync(`DELETE FROM activities WHERE uuid = ?`, dropUuid);
+    changed = true;
   });
-  // 合并改了保留项的 extras、删了副本、把引用重挂到保留项：三条域都要重取
-  invalidateDb('activities', keepUuid);
-  invalidateDb('activities', dropUuid);
-  invalidateDb('reports');
-  invalidateDb('chats');
+  // 合并改了保留项的 extras、删了副本、把引用重挂到保留项：三条域都要重取。
+  // 副本不存在时整个事务是 no-op（changed 仍 false），不发事件（避免空刷新）。
+  if (changed) {
+    invalidateDb('activities', keepUuid);
+    invalidateDb('activities', dropUuid);
+    invalidateDb('reports');
+    invalidateDb('chats');
+  }
   return reports;
 }
 

@@ -10,6 +10,7 @@ import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar, Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { getDossier, rebuildDossierQuietly } from '@/db';
+import { useDbInvalidation } from '@/components/useDbInvalidation';
 import type { AthleteDossier } from '@/core/dossier';
 import { useI18n } from '@/i18n';
 import { palette } from '@/theme';
@@ -54,6 +55,10 @@ export default function DossierScreen() {
       load();
     }, [load]),
   );
+
+  // 档案重建完成（导入/删除/合并/FTP 变更等触发）或训练数据变化时本页可能正开着，
+  // focus 不会触发 → 事件补刷（重建慢于写事件，两者都会到，最多多读一次缓存行）
+  useDbInvalidation(['dossier', 'activities'], load);
 
   const rebuild = () => {
     setRefreshing(true);

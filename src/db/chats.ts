@@ -134,7 +134,9 @@ export async function updateAiChatMessage(
     patch.error ?? null,
     id,
   );
-  invalidateDb('chats');
+  // 同 updateAiReport：流式部分正文每 ~2s 写一次，不发布局级失效事件；
+  // 只有「状态翻转」才通知列表（生成中 → 完成/失败/取消）
+  if (patch.status !== undefined) invalidateDb('chats');
 }
 
 /** 用户取消对话消息生成（同 cancelPendingAiReport 的 pending 守卫口径），返回是否取消成功 */
