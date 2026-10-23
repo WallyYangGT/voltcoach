@@ -265,6 +265,9 @@ describe('云同步编排 × 保活壳接线', () => {
     expect(acquireGenerationKeepAlive).toHaveBeenCalledTimes(1);
   });
 
+  // ⚠️ 以下两个节流用例依赖模块级 lastAutoAttempt 未被触发：必须先于任何真正跑起来的
+  // maybeAutoSync 用例执行（新增用例时勿插到它们前面——成功轮断言可能因模块节流假通过）
+
   it('自动同步节流：成功轮（含空窗冻结轮）以 last_run_at 为基准，刚跑过不再跑', async () => {
     stubProvider();
     (getSyncState as jest.Mock).mockResolvedValue({
