@@ -9,7 +9,7 @@
  *     debug 签名）——本地测试包与正式版**并存共存**（独立包名互不冲突、数据独立
  *     沙箱），桌面名「VoltCoach β」（src/beta/res 覆盖 app_name，脚本一并写出）。
  *     用途：单机用户在正常使用正式版的同时侧载测试预发版（2026-10-14 拍板，
- *     取代「折腾 versionCode / 签名冲突」的旧思路）。构建：assembleBetaRelease。
+ *     取代「折腾 versionCode / 签名冲突」的旧思路）。构建：assembleBeta（无 flavor 时的任务名）。
  *   - arm64-only：release/beta 一律只打 arm64-v8a——现代安卓手机均为 arm64，四套
  *     ABI 的通用包 ≈52MB vs 单 ABI ≈24MB（2026-10-16 体积优化批后，开启 R8 与 .so 压缩）。debug 构建不受影响（模拟器 x86_64
  *     冒烟可用）。需要通用包时设 VOLTCOACH_UNIVERSAL_APK=1 再构建。CI 的
@@ -17,6 +17,13 @@
  *   - 签名：VOLTCOACH_KEYSTORE_FILE 等四个环境变量存在 → 注入 release signingConfig
  *     并把 buildTypes.release 切到它；缺省（本地构建）原样不动，仍是 debug 签名。
  *     beta 恒用 debug 签名（独立包名，签名不与正式版冲突，无需正式证书）。
+ *   - beta versionCode（2026-10-23）：prebuild 模板把 versionCode 重置为 1，旧 beta
+ *     （stamp 临时值等）覆盖安装会被 Android 判「降级」拒装——按 package.json 版本
+ *     推导 beta 专属 versionCode（major*100000 + minor*1000 + patch，如 0.4.2 → 4002），
+ *     经 applicationVariants 的 versionCodeOverride **只作用于 beta**（release 的
+ *     run-number 口径由 CI 的 stamp-release-version.mjs 管理，不受影响）。提版后需
+ *     重新 prebuild + 本脚本才会更新该值；同版本重复构建 versionCode 相同（同版本
+ *     覆盖安装合法）。
  *   - 幂等：已注入过（有标记注释）直接跳过，可安全重复执行。
  *
  * 用法：node scripts/patch-release-signing.mjs [build.gradle 路径]
@@ -41,13 +48,43 @@ if (!fs.existsSync(target)) {
   process.exit(1);
 }
 
+/** package.json 版本 → beta versionCode（major*100000 + minor*1000 + patch，0.4.2 → 4002；
+ *  minor ≤ 99 且 patch ≤ 999 时随 semver 严格递增，跨 major 有充足余量）。解析失败
+ *  直接抛错非 0 退出——静默回落 1 会复现「降级拒装」 */
+function betaVersionCodeFromPackageVersion(packageJsonPath) {
+  const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(pkg.version ?? ''));
+  if (!m) throw new Error(`无法从 ${packageJsonPath} 解析版本号（${pkg.version}）`);
+  return Number(m[1]) * 100_000 + Number(m[2]) * 1_000 + Number(m[3]);
+}
+// 从 target（android/app/build.gradle）反推仓库根的 package.json（脚本默认相对 cwd，
+// 从仓库根执行即成立）
+const betaVersionCode = betaVersionCodeFromPackageVersion(
+  path.join(path.dirname(path.resolve(target)), '..', '..', 'package.json'),
+);
+
 const gradle = fs.readFileSync(target, 'utf8');
 if (gradle.includes(MARKER_BEGIN) || gradle.includes(LEGACY_MARKER)) {
-  console.log(`✓ ${target} 已含 release 补丁块（幂等跳过；旧签名标记请手工迁移到新块）`);
+  // 幂等跳过前必须校验已烘焙的 beta versionCode：--no-clean prebuild 会保留旧补丁块
+  //（含旧 versionCode 字面量），提版后只跑本脚本不重新 prebuild 会静默带旧值构建
+  const baked = /output\.versionCodeOverride\s*=\s*(\d+)/.exec(gradle);
+  if (gradle.includes(LEGACY_MARKER) && !baked) {
+    console.error(`✗ ${target} 是旧版签名补丁块（无 beta versionCode）——请重新 npx expo prebuild 后重跑本脚本`);
+    process.exit(1);
+  }
+  if (!baked || Number(baked[1]) !== betaVersionCode) {
+    console.error(
+      `✗ ${target} 已烘焙的 beta versionCode（${baked ? baked[1] : '缺失'}）≠ 当前版本推导值 ${betaVersionCode}` +
+        `——提版后需重新 npx expo prebuild（默认 clean）再跑本脚本，或手工同步该值`,
+    );
+    process.exit(1);
+  }
+  console.log(`✓ ${target} 已含 release 补丁块且 beta versionCode=${baked[1]} 与当前版本一致（幂等跳过）`);
   process.exit(0);
 }
 
 const enabled = process.env.VOLTCOACH_KEYSTORE_FILE != null && process.env.VOLTCOACH_KEYSTORE_FILE !== '';
+
 /** 环境变量缺失时块体仍注入但整体 no-op（if 判空），脚本行为与构建结果解耦——
  *  本地 prebuild 后也可以先注入，构建时没设环境变量就自动回退 debug 签名 */
 const block = `${MARKER_BEGIN}
@@ -96,6 +133,16 @@ if (vcKeystoreFile != null && !vcKeystoreFile.isEmpty()) {
         }
     }
 }
+// ④ beta versionCode（只作用于 beta 变体，release 的 run-number 口径归 CI stamp 脚本）：
+//    prebuild 模板恒为 1，旧 beta 覆盖装会被判「降级」拒装——按 package.json 版本推导
+//    （提版后重新 prebuild + 本脚本自然递增；同版本重复构建值相同，覆盖安装合法）。
+applicationVariants.all { variant ->
+    if (variant.name == 'beta') {
+        variant.outputs.all { output ->
+            output.versionCodeOverride = ${betaVersionCode}
+        }
+    }
+}
 ${MARKER_END}
 `;
 
@@ -125,5 +172,5 @@ fs.writeFileSync(
 console.log(
   `✓ 已注入 release 补丁（arm64-only${process.env.VOLTCOACH_UNIVERSAL_APK ? '【已跳过：UNIVERSAL】' : ''}；签名 ${
     enabled ? `正式（VOLTCOACH_KEYSTORE_FILE=${process.env.VOLTCOACH_KEYSTORE_FILE}）` : '回退 debug'
-  }）`,
+  }；beta versionCode=${betaVersionCode}）`,
 );

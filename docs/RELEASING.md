@@ -118,4 +118,4 @@ node scripts/patch-release-signing.mjs
 cd android && ./gradlew assembleBeta -PreactNativeArchitectures=arm64-v8a
 ```
 
-产物 `android/app/build/outputs/apk/beta/app-beta.apk`（release 同款运行时：JS 内联、非 debuggable、minify 同 release）。注意：beta 沙箱是全新的——AI Key 需在 β 应用内单独配置；想用真实数据测试可从正式版导出 `.fitbackup` 再导入 β。模拟器冒烟用 x86_64：`VOLTCOACH_UNIVERSAL_APK=1 ./gradlew assembleBeta -PreactNativeArchitectures=x86_64`。
+产物 `android/app/build/outputs/apk/beta/app-beta.apk`（release 同款运行时：JS 内联、非 debuggable、minify 同 release）。**beta 的 versionCode 由补丁脚本按 package.json 版本推导**（major×100000 + minor×1000 + patch，如 0.4.2 → 4002；只作用于 beta 变体，正式包的 run-number 口径归 CI），因此提版后需重新 prebuild（默认 clean）+ 重跑脚本——脚本幂等跳过前会校验已烘焙值与当前版本一致，不一致报错退出。注意：beta 沙箱是全新的——AI Key 与同步账号需在 β 应用内单独配置；想用真实数据测试可从正式版导出 `.fitbackup` 再导入 β。模拟器冒烟用 x86_64：`VOLTCOACH_UNIVERSAL_APK=1 ./gradlew assembleBeta -PreactNativeArchitectures=x86_64`。
