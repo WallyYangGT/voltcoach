@@ -20,7 +20,6 @@ import {
   buildSignStr,
   createOnelapClient,
   extractFitFileName,
-  isBeforeSince,
   nonceFromBytes,
   ONELAP_RIDE_RECORD_BASE,
   ONELAP_SECRET,
@@ -64,13 +63,6 @@ test('parseRideTime: 顽鹿本地时区格式解析；非法输入返回 null', 
   assert.equal(parseRideTime('2026-09-15T08:30:05Z'), null); // 不是顽鹿格式
   assert.equal(parseRideTime('garbage'), null);
   assert.equal(parseRideTime(''), null);
-});
-
-test('isBeforeSince: 起骑时间早于水位线判定（增量翻页停止条件）', () => {
-  const since = new Date(2026, 8, 10);
-  assert.ok(isBeforeSince('2026-09-09 23:00:00', since));
-  assert.ok(!isBeforeSince('2026-09-10 00:00:01', since));
-  assert.ok(!isBeforeSince('bad-time', since)); // 解析失败不停翻
 });
 
 test('extractFitFileName: basename + 强制 .fit 后缀 + 回退 id 名', () => {
@@ -197,4 +189,108 @@ test('mock 夹具: 各活动的 FIT 内容互不为同一趟骑行（内容指�
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+// ---------------- listSince 列表异常防御（2026-10 顽鹿增量失效事故，decisions §37） ----------------
+//
+// 事故形态：云端列表出现「排序翻转 / 条目缺 id·时间」任一异常时，旧实现静默返回空列表，
+// 编排层照常推进水位线，缺口被 24h 缓冲永久藏住（症状：同步时间在走、永远 0 新增 0 跳过）。
+// 以下用例用假 fetch 直接构造异常响应，钉住三类防御行为。
+
+/** 本地时区 "YYYY-MM-DD HH:mm:ss"（顽鹿口径） */
+function rideTime(daysAgo) {
+  const d = new Date(Date.now() - daysAgo * 24 * 3600 * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** 构造 /list 的假 fetch：pages[i] 为第 i+1 页的 { list, hasMore }；calls 记录每次请求 */
+function fakeListFetch(pages) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const page = Number(JSON.parse(init?.body ?? '{}').page) || 1;
+    calls.push(page);
+    const spec = pages[Math.min(page, pages.length) - 1];
+    const payload =
+      spec.raw ??
+      JSON.stringify({
+        code: 200,
+        message: '',
+        data: { list: spec.list, pagination: { has_more: spec.hasMore ?? false } },
+      });
+    return new Response(payload, { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+  return { fetchImpl, calls };
+}
+
+function listClient(fetchImpl) {
+  return createOnelapClient({ ...nodeDeps, fetchImpl });
+}
+
+test('listSince: 旧→新排序（时间升序）也能收齐窗口内活动——事故防御主 case', async () => {
+  const { fetchImpl, calls } = fakeListFetch([
+    { list: [{ id: 3, start_riding_time: rideTime(40) }, { id: 2, start_riding_time: rideTime(30) }, { id: 1, start_riding_time: rideTime(3) }], hasMore: true },
+    { list: [{ id: 4, start_riding_time: rideTime(2) }, { id: 5, start_riding_time: rideTime(1) }] },
+  ]);
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
+  assert.deepEqual(
+    list.map((a) => a.id),
+    ['1', '4', '5'],
+    '排在前面的窗口外旧条目不得让扫描提前停止',
+  );
+  assert.equal(calls.length, 2, '两页都应翻完');
+});
+
+test('listSince: 新→旧排序保持遇旧即停（翻页成本不回退）', async () => {
+  const { fetchImpl, calls } = fakeListFetch([
+    { list: [{ id: 1, start_riding_time: rideTime(1) }, { id: 2, start_riding_time: rideTime(40) }], hasMore: true },
+    { list: [{ id: 3, start_riding_time: rideTime(41) }] },
+  ]);
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
+  assert.deepEqual(list.map((a) => a.id), ['1']);
+  assert.equal(calls.length, 1, '新→旧序遇旧条目即停，不翻后续页');
+});
+
+test('listSince: 新→旧序且窗口内无记录——首页即停、返回空（不误报形状异常）', async () => {
+  const { fetchImpl, calls } = fakeListFetch([
+    { list: [{ id: 1, start_riding_time: rideTime(40) }, { id: 2, start_riding_time: rideTime(41) }], hasMore: true },
+  ]);
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
+  assert.deepEqual(list, []);
+  assert.equal(calls.length, 1);
+});
+
+test('listSince: 条目全部缺 id/时间——显式 api 错误，不再静默当空列表', async () => {
+  const { fetchImpl } = fakeListFetch([
+    { list: [{ start_riding_time: rideTime(1) }, { id: 9 }, {}] },
+  ]);
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    (e) => e.code === 'api' && /缺少可解析/.test(e.message),
+  );
+});
+
+test('listSince: list 字段缺失（形状变更）——显式 api 错误', async () => {
+  const { fetchImpl } = fakeListFetch([{ raw: JSON.stringify({ code: 200, message: '', data: { rows: [] } }) }]);
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    (e) => e.code === 'api' && /缺少 list/.test(e.message),
+  );
+});
+
+test('listSince: 不可解析条目 + 可解析旧条目边界——按空窗口放行（不误报）', async () => {
+  const { fetchImpl } = fakeListFetch([
+    { list: [{}, { id: 1, start_riding_time: rideTime(40) }, { id: 2, start_riding_time: rideTime(41) }] },
+  ]);
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
+  assert.deepEqual(list, []);
+});
+
+test('parseRideTime: 宽容变体（T 分隔 / 小数秒 / 首尾空白）；带时区后缀仍拒绝', () => {
+  const base = parseRideTime('2026-10-20 19:00:00');
+  assert.ok(base);
+  assert.deepEqual(parseRideTime('2026-10-20T19:00:00'), base);
+  assert.deepEqual(parseRideTime('  2026-10-20 19:00:00.0  '), base);
+  assert.equal(parseRideTime('2026-10-20T19:00:00Z'), null);
+  assert.equal(parseRideTime('2026-10-20 19:00:00+08:00'), null);
 });

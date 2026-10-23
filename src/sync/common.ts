@@ -57,9 +57,11 @@ export interface FileRef {
  */
 export interface SyncClient<S> {
   /**
-   * 按 since 增量拉活动列表（新→旧翻页，遇早于 since 的记录停止）。
-   * since=null 表示不设起点（全量，仅测试用）；生产路径恒传窗口起点，
-   * 上限 maxPages 防失控（部分平台无服务端时间过滤，过滤在客户端做）。
+   * 按 since 增量拉窗口内活动列表。生产路径恒传窗口起点，上限 maxPages 防失控
+   * （部分平台无服务端时间过滤，过滤在客户端做）。实现须保证：窗口内活动**无论列表
+   * 顺序（新→旧或旧→新）都能收齐**；「扫不到窗口边界」的空结果宁可显式报错也不得
+   * 静默返回空数组——空列表会被编排层当成「没有新记录」并推进水位线（2026-10 顽鹿
+   * 增量失效事故的教训，见 src/sync/onelap.ts listSince）。
    */
   listSince(session: S, since: Date | null, maxPages?: number): Promise<RemoteActivity[]>;
   /**

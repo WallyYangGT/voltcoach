@@ -103,18 +103,15 @@ export function nonceFromBytes(bytes: Uint8Array, length = 16): string {
 /**
  * "YYYY-MM-DD HH:mm:ss" → 本地时区 Date（顽鹿服务端口径 = Go time.Local）。
  * 手工解析不用 new Date(string)——非 ISO 格式在 Hermes/JSC 上返回 Invalid Date。
+ * 宽容变体：前后空白、日期时间分隔符 'T'、可选小数秒（".0"）——服务端偶发形态不做
+ * 假设（2026-10 增量失效事故的防御之一：新增记录时间串格式漂移不应被静默丢弃）；
+ * 带时区后缀（Z/+08:00）仍拒绝——语义变成 UTC/偏移 instant，按本地墙钟解析会错档。
  */
 export function parseRideTime(value: string): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(value ?? '');
+  const m = /^\s*(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?\s*$/.exec(value ?? '');
   if (!m) return null;
   const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
   return Number.isNaN(d.getTime()) ? null : d;
-}
-
-/** 起骑时间早于水位线（增量停止条件；时间解析失败视为不停） */
-export function isBeforeSince(startRidingTime: string, since: Date): boolean {
-  const d = parseRideTime(startRidingTime);
-  return d !== null && d.getTime() < since.getTime();
 }
 
 /**
@@ -266,6 +263,16 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
 
     async listSince(session, since, maxPages = 500) {
       const out: RemoteActivity[] = [];
+      // 诊断计数（2026-10 增量失效事故的防御）：空结果不再无条件等价「窗口内没有记录」。
+      // seen/unusable 用来区分「真扫到了窗口边界」与「条目根本不可解析」——后者旧实现
+      // 静默当空列表，编排层再把水位线推到当前时刻，缺口被永久藏住（0 新增 0 跳过）。
+      let seen = 0;
+      let unusable = 0;
+      let parsed = 0; // 可解析条目数——方向判定需要 ≥2 条样本，首条旧条目无法断序
+      let sawOldParsed = false; // 见过「可解析且早于 since」的条目 = 窗口边界已被扫到
+      // 列表时间方向：出现升序即视为旧→新序，此后遇旧条目只跳过不再提前停
+      let ascending = false;
+      let lastParsedMs: number | null = null;
       for (let page = 1; page <= maxPages; page += 1) {
         const json = (await postJson(`${rideBase}/list`, authHeaders(session), {
           page,
@@ -282,13 +289,50 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
         if (json?.code !== 200 || !data) {
           throw new SyncError('api', `活动列表失败: ${json?.message ?? JSON.stringify(json).slice(0, 200)}`);
         }
-        for (const item of data.list ?? []) {
-          if (!item?.id || !item?.start_riding_time) continue;
-          if (since && isBeforeSince(item.start_riding_time, since)) return out; // 新→旧，到头即停
-          out.push({ id: String(item.id), startAt: parseRideTime(item.start_riding_time) });
+        if (!Array.isArray(data.list)) {
+          // 合规响应恒有 list 数组（上游 Go 结构与 mock 同源）；缺失 = 形状变更，
+          // 显式报错交给编排层按失败处理（水位线不动），绝不静默当空列表
+          throw new SyncError(
+            'api',
+            `活动列表响应缺少 list 字段（响应形状疑似变更）: ${JSON.stringify(json).slice(0, 200)}`,
+          );
+        }
+        for (const item of data.list) {
+          seen += 1;
+          const startAt = item?.start_riding_time ? parseRideTime(item.start_riding_time) : null;
+          if (!item?.id || !startAt) {
+            unusable += 1;
+            continue;
+          }
+          const startAtMs = startAt.getTime();
+          parsed += 1;
+          if (lastParsedMs !== null && startAtMs > lastParsedMs) ascending = true;
+          lastParsedMs = startAtMs;
+          if (since && startAtMs < since.getTime()) {
+            // 时间未见升序 ⇒ 视作新→旧序：到头即停（含窗口内无记录的首轮，保住翻页成本，
+            // 不为全量历史买单）。两个豁免：样本不足 2 条无法断序（首条旧条目可能是旧→新
+            // 序的开头，停错会把整段窗口漏成空列表——2026-10 事故候选形态）；升序已成立
+            //（旧→新序），旧条目只跳过。
+            if (!ascending && parsed >= 2) return out;
+            sawOldParsed = true;
+            continue;
+          }
+          out.push({ id: String(item.id), startAt });
         }
         if (!data.pagination?.has_more) break;
       }
+      if (seen > 0 && out.length === 0 && !sawOldParsed) {
+        // 扫完没拿到窗口内条目、也没见到任何「可解析的旧条目」边界：空结果不可信
+        //（可能新增记录全在不可解析条目里），显式失败让用户看见，水位线由编排层保持不动
+        throw new SyncError(
+          'api',
+          `活动列表返回 ${seen} 条但 ${unusable} 条缺少可解析的 id/起骑时间，无法确认窗口为空（响应形状疑似变更，已中止本轮以防漏同步）`,
+        );
+      }
+      console.log(
+        `onelap 列表：窗口 ${since ? since.toISOString() : '全量'} 收到 ${out.length} 条` +
+          `（扫描 ${seen} 条，其中 ${unusable} 条不可解析${ascending ? '，旧→新序' : ''}）`,
+      );
       return out;
     },
 

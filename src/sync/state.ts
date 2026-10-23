@@ -40,6 +40,13 @@ export interface SyncCounts {
 export interface ProviderSyncState {
   /** 水位线：上次同步时刻（ISO）；null = 从未同步 */
   last_sync_at: string | null;
+  /**
+   * 展示用：上次**实际跑过**同步的时刻（ISO）。
+   * 与水位线分叉的场景：空窗轮水位线冻结（2026-10 顽鹿增量失效事故的防御——列表异常
+   * 回空时推进水位线会把缺口永久藏住）、失败轮水位线保位。可选：M5 前的旧行没有该
+   * 字段，读侧回退 last_sync_at。
+   */
+  last_run_at?: string | null;
   last_result: 'ok' | 'error' | null;
   last_error: string | null;
   last_counts: SyncCounts | null;
@@ -58,6 +65,7 @@ export interface SyncState {
 /** 共享空态（冻结：读侧会直接把它当返回值发出去，别让某处手滑就地改到） */
 export const EMPTY_PROVIDER_STATE: ProviderSyncState = Object.freeze({
   last_sync_at: null,
+  last_run_at: null,
   last_result: null,
   last_error: null,
   last_counts: null,
@@ -84,6 +92,7 @@ function count(v: unknown): number {
 function normalizeSlot(raw: Record<string, unknown>): ProviderSyncState {
   const slot: ProviderSyncState = { ...EMPTY_PROVIDER_STATE };
   if (typeof raw.last_sync_at === 'string') slot.last_sync_at = raw.last_sync_at;
+  if (typeof raw.last_run_at === 'string') slot.last_run_at = raw.last_run_at;
   if (raw.last_result === 'ok' || raw.last_result === 'error') slot.last_result = raw.last_result;
   if (typeof raw.last_error === 'string') slot.last_error = raw.last_error;
   const c = raw.last_counts;

@@ -41,12 +41,34 @@ test('normalizeSyncState: 旧扁平行 → 落成 onelap 槽位（水位线/计�
     providers: {
       onelap: {
         last_sync_at: '2026-10-12T08:30:00.000Z',
+        last_run_at: null, // 旧行没有该字段（2026-10-23 新增的展示字段），归一化为 null
         last_result: 'ok',
         last_error: null,
         last_counts: { imported: 2, skipped: 1, failed: 0 },
       },
     },
   });
+});
+
+test('normalizeSyncState: last_run_at（展示用「上次实际跑过」）随槽位读写；缺省为 null', () => {
+  const out = normalizeSyncState({
+    provider: 'onelap',
+    providers: {
+      onelap: {
+        last_sync_at: '2026-10-16T02:00:00.000Z',
+        last_run_at: '2026-10-23T09:30:00.000Z',
+        last_result: 'ok',
+        last_error: null,
+        last_counts: { imported: 0, skipped: 3, failed: 0 },
+      },
+    },
+  });
+  assert.equal(out.providers.onelap.last_run_at, '2026-10-23T09:30:00.000Z');
+  // 非字符串（脏数据）按缺省处理
+  const dirty = normalizeSyncState({
+    providers: { onelap: { last_run_at: 42, last_sync_at: null, last_result: null, last_error: null, last_counts: null } },
+  });
+  assert.equal(dirty.providers.onelap.last_run_at, null);
 });
 
 test('normalizeSyncState: 全新默认行（无同步痕迹）不落空槽位', () => {
@@ -90,6 +112,7 @@ test('normalizeSyncState: 脏数据容错（非法 result / 负数与 NaN 计数
   assert.equal(out.auto, true, 'auto 非布尔 → 回落默认开');
   assert.deepEqual(out.providers['igpsport-intl'], {
     last_sync_at: null,
+    last_run_at: null,
     last_result: null,
     last_error: null,
     last_counts: { imported: 0, skipped: 0, failed: 0, duplicates: 4 },
@@ -113,6 +136,7 @@ test('providerState / withProviderState: 缺槽位读空态；写入返回新对
   assert.deepEqual(base.providers, {}, '原状态不被就地修改');
   assert.deepEqual(providerState(next, 'wahoo'), {
     last_sync_at: '2026-10-16T00:00:00.000Z',
+    last_run_at: null,
     last_result: 'ok',
     last_error: null,
     last_counts: null,

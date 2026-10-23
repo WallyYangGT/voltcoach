@@ -116,6 +116,44 @@ describe('云同步编排 × 保活壳接线', () => {
     expect(typeof slot.last_sync_at).toBe('string');
   });
 
+  it('空窗轮水位线冻结（2026-10 事故防御）：已有水位线 + 列表为空 → last_sync_at 不动、last_run_at 照写', async () => {
+    const WATERMARK = '2026-10-16T02:00:00.000Z';
+    const slotState = {
+      provider: 'onelap' as const,
+      auto: false,
+      providers: {
+        onelap: { last_sync_at: WATERMARK, last_run_at: null, last_result: 'ok', last_error: null, last_counts: null },
+      },
+    };
+    (getSyncState as jest.Mock).mockResolvedValue(slotState);
+    stubProvider({ listSince: jest.fn(() => Promise.resolve([])) });
+    const outcome = await runSync();
+    expect(outcome.error).toBeNull();
+    const { slot } = writtenSlot();
+    expect(slot.last_sync_at).toBe(WATERMARK); // 冻结：空结果不推进（防列表异常把缺口藏住）
+    expect(typeof slot.last_run_at).toBe('string'); // 展示时刻照常更新
+    expect(slot.last_result).toBe('ok');
+  });
+
+  it('列表非空的正常轮：水位线照常推进到当前时刻', async () => {
+    stubProvider({
+      listSince: jest.fn(() => Promise.resolve([{ id: '1', startAt: new Date('2026-10-20T08:00:00Z') }])),
+      getFileRef: jest.fn(() => Promise.resolve(null)), // 云端无文件 → 计跳过（listed 仍 >0）
+    });
+    const WATERMARK = '2026-10-16T02:00:00.000Z';
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: false,
+      providers: {
+        onelap: { last_sync_at: WATERMARK, last_run_at: null, last_result: 'ok', last_error: null, last_counts: null },
+      },
+    });
+    await runSync();
+    const { slot } = writtenSlot();
+    expect(slot.last_sync_at).not.toBe(WATERMARK);
+    expect(typeof slot.last_sync_at).toBe('string');
+  });
+
   it('建会话失败早退：release 恰好一次（finally 覆盖），水位线记 error 但不动时间戳', async () => {
     stubProvider({ start: jest.fn(() => Promise.reject(new Error('账号或密码错误'))) });
     const outcome = await runSync();
@@ -125,11 +163,13 @@ describe('云同步编排 × 保活壳接线', () => {
       (h: { release: jest.Mock }) => h.release,
     );
     expect(release).toHaveBeenCalledTimes(1);
-    // 出错轮：last_result=error、last_error 透出，last_sync_at 保持原值（null）
+    // 出错轮：last_result=error、last_error 透出，last_sync_at 保持原值（null），
+    // last_run_at 照写（展示「上次实际跑过」）
     const { slot } = writtenSlot();
     expect(slot.last_result).toBe('error');
     expect(slot.last_error).toBe('账号或密码错误');
     expect(slot.last_sync_at).toBeNull();
+    expect(typeof slot.last_run_at).toBe('string');
   });
 
   it('列表失败早退：release 恰好一次', async () => {
