@@ -39,9 +39,10 @@ export interface SyncCounts {
 /** 单平台的同步进度（水位线 + 最近结果） */
 export interface ProviderSyncState {
   /**
-   * 水位线：增量拉取的窗口边界（上次拉到**非空**窗口的时刻，ISO）；null = 从未同步。
-   * 空窗轮冻结不推进、失败轮保位（decisions §37）——「上次同步时间」的展示职责已移交
-   * last_run_at，本字段只反映增量边界。
+   * 水位线：增量拉取的窗口边界（上次拉到**非空**窗口的时刻，ISO）；
+   * null = 尚未拉到过非空窗口（从未同步，或首次同步就遇空窗被冻结——下轮仍回溯完整
+   * 90 天窗口）。空窗轮冻结不推进、失败轮保位（decisions §37）——「上次同步时间」的
+   * 展示职责已移交 last_run_at，本字段只反映增量边界。
    */
   last_sync_at: string | null;
   /**

@@ -291,7 +291,7 @@ test('listSince: 条目全部缺 id/时间——显式 api 错误，不再静默
   ]);
   await assert.rejects(
     () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
-    (e) => e.code === 'api' && /缺少可解析/.test(e.message),
+    (e) => e.code === 'api' && /无法确认是否为未同步的新记录/.test(e.message),
   );
 });
 
@@ -302,7 +302,39 @@ test('listSince: 窗口边界前（新侧）的不可解析条目——空结果
   ]);
   await assert.rejects(
     () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
-    (e) => e.code === 'api' && /无法确认窗口为空/.test(e.message),
+    (e) => e.code === 'api' && /无法确认是否为未同步的新记录/.test(e.message),
+  );
+});
+
+test('listSince: 非空但新侧有丢弃条目——结果不完整，同样显式报错（回审探针①）', async () => {
+  // 降序 [缺 id 的新记录, 窗口内旧记录, 边界]：可解析子集存在，但缺 id 的新记录被丢了，
+  // 旧实现会照常推进水位线把缺口藏住——必须报错而非返回部分结果
+  const { fetchImpl } = fakeListFetch([
+    { list: [{ start_riding_time: rideTime(1) }, { id: 5, start_riding_time: rideTime(2) }, { id: 4, start_riding_time: rideTime(40) }], hasMore: true },
+  ]);
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    (e) => e.code === 'api' && /无法确认是否为未同步的新记录/.test(e.message),
+  );
+});
+
+test('listSince: 升序且边界后有丢弃条目——同样显式报错（回审探针②）', async () => {
+  const { fetchImpl } = fakeListFetch([
+    { list: [{ id: 4, start_riding_time: rideTime(40) }, { start_riding_time: rideTime(1) }, { id: 5, start_riding_time: rideTime(2) }] },
+  ]);
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    (e) => e.code === 'api' && /无法确认是否为未同步的新记录/.test(e.message),
+  );
+});
+
+test('listSince: 升序单样本方向未知 + 边界后全丢弃——保守取和，显式报错（回审探针③）', async () => {
+  const { fetchImpl } = fakeListFetch([
+    { list: [{ id: 4, start_riding_time: rideTime(40) }, { start_riding_time: rideTime(1) }, { start_riding_time: rideTime(2) }] },
+  ]);
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    (e) => e.code === 'api' && /无法确认是否为未同步的新记录/.test(e.message),
   );
 });
 
@@ -322,10 +354,27 @@ test('listSince: list 字段缺失（形状变更）——显式 api 错误', as
   );
 });
 
+test('listSince: list 为非数组非 null（形状变更）——显式 api 错误', async () => {
+  const { fetchImpl } = fakeListFetch([{ raw: JSON.stringify({ code: 200, message: '', data: { list: {}, pagination: { has_more: false } } }) }]);
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    (e) => e.code === 'api' && /类型异常/.test(e.message),
+  );
+});
+
 test('listSince: list 为 null（Go nil slice）——按空页放行', async () => {
   const { fetchImpl } = fakeListFetch([{ raw: JSON.stringify({ code: 200, message: '', data: { list: null, pagination: { has_more: false } } }) }]);
   const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
   assert.deepEqual(list, []);
+});
+
+test('listSince: 边界恰在页数用尽页且 has_more——按窗口扫完放行（boundary 先于 truncated）', async () => {
+  const { fetchImpl, calls } = fakeListFetch([
+    { list: [{ id: 1, start_riding_time: rideTime(40) }, { id: 2, start_riding_time: rideTime(41) }], hasMore: true },
+  ]);
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000), 1);
+  assert.deepEqual(list, [], '窗口已扫完不应报翻页上限错');
+  assert.equal(calls.length, 1);
 });
 
 test('listSince: 时间字段存在但格式不可解析——条目仍入列表（startAt=null），不丢记录', async () => {

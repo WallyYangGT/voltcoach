@@ -275,18 +275,21 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
 
     async listSince(session, since, maxPages = 500) {
       const out: RemoteActivity[] = [];
-      // 诊断与守卫计数（2026-10 顽鹿增量失效事故，decisions §37）：「空结果」只有在
-      // 扫到过「可解析且早于 since」的窗口边界（sawOldParsed）时才可信；不可信的空态
-      // 一律显式报错交编排层按失败处理（水位线不动），绝不静默回空——编排层把空列表
-      // 当「没有新记录」并推进水位线，会把缺口永久藏住（症状：0 新增 0 跳过且时间在走）。
+      // 诊断与守卫计数（2026-10 顽鹿增量失效事故，decisions §37）：结果只有在
+      // 「扫到过可解析且早于 since 的窗口边界」且「新侧没有丢弃条目」时才可信；
+      // 不可信的结果一律显式报错交编排层按失败处理（水位线不动），绝不静默返回——
+      // 编排层把空/缺记录的列表当「没有新记录」并推进水位线，会把缺口永久藏住
+      //（症状：同步时间在走、永远 0 新增 0 跳过）。
       let seen = 0;
-      let unusable = 0;
-      let unusableBeforeOld = 0; // 尚未见窗口边界时的不可解析条目（降序里它们位于边界新侧=疑似窗口内）
+      let dropped = 0; // id/时间字段缺失被丢弃的条目（解析失败的条目入列表，不计入）
+      let droppedBeforeOld = 0; // 未见窗口边界时的丢弃（降序里位于边界新侧=疑似窗口内）
+      let droppedAfterOld = 0; // 见过窗口边界后的丢弃（升序里位于边界后=疑似窗口内）
+      let recovered = 0; // 时间字段在但解析失败、仍入列表的条目（不丢记录，仅诊断）
       let parsed = 0;
       let sawOldParsed = false;
       let ascending = false; // 时间升序=旧→新序：遇旧条目只跳过，不再提前停
       let lastParsedMs: number | null = null;
-      let stopReason: 'boundary' | 'end' | 'truncated' | 'nomore' | null = null;
+      let stopReason: 'boundary' | 'end' | 'truncated' | null = null;
       for (let page = 1; page <= maxPages; page += 1) {
         const json = (await postJson(`${rideBase}/list`, authHeaders(session), {
           page,
@@ -310,23 +313,30 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
             `活动列表响应缺少 list 字段（响应形状疑似变更）: ${JSON.stringify(json).slice(0, 200)}`,
           );
         }
-        // Go(nil slice) 序列化为 null：按空页处理，不算形状变更
-        const list = Array.isArray(data.list) ? data.list : [];
+        // null（Go nil slice）按空页放行；其余非数组形态 = 形状变更，显式报错
+        if (data.list !== null && !Array.isArray(data.list)) {
+          throw new SyncError(
+            'api',
+            `活动列表响应 list 字段类型异常（响应形状疑似变更）: ${JSON.stringify(json).slice(0, 200)}`,
+          );
+        }
+        const list = data.list ?? [];
         let pageHadOld = false;
         for (const item of list) {
           seen += 1;
           if (!item?.id || !item?.start_riding_time) {
-            // id/时间字段缺失（旧实现即静默跳过的形态）：只计诊断
-            unusable += 1;
-            if (!sawOldParsed) unusableBeforeOld += 1;
+            // id/时间字段缺失：无法定位时间 → 丢弃（旧实现即如此），但必须计数——
+            // 「新侧」的丢弃条目会让整份结果不可信（见收尾守卫），不能无声吞掉
+            dropped += 1;
+            if (sawOldParsed) droppedAfterOld += 1;
+            else droppedBeforeOld += 1;
             continue;
           }
           const startAt = parseRideTime(item.start_riding_time);
           if (!startAt) {
             // 时间字段在但解析失败：保旧实现语义——条目仍入列表（startAt 仅失败重试
-            // 锚点用，null 不影响下载导入），只计诊断。格式漂移不升级成丢记录。
-            unusable += 1;
-            if (!sawOldParsed) unusableBeforeOld += 1;
+            // 锚点用，null 不影响下载导入）。格式漂移不升级成丢记录。
+            recovered += 1;
             out.push({ id: String(item.id), startAt: null });
             continue;
           }
@@ -345,39 +355,43 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
           stopReason = 'end';
           break;
         }
-        if (page >= maxPages) {
-          stopReason = 'truncated'; // 服务端还有下一页但翻页上限用尽：本轮不完整，不可信
-          break;
-        }
         // 翻页停止判据放**页边界**而非条目中途：页内可能还混着窗口内条目（方向异常或
         // 单条旧条目跨页时，条目中途停会把同页/后续页的窗口内记录漏掉）。降序（未见
         // 升序）且本页见过旧条目、样本足够断序（parsed ≥ 2，首条旧条目无法判定方向）
-        // ⇒ 后面只可能更旧，到此为止，不为全量历史买单。
+        // ⇒ 后面只可能更旧，到此为止，不为全量历史买单。先于截断判定——窗口已扫完时
+        // 「页数恰好用尽」不算异常。
         if (since && !ascending && pageHadOld && parsed >= 2) {
           stopReason = 'boundary';
+          break;
+        }
+        if (page >= maxPages) {
+          stopReason = 'truncated'; // 服务端还有下一页但翻页上限用尽：本轮不完整，不可信
           break;
         }
       }
       if (stopReason === 'truncated') {
         throw new SyncError('api', `活动列表超过翻页上限（${maxPages} 页）仍未到头，已中止本轮以防漏同步`);
       }
-      if (out.length === 0 && seen > 0 && !sawOldParsed) {
+      // 「新侧」存在丢弃条目 ⇒ 结果不完整（可能已把未同步的新记录丢掉），与 out 是否
+      // 为空无关——out 非空也照样可能丢掉了同侧的新记录：升序取边界后的丢弃数、降序
+      // 取边界前的丢弃数、方向未知（可解析样本不足两条）保守取两侧之和。显式报错，
+      // 服务端恢复后由水位线未动自动补回。
+      const suspicious =
+        ascending
+          ? droppedAfterOld
+          : parsed >= 2
+            ? droppedBeforeOld
+            : droppedBeforeOld + droppedAfterOld;
+      if (suspicious > 0) {
         throw new SyncError(
           'api',
-          `活动列表返回 ${seen} 条但 ${unusable} 条缺少可解析的 id/起骑时间，无法确认窗口为空（响应形状疑似变更，已中止本轮以防漏同步）`,
-        );
-      }
-      if (out.length === 0 && unusableBeforeOld > 0 && !ascending) {
-        // 降序/方向未知时，边界前（=新侧）的不可解析条目可能是未同步的新记录：
-        // 空结果不可信，显式报错（升序时它们位于窗口之外，放行）
-        throw new SyncError(
-          'api',
-          `活动列表窗口边界前有 ${unusableBeforeOld} 条缺少可解析的 id/起骑时间，无法确认窗口为空（响应形状疑似变更，已中止本轮以防漏同步）`,
+          `活动列表有 ${suspicious} 条记录缺少 id/起骑时间、无法确认是否为未同步的新记录（响应形状疑似变更），已中止本轮以防漏同步`,
         );
       }
       console.log(
         `onelap 列表：窗口 ${since ? since.toISOString() : '全量'} 收到 ${out.length} 条` +
-          `（扫描 ${seen} 条，不可解析 ${unusable} 条，停止=${stopReason ?? 'empty'}${ascending ? '，旧→新序' : ''}）`,
+          `（扫描 ${seen} 条，时间不可解析仍导入 ${recovered} 条，丢弃 ${dropped} 条，` +
+          `停止=${stopReason ?? 'end'}${ascending ? '，旧→新序' : ''}）`,
       );
       return out;
     },

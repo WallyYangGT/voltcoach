@@ -191,7 +191,8 @@ export const SYNC_WINDOW_DAYS = 90;
 export const SYNC_WATERMARK_BUFFER_MS = 24 * 3600 * 1000;
 
 /**
- * 本轮同步的窗口起点（列表按起骑时间新→旧，早于该点即停止翻页）：
+ * 本轮同步的窗口起点（各平台列表实现按该点做窗口过滤/提前停止，顺序契约见
+ * SyncClient.listSince）：
  *  - 首次同步（无水位线）：now − SYNC_WINDOW_DAYS；
  *  - 有水位线：上次同步时间前移 24h 缓冲，但**不早于** now − SYNC_WINDOW_DAYS
  *    （长时间未同步时截断，避免一次拉几百天的记录）。

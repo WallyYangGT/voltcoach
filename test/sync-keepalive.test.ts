@@ -13,7 +13,7 @@
  * 整体替换——被测对象只有 runSyncOnce 的编排与保活配对，平台协议行为由桩 runner
  * 注入（各平台客户端另有 L1 直测）。
  */
-import { runSync } from '@/services/sync';
+import { maybeAutoSync, runSync } from '@/services/sync';
 import { acquireGenerationKeepAlive } from '@/ai/keepalive';
 import { getSyncState, setSyncState } from '@/db';
 import { SyncError } from '@/sync/common';
@@ -263,5 +263,47 @@ describe('云同步编排 × 保活壳接线', () => {
     const [a, b] = await Promise.all([pa, pb]);
     expect(a).toBe(b); // 同一 outcome 对象 = 共享同一 promise
     expect(acquireGenerationKeepAlive).toHaveBeenCalledTimes(1);
+  });
+
+  it('自动同步节流：成功轮（含空窗冻结轮）以 last_run_at 为基准，刚跑过不再跑', async () => {
+    stubProvider();
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: true,
+      providers: {
+        onelap: {
+          last_sync_at: '2026-10-16T02:00:00.000Z', // 冻结的旧水位线
+          last_run_at: new Date().toISOString(), // 刚实际跑过（成功轮）
+          last_result: 'ok',
+          last_error: null,
+          last_counts: null,
+        },
+      },
+    });
+    await maybeAutoSync();
+    // 水位线冻结时不因 last_sync_at 过期而白跑：节流挡在 createRunner 之前
+    const provider = (providerById as jest.Mock).mock.results[0].value as { createRunner: jest.Mock };
+    expect(provider.createRunner).not.toHaveBeenCalled();
+  });
+
+  it('自动同步节流：失败轮回退 last_sync_at——刚失败过也可立即重试', async () => {
+    stubProvider();
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: true,
+      providers: {
+        onelap: {
+          last_sync_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+          last_run_at: new Date().toISOString(), // 刚失败过（last_result=error）
+          last_result: 'error',
+          last_error: 'network down',
+          last_counts: null,
+        },
+      },
+    });
+    await maybeAutoSync();
+    // 瞬时失败不让自动同步静默 1h：失败轮按 last_sync_at（3h 前）判定节流通过
+    const provider = (providerById as jest.Mock).mock.results[0].value as { createRunner: jest.Mock };
+    expect(provider.createRunner).toHaveBeenCalled();
   });
 });
