@@ -60,9 +60,25 @@ test('parseRideTime: 顽鹿本地时区格式解析；非法输入返回 null', 
   const d = parseRideTime('2026-09-15 08:30:05');
   assert.ok(d);
   assert.equal(new Date(2026, 8, 15, 8, 30, 5).getTime(), d.getTime());
-  assert.equal(parseRideTime('2026-09-15T08:30:05Z'), null); // 不是顽鹿格式
+  // 无时区的 T 分隔变体 = 同一墙钟
+  assert.deepEqual(parseRideTime('2026-09-15T08:30:05'), d);
   assert.equal(parseRideTime('garbage'), null);
   assert.equal(parseRideTime(''), null);
+});
+
+test('parseRideTime: 带时区后缀按 offset 归一为精确 instant（不按本地墙钟解释）', () => {
+  assert.equal(
+    parseRideTime('2026-09-15T08:30:05Z')?.getTime(),
+    Date.UTC(2026, 8, 15, 8, 30, 5),
+  );
+  assert.equal(
+    parseRideTime('2026-09-15 08:30:05+08:00')?.getTime(),
+    Date.UTC(2026, 8, 15, 0, 30, 5),
+  );
+  assert.equal(
+    parseRideTime('2026-09-15 08:30:05.123-0500')?.getTime(),
+    Date.UTC(2026, 8, 15, 13, 30, 5),
+  );
 });
 
 test('extractFitFileName: basename + 强制 .fit 后缀 + 回退 id 名', () => {
@@ -260,6 +276,15 @@ test('listSince: 新→旧序且窗口内无记录——首页即停、返回空
   assert.equal(calls.length, 1);
 });
 
+test('listSince: 单条旧条目跨页（样本不足不断序）——下一页的窗口内记录不丢', async () => {
+  const { fetchImpl } = fakeListFetch([
+    { list: [{ id: 1, start_riding_time: rideTime(40) }], hasMore: true },
+    { list: [{ id: 2, start_riding_time: rideTime(30) }, { id: 3, start_riding_time: rideTime(1) }] },
+  ]);
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
+  assert.deepEqual(list.map((a) => a.id), ['3'], '首条旧条目无法判定列表方向，不得提前停止');
+});
+
 test('listSince: 条目全部缺 id/时间——显式 api 错误，不再静默当空列表', async () => {
   const { fetchImpl } = fakeListFetch([
     { list: [{ start_riding_time: rideTime(1) }, { id: 9 }, {}] },
@@ -270,6 +295,25 @@ test('listSince: 条目全部缺 id/时间——显式 api 错误，不再静默
   );
 });
 
+test('listSince: 窗口边界前（新侧）的不可解析条目——空结果不可信，显式报错', async () => {
+  // 降序里排在旧条目之前的不可解析条目疑似窗口内的新记录，静默跳过会复刻本次事故
+  const { fetchImpl } = fakeListFetch([
+    { list: [{ start_riding_time: rideTime(1) }, { id: 2, start_riding_time: rideTime(40) }, { id: 3, start_riding_time: rideTime(41) }] },
+  ]);
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    (e) => e.code === 'api' && /无法确认窗口为空/.test(e.message),
+  );
+});
+
+test('listSince: 不可解析条目在窗口边界之后——按空窗口放行（不误报）', async () => {
+  const { fetchImpl } = fakeListFetch([
+    { list: [{ id: 1, start_riding_time: rideTime(40) }, { id: 2, start_riding_time: rideTime(41) }, {}] },
+  ]);
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
+  assert.deepEqual(list, []);
+});
+
 test('listSince: list 字段缺失（形状变更）——显式 api 错误', async () => {
   const { fetchImpl } = fakeListFetch([{ raw: JSON.stringify({ code: 200, message: '', data: { rows: [] } }) }]);
   await assert.rejects(
@@ -278,19 +322,32 @@ test('listSince: list 字段缺失（形状变更）——显式 api 错误', as
   );
 });
 
-test('listSince: 不可解析条目 + 可解析旧条目边界——按空窗口放行（不误报）', async () => {
-  const { fetchImpl } = fakeListFetch([
-    { list: [{}, { id: 1, start_riding_time: rideTime(40) }, { id: 2, start_riding_time: rideTime(41) }] },
-  ]);
+test('listSince: list 为 null（Go nil slice）——按空页放行', async () => {
+  const { fetchImpl } = fakeListFetch([{ raw: JSON.stringify({ code: 200, message: '', data: { list: null, pagination: { has_more: false } } }) }]);
   const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
   assert.deepEqual(list, []);
 });
 
-test('parseRideTime: 宽容变体（T 分隔 / 小数秒 / 首尾空白）；带时区后缀仍拒绝', () => {
-  const base = parseRideTime('2026-10-20 19:00:00');
-  assert.ok(base);
-  assert.deepEqual(parseRideTime('2026-10-20T19:00:00'), base);
-  assert.deepEqual(parseRideTime('  2026-10-20 19:00:00.0  '), base);
-  assert.equal(parseRideTime('2026-10-20T19:00:00Z'), null);
-  assert.equal(parseRideTime('2026-10-20 19:00:00+08:00'), null);
+test('listSince: 时间字段存在但格式不可解析——条目仍入列表（startAt=null），不丢记录', async () => {
+  const { fetchImpl } = fakeListFetch([
+    { list: [{ id: 9, start_riding_time: '2026/10/20 19:00' }, { id: 10, start_riding_time: rideTime(1) }] },
+  ]);
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
+  assert.deepEqual(
+    list.map((a) => [a.id, a.startAt]),
+    [['9', null], ['10', list[1].startAt]],
+    '时间格式漂移不应升级成丢记录（startAt 只用于失败重试锚点）',
+  );
+});
+
+test('listSince: 超过翻页上限仍未到头——显式报错（截断的列表不可信）', async () => {
+  const pages = Array.from({ length: 3 }, (_, i) => ({
+    list: [{ id: i + 1, start_riding_time: rideTime(1 + i) }],
+    hasMore: true,
+  }));
+  const { fetchImpl } = fakeListFetch(pages);
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000), 2),
+    (e) => e.code === 'api' && /翻页上限/.test(e.message),
+  );
 });

@@ -134,17 +134,16 @@ async function runSyncOnce(): Promise<SyncOutcome> {
     const prev = providerState(state, state.provider);
     const { outcome, listed } = await pullActivities(provider, prev);
     const err = outcome.error;
-    // 水位线推进锚点：正常→当前时刻；有失败活动→最旧失败活动时间（下次窗口重试，
-    // 成功项按文件名幂等跳过）；本轮出错（未拉到列表）→不动。
-    // ⚠️ 云端列表为空（listed === 0）且已有水位线时**冻结不推进**（2026-10 顽鹿增量
-    // 失效事故）：列表异常被客户端静默当空时，照常推进会把 24h 缓冲外的记录永久藏住
-    // （现象即「同步时间在走、永远 0 新增 0 跳过」）。冻结的代价只是空窗轮次下轮多扫
-    // 一点——窗口有「不早于 now−90 天」下限兜底，扫到的旧活动按文件名幂等跳过。
+    // 水位线推进锚点：有失败活动→最旧失败活动时间（下次窗口重试，成功项按文件名幂等
+    // 跳过）；云端列表为空（listed === 0）→ **冻结不推进**（含首次同步——水位线保持
+    // null，下轮仍回溯完整 90 天窗口）：空结果只有在客户端扫到过窗口边界时才可信，
+    // 服务端软故障回空的兜底在这里，照常推进会把 24h 缓冲外的记录永久藏住（2026-10
+    // 顽鹿增量失效事故，decisions §37）。冻结的代价只是空窗下轮多扫一点（窗口有
+    // now−90 天下限兜底，扫到的旧活动按文件名幂等跳过）。本轮出错（未拉到列表）→不动。
     const ranAt = new Date().toISOString();
     const nextSyncAt = err
       ? prev.last_sync_at
-      : outcome.failureFloor ??
-        (listed === 0 && prev.last_sync_at ? prev.last_sync_at : ranAt);
+      : outcome.failureFloor ?? (listed === 0 ? prev.last_sync_at : ranAt);
     // ⚠️ 收尾必须**重读状态行再只写目标平台槽位**：首次 90 天全量是分钟级，用户在同步
     // 途中切平台/关自动开关都会被开头那份快照整行覆盖写回（界面随后 load() 又把用户
     // 改动读回来，看起来像「切了没生效」）——provider/auto 以库内现值为准（评审 P2-1）
@@ -267,10 +266,12 @@ export async function maybeAutoSync(): Promise<void> {
     const creds = await provider.loadCredentials();
     if (!creds) return;
     const prev = providerState(state, state.provider);
-    // 节流基准 = 上次实际跑过的时刻（含空窗冻结轮——水位线可能长期不动，用它会导致
-    // 每次回前台都白跑一轮空同步）
-    const attemptedAt = prev.last_run_at ?? prev.last_sync_at;
-    if (attemptedAt && Date.now() - new Date(attemptedAt).getTime() < AUTO_THROTTLE_MS) return;
+    // 节流基准：成功轮（含空窗冻结轮）用 last_run_at——冻结后水位线长期不动，若用
+    // last_sync_at 会每次回前台都白跑一轮空同步；失败轮回退 last_sync_at（旧语义：
+    // 失败后下次回前台即可重试，瞬时网络错误不让自动同步静默 1h）
+    const throttleAt =
+      prev.last_result === 'ok' ? prev.last_run_at ?? prev.last_sync_at : prev.last_sync_at;
+    if (throttleAt && Date.now() - new Date(throttleAt).getTime() < AUTO_THROTTLE_MS) return;
     if (Date.now() - lastAutoAttempt < AUTO_THROTTLE_MS) return;
     lastAutoAttempt = Date.now();
     await runSync();

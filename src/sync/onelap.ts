@@ -101,17 +101,29 @@ export function nonceFromBytes(bytes: Uint8Array, length = 16): string {
 }
 
 /**
- * "YYYY-MM-DD HH:mm:ss" → 本地时区 Date（顽鹿服务端口径 = Go time.Local）。
- * 手工解析不用 new Date(string)——非 ISO 格式在 Hermes/JSC 上返回 Invalid Date。
- * 宽容变体：前后空白、日期时间分隔符 'T'、可选小数秒（".0"）——服务端偶发形态不做
- * 假设（2026-10 增量失效事故的防御之一：新增记录时间串格式漂移不应被静默丢弃）；
- * 带时区后缀（Z/+08:00）仍拒绝——语义变成 UTC/偏移 instant，按本地墙钟解析会错档。
+ * 起骑时间串 → Date。宽容变体：前后空白、日期时间分隔符 'T'、可选小数秒（".0"）、
+ * 可选时区后缀（Z 或 ±hh:mm / ±hhmm，2026-10 增量失效事故的防御之一：服务端时间
+ * 格式漂移不应让记录被静默丢弃）。语义：无时区 = 顽鹿服务端墙钟（Go time.Local
+ * 口径，按设备本地时区解释）；带时区 = 精确 instant，按 offset 归一到 UTC——
+ * 不得把带时区的墙钟再按本地解释一遍。格式完全不可解析返回 null（调用方保旧语义
+ * 处理：条目仍入列表，只是失败重试锚点缺失）。
  */
 export function parseRideTime(value: string): Date | null {
-  const m = /^\s*(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?\s*$/.exec(value ?? '');
+  const m = /^\s*(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?\s*$/.exec(
+    value ?? '',
+  );
   if (!m) return null;
-  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
-  return Number.isNaN(d.getTime()) ? null : d;
+  const [, y, mo, d, h, mi, s, tz] = m;
+  if (tz === undefined) {
+    const local = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+    return Number.isNaN(local.getTime()) ? null : local;
+  }
+  const utcMs = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+  const sign = tz === 'Z' || tz[0] === '+' ? 1 : -1;
+  const hh = tz === 'Z' ? 0 : Number(tz.slice(1, 3));
+  const mm = tz === 'Z' ? 0 : Number(tz.slice(-2));
+  const instant = new Date(utcMs - sign * (hh * 60 + mm) * 60_000);
+  return Number.isNaN(instant.getTime()) ? null : instant;
 }
 
 /**
@@ -263,16 +275,18 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
 
     async listSince(session, since, maxPages = 500) {
       const out: RemoteActivity[] = [];
-      // 诊断计数（2026-10 增量失效事故的防御）：空结果不再无条件等价「窗口内没有记录」。
-      // seen/unusable 用来区分「真扫到了窗口边界」与「条目根本不可解析」——后者旧实现
-      // 静默当空列表，编排层再把水位线推到当前时刻，缺口被永久藏住（0 新增 0 跳过）。
+      // 诊断与守卫计数（2026-10 顽鹿增量失效事故，decisions §37）：「空结果」只有在
+      // 扫到过「可解析且早于 since」的窗口边界（sawOldParsed）时才可信；不可信的空态
+      // 一律显式报错交编排层按失败处理（水位线不动），绝不静默回空——编排层把空列表
+      // 当「没有新记录」并推进水位线，会把缺口永久藏住（症状：0 新增 0 跳过且时间在走）。
       let seen = 0;
       let unusable = 0;
-      let parsed = 0; // 可解析条目数——方向判定需要 ≥2 条样本，首条旧条目无法断序
-      let sawOldParsed = false; // 见过「可解析且早于 since」的条目 = 窗口边界已被扫到
-      // 列表时间方向：出现升序即视为旧→新序，此后遇旧条目只跳过不再提前停
-      let ascending = false;
+      let unusableBeforeOld = 0; // 尚未见窗口边界时的不可解析条目（降序里它们位于边界新侧=疑似窗口内）
+      let parsed = 0;
+      let sawOldParsed = false;
+      let ascending = false; // 时间升序=旧→新序：遇旧条目只跳过，不再提前停
       let lastParsedMs: number | null = null;
+      let stopReason: 'boundary' | 'end' | 'truncated' | 'nomore' | null = null;
       for (let page = 1; page <= maxPages; page += 1) {
         const json = (await postJson(`${rideBase}/list`, authHeaders(session), {
           page,
@@ -281,7 +295,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
           code?: number;
           message?: string;
           data?: {
-            list?: { id?: number | string; start_riding_time?: string }[];
+            list?: { id?: number | string; start_riding_time?: string }[] | null;
             pagination?: { has_more?: boolean };
           };
         };
@@ -289,49 +303,81 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
         if (json?.code !== 200 || !data) {
           throw new SyncError('api', `活动列表失败: ${json?.message ?? JSON.stringify(json).slice(0, 200)}`);
         }
-        if (!Array.isArray(data.list)) {
-          // 合规响应恒有 list 数组（上游 Go 结构与 mock 同源）；缺失 = 形状变更，
-          // 显式报错交给编排层按失败处理（水位线不动），绝不静默当空列表
+        if (data.list === undefined) {
+          // 合规响应恒有 list 键（上游 Go 结构与 mock 同源）；缺失 = 形状变更
           throw new SyncError(
             'api',
             `活动列表响应缺少 list 字段（响应形状疑似变更）: ${JSON.stringify(json).slice(0, 200)}`,
           );
         }
-        for (const item of data.list) {
+        // Go(nil slice) 序列化为 null：按空页处理，不算形状变更
+        const list = Array.isArray(data.list) ? data.list : [];
+        let pageHadOld = false;
+        for (const item of list) {
           seen += 1;
-          const startAt = item?.start_riding_time ? parseRideTime(item.start_riding_time) : null;
-          if (!item?.id || !startAt) {
+          if (!item?.id || !item?.start_riding_time) {
+            // id/时间字段缺失（旧实现即静默跳过的形态）：只计诊断
             unusable += 1;
+            if (!sawOldParsed) unusableBeforeOld += 1;
             continue;
           }
-          const startAtMs = startAt.getTime();
+          const startAt = parseRideTime(item.start_riding_time);
+          if (!startAt) {
+            // 时间字段在但解析失败：保旧实现语义——条目仍入列表（startAt 仅失败重试
+            // 锚点用，null 不影响下载导入），只计诊断。格式漂移不升级成丢记录。
+            unusable += 1;
+            if (!sawOldParsed) unusableBeforeOld += 1;
+            out.push({ id: String(item.id), startAt: null });
+            continue;
+          }
           parsed += 1;
+          const startAtMs = startAt.getTime();
           if (lastParsedMs !== null && startAtMs > lastParsedMs) ascending = true;
           lastParsedMs = startAtMs;
           if (since && startAtMs < since.getTime()) {
-            // 时间未见升序 ⇒ 视作新→旧序：到头即停（含窗口内无记录的首轮，保住翻页成本，
-            // 不为全量历史买单）。两个豁免：样本不足 2 条无法断序（首条旧条目可能是旧→新
-            // 序的开头，停错会把整段窗口漏成空列表——2026-10 事故候选形态）；升序已成立
-            //（旧→新序），旧条目只跳过。
-            if (!ascending && parsed >= 2) return out;
+            pageHadOld = true;
             sawOldParsed = true;
             continue;
           }
           out.push({ id: String(item.id), startAt });
         }
-        if (!data.pagination?.has_more) break;
+        if (!data.pagination?.has_more) {
+          stopReason = 'end';
+          break;
+        }
+        if (page >= maxPages) {
+          stopReason = 'truncated'; // 服务端还有下一页但翻页上限用尽：本轮不完整，不可信
+          break;
+        }
+        // 翻页停止判据放**页边界**而非条目中途：页内可能还混着窗口内条目（方向异常或
+        // 单条旧条目跨页时，条目中途停会把同页/后续页的窗口内记录漏掉）。降序（未见
+        // 升序）且本页见过旧条目、样本足够断序（parsed ≥ 2，首条旧条目无法判定方向）
+        // ⇒ 后面只可能更旧，到此为止，不为全量历史买单。
+        if (since && !ascending && pageHadOld && parsed >= 2) {
+          stopReason = 'boundary';
+          break;
+        }
       }
-      if (seen > 0 && out.length === 0 && !sawOldParsed) {
-        // 扫完没拿到窗口内条目、也没见到任何「可解析的旧条目」边界：空结果不可信
-        //（可能新增记录全在不可解析条目里），显式失败让用户看见，水位线由编排层保持不动
+      if (stopReason === 'truncated') {
+        throw new SyncError('api', `活动列表超过翻页上限（${maxPages} 页）仍未到头，已中止本轮以防漏同步`);
+      }
+      if (out.length === 0 && seen > 0 && !sawOldParsed) {
         throw new SyncError(
           'api',
           `活动列表返回 ${seen} 条但 ${unusable} 条缺少可解析的 id/起骑时间，无法确认窗口为空（响应形状疑似变更，已中止本轮以防漏同步）`,
         );
       }
+      if (out.length === 0 && unusableBeforeOld > 0 && !ascending) {
+        // 降序/方向未知时，边界前（=新侧）的不可解析条目可能是未同步的新记录：
+        // 空结果不可信，显式报错（升序时它们位于窗口之外，放行）
+        throw new SyncError(
+          'api',
+          `活动列表窗口边界前有 ${unusableBeforeOld} 条缺少可解析的 id/起骑时间，无法确认窗口为空（响应形状疑似变更，已中止本轮以防漏同步）`,
+        );
+      }
       console.log(
         `onelap 列表：窗口 ${since ? since.toISOString() : '全量'} 收到 ${out.length} 条` +
-          `（扫描 ${seen} 条，其中 ${unusable} 条不可解析${ascending ? '，旧→新序' : ''}）`,
+          `（扫描 ${seen} 条，不可解析 ${unusable} 条，停止=${stopReason ?? 'empty'}${ascending ? '，旧→新序' : ''}）`,
       );
       return out;
     },

@@ -97,7 +97,7 @@ describe('云同步编排 × 保活壳接线', () => {
     expect(acquireGenerationKeepAlive).not.toHaveBeenCalled();
   });
 
-  it('正常同步（空列表）：acquire 一次、release 恰好一次、水位线写 ok', async () => {
+  it('首次同步空列表：水位线保持 null（冻结，不吞 90 天回溯窗口）、last_run_at 照写', async () => {
     const outcome = await runSync();
     expect(outcome.error).toBeNull();
     expect(acquireGenerationKeepAlive).toHaveBeenCalledTimes(1);
@@ -113,7 +113,8 @@ describe('云同步编排 × 保活壳接线', () => {
     const { state, slot } = writtenSlot();
     expect(state.provider).toBe('onelap');
     expect(slot.last_result).toBe('ok');
-    expect(typeof slot.last_sync_at).toBe('string');
+    expect(slot.last_sync_at).toBeNull(); // 空窗轮冻结（decisions §37）：首次同步回空不推进
+    expect(typeof slot.last_run_at).toBe('string');
   });
 
   it('空窗轮水位线冻结（2026-10 事故防御）：已有水位线 + 列表为空 → last_sync_at 不动、last_run_at 照写', async () => {
@@ -152,6 +153,27 @@ describe('云同步编排 × 保活壳接线', () => {
     const { slot } = writtenSlot();
     expect(slot.last_sync_at).not.toBe(WATERMARK);
     expect(typeof slot.last_sync_at).toBe('string');
+  });
+
+  it('逐活动失败（failureFloor）：水位线锚定到最旧失败活动时间，不因失败被冻结在旧值', async () => {
+    stubProvider({
+      listSince: jest.fn(() => Promise.resolve([{ id: '1', startAt: new Date('2026-10-20T08:00:00Z') }])),
+      getFileRef: jest.fn(() => Promise.reject(new Error('下载失败'))),
+    });
+    const WATERMARK = '2026-10-16T02:00:00.000Z';
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: false,
+      providers: {
+        onelap: { last_sync_at: WATERMARK, last_run_at: null, last_result: 'ok', last_error: null, last_counts: null },
+      },
+    });
+    const outcome = await runSync();
+    expect(outcome.error).toBeNull();
+    expect(outcome.failed).toBe(1);
+    const { slot } = writtenSlot();
+    expect(slot.last_sync_at).toBe('2026-10-20T08:00:00.000Z'); // failureFloor 优先于冻结
+    expect(slot.last_result).toBe('ok');
   });
 
   it('建会话失败早退：release 恰好一次（finally 覆盖），水位线记 error 但不动时间戳', async () => {

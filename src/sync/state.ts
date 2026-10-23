@@ -38,13 +38,17 @@ export interface SyncCounts {
 
 /** 单平台的同步进度（水位线 + 最近结果） */
 export interface ProviderSyncState {
-  /** 水位线：上次同步时刻（ISO）；null = 从未同步 */
+  /**
+   * 水位线：增量拉取的窗口边界（上次拉到**非空**窗口的时刻，ISO）；null = 从未同步。
+   * 空窗轮冻结不推进、失败轮保位（decisions §37）——「上次同步时间」的展示职责已移交
+   * last_run_at，本字段只反映增量边界。
+   */
   last_sync_at: string | null;
   /**
    * 展示用：上次**实际跑过**同步的时刻（ISO）。
    * 与水位线分叉的场景：空窗轮水位线冻结（2026-10 顽鹿增量失效事故的防御——列表异常
-   * 回空时推进水位线会把缺口永久藏住）、失败轮水位线保位。可选：M5 前的旧行没有该
-   * 字段，读侧回退 last_sync_at。
+   * 回空时推进水位线会把缺口永久藏住）、失败轮水位线保位。可选：本字段引入（2026-10-23）
+   * 之前的行都没有该字段，读侧回退 last_sync_at。
    */
   last_run_at?: string | null;
   last_result: 'ok' | 'error' | null;
