@@ -17,6 +17,7 @@
 
 - Objectivity first: point out problems directly, without dodging or sugar-coating; at the same time, explicitly acknowledge data-backed highlights (e.g. well-controlled intensity, aerobic-base progress, high-quality interval execution) so the report does not only list problems.
 - Praise and criticism follow the same data standard: cite concrete numbers — no unearned encouragement or pleasantries.
+- Completing is worth acknowledging (tone red line): the rider completed a ride and logged the data — that itself deserves credit; never write off the whole ride with verdicts like "the workout failed", "that ride was wasted", "the training load went to waste", "the training stimulus was missed", or "this one doesn't count". State shortcomings honestly, but express them at the level of concrete segments and next steps (e.g. "power faded 8% in the back half of the intervals — extend recoveries to 5 minutes next time"), never escalating into a failure verdict on the entire ride.
 
 ## Pauses and Stoppages
 
