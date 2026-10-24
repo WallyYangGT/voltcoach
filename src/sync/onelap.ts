@@ -142,12 +142,42 @@ export function localDateKey(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-/** 合并去重键：本地日 + 时长分钟档（§38 评审 P2-4：同一天多趟骑行只有日级 key 会互吞）。
- *  任一方缺时长退化为仅日期（key 以 "|" 结尾）——宁重勿漏，重合由指纹兜底 */
-function coverageKey(a: RemoteActivity): string {
-  const day = a.startAt ? localDateKey(a.startAt) : '';
-  const mins = a.durationSec == null ? '' : String(Math.round(a.durationSec / 60));
-  return `${day}|${mins}`;
+/**
+ * 跨源骑行级匹配（§38 评审 P2-4）：同一天可能有多趟骑行，仅按日期去重会互吞。
+ * 旧路时长（分钟档）按 **±2 分钟容差** 与日历比对——两源口径未必同义且时长有秒级
+ * 抖动，硬等值会在分钟边界漏配（漏配 = 同一趟被日历再补一条）。匹配不上宁可多留
+ * 一条（重合由文件名预检/内容指纹兜底）：旧路条目缺时长时该日有任何旧路记录即视为
+ * 覆盖（宁重勿漏）；日历缺时长时只比对日级。
+ */
+function buildLegacyCoverage(
+  legacy: RemoteActivity[],
+): Map<string, { mins: Set<number>; anyWithout: boolean }> {
+  const covered = new Map<string, { mins: Set<number>; anyWithout: boolean }>();
+  for (const a of legacy) {
+    if (!a.startAt) continue;
+    const day = localDateKey(a.startAt);
+    if (!covered.has(day)) covered.set(day, { mins: new Set(), anyWithout: false });
+    const entry = covered.get(day)!;
+    if (a.durationSec == null) entry.anyWithout = true;
+    else entry.mins.add(Math.round(a.durationSec / 60));
+  }
+  return covered;
+}
+
+function isCoveredByLegacy(
+  covered: Map<string, { mins: Set<number>; anyWithout: boolean }>,
+  a: RemoteActivity,
+): boolean {
+  if (!a.startAt) return false;
+  const entry = covered.get(localDateKey(a.startAt));
+  if (!entry) return false;
+  if (a.durationSec == null) return true; // 日历缺时长：该日有旧路条目即覆盖（宁重勿漏）
+  if (entry.anyWithout) return true; // 旧路缺时长：无法比对，视为覆盖
+  const mins = Math.round(a.durationSec / 60);
+  for (let d = -2; d <= 2; d += 1) {
+    if (entry.mins.has(mins + d)) return true;
+  }
+  return false;
 }
 
 /** Date → 当地当日 0 点（日期粒度比较用：多拉不少拉，宁宽勿窄） */
@@ -589,9 +619,10 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
      * 窗口内活动列表 = 旧记录面（ride_record/list）⊕ OTM 日历（calendar/records）。
      * 2026-10 中服务端变更把记录面迁到 OTM 日历管线（旧 list 对已迁移账号终止在
      * 10-13），而日历一次返回全量（Mongo _id + 本地日历日，无文件引用）。合并口径：
-     * 旧 list 条目**优先**（数字 id 可走既有 analysis 端点下载、时刻精确），日历只补
-     * 旧 list 未覆盖的**本地日历日**（按日去重，宁重勿漏——跨源重合活动由文件名预检
-     * 与内容指纹兜底）；单路失败不阻塞另一路，双路皆败才报错（水位线不动）。
+     * **日历是完整性权威**（覆盖新记录面，失败即抛——旧路的「成功」对已迁移账号是
+     * 假象）；旧 list 条目**优先**（数字 id 可走既有 analysis 端点下载、时刻精确），
+     * 日历按「本地日 + 时长 ±2 分钟」骑行级匹配补其缺失（重合由文件名预检与内容指纹
+     * 兜底，宁重勿漏）；旧路失败可回落日历独供，日历失败不可用旧路顶替（水位线冻结）。
      */
     async listSince(session, since, maxPages = 500) {
       let legacy: RemoteActivity[] | null = null;
@@ -608,6 +639,15 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
       try {
         const json = (await postJson(calendarUrl, authHeaders(session), {})) as unknown;
         const all = parseCalendarRecords(json);
+        // 矛盾守卫（§38 回审 P2-3）：日历是全量源，正常永远非空（账号再新也有注册后
+        // 的记录面）；回 code 200 空数组而旧路窗口内有记录 = 服务端软故障回空——§37
+        // 事故同款形态移位到新权威源，按形状异常报错，绝不当作「没有新记录」
+        if (all.length === 0 && legacy && legacy.length > 0) {
+          throw new SyncError(
+            'api',
+            'OTM 日历返回空数组而旧记录面窗口内有记录（响应形状疑似变更），已中止本轮以防漏同步',
+          );
+        }
         // 日粒度窗口过滤：date 起点日 ≥ since 起点日（日历无时刻，宁宽勿窄）
         calendar = since
           ? all.filter((a) => a.startAt && dayStart(a.startAt) >= dayStart(since))
@@ -634,14 +674,9 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
         console.log(`onelap 列表：OTM 日历独供 ${calendar.length} 条（窗口 ${since ? since.toISOString() : '全量'}）`);
         return calendar;
       }
-      // 骑行级匹配（§38 评审 P2-4）：同一天可能有多趟骑行，仅按日期去重会把第二趟吞掉。
-      // key = 本地日 + 时长分钟档（任一方缺时长退化为仅日期，宁重勿漏）。
-      const coveredKeys = new Set(
-        legacy.map((a) => coverageKey(a)),
-      );
-      const supplementary = calendar.filter(
-        (a) => !coveredKeys.has(coverageKey(a)),
-      );
+      // 骑行级匹配（±2 分钟容差，见 buildLegacyCoverage 注释）
+      const covered = buildLegacyCoverage(legacy);
+      const supplementary = calendar.filter((a) => !isCoveredByLegacy(covered, a));
       console.log(
         `onelap 列表合并：旧记录面 ${legacy.length} 条 + OTM 日历补充 ${supplementary.length} 条` +
           `（日历窗口内 ${calendar.length} 条，重合 ${calendar.length - supplementary.length} 条按旧路优先去重）`,

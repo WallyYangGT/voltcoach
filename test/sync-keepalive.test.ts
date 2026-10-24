@@ -155,6 +155,22 @@ describe('云同步编排 × 保活壳接线', () => {
     expect(typeof slot.last_sync_at).toBe('string');
   });
 
+  it('未来水位线夹逼（§38 回审 P2-2）：脏锚点写入前被夹到当前时刻，防窗口恒空停摆', async () => {
+    const FUTURE = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    stubProvider({ listSince: jest.fn(() => Promise.resolve([])) }); // 空窗冻结轮
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: false,
+      providers: {
+        onelap: { last_sync_at: FUTURE, last_run_at: null, last_result: 'ok', last_error: null, last_counts: null },
+      },
+    });
+    await runSync();
+    const { slot } = writtenSlot();
+    expect(slot.last_sync_at).not.toBe(FUTURE); // 冻结写回的未来值被夹逼
+    expect(new Date(slot.last_sync_at as string).getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
   it('逐活动失败（failureFloor）：水位线锚定到最旧失败活动时间，不因失败被冻结在旧值', async () => {
     stubProvider({
       listSince: jest.fn(() => Promise.resolve([{ id: '1', startAt: new Date('2026-10-20T08:00:00Z') }])),

@@ -228,16 +228,27 @@ function rideTime(daysAgo) {
 /** 构造 /list 的假 fetch：pages[i] 为第 i+1 页的 { list, hasMore }；calls 记录每次请求。
  *  calendar 路径（listSince 编排会打）默认回空数组且不计数，不干扰旧路断言；
  *  calendarFails=true 时回 403——用于钉住「旧路守卫在无回落可用时依然生效」 */
-function fakeListFetch(pages, { calendarFails = false } = {}) {
+function fakeListFetch(pages, { calendarFails = false, calendarEmpty = false } = {}) {
   const calls = [];
+  const seenList = [];
   const fetchImpl = async (url, init) => {
     if (String(url).includes('/calendar/')) {
       if (calendarFails) return new Response(JSON.stringify({ code: 500, error: 'calendar down' }), { status: 500 });
-      return new Response(JSON.stringify({ code: 200, message: 'success', data: [] }), { status: 200 });
+      if (calendarEmpty) return new Response(JSON.stringify({ code: 200, message: 'success', data: [] }), { status: 200 });
+      // 默认：由旧路夹具派生日历形状（同 id/date），与矛盾守卫兼容且合并去重后不改变旧路断言
+      const items = seenList
+        .map((it) => ({
+          _id: '6a' + String(it.id).padEnd(22, '0'),
+          date: String(it.start_riding_time ?? '').slice(0, 10),
+          time: it.time_seconds ?? null,
+        }))
+        .filter((it) => /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(it.date)); // 夹具时间串不可解析的条目不派生（不触发日历坏条目守卫）
+      return new Response(JSON.stringify({ code: 200, message: 'success', data: items }), { status: 200 });
     }
     const page = Number(JSON.parse(init?.body ?? '{}').page) || 1;
     calls.push(page);
     const spec = pages[Math.min(page, pages.length) - 1];
+    for (const it of (spec.list ?? [])) if (!seenList.includes(it)) seenList.push(it);
     const payload =
       spec.raw ??
       JSON.stringify({
@@ -425,6 +436,14 @@ test('extractActivityStartAt: 时间字段三兜底（start_riding_time → star
     epoch * 1000,
   );
   assert.equal(extractActivityStartAt({ created_at: String(epoch) })?.getTime(), epoch * 1000);
+  // 毫秒值（≥1e11）折算为秒；超域（<1e9 或 >4e9 秒）拒收返回 null（§38 回审 P2-2）
+  assert.equal(
+    extractActivityStartAt({ created_at: epoch * 1000 })?.getTime(),
+    epoch * 1000,
+  );
+  assert.equal(extractActivityStartAt({ created_at: 5e9 }), null, '2096 年后（>4e9 秒）拒收');
+  assert.equal(extractActivityStartAt({ created_at: 1e8 }), null, '2001 年前（<1e9 秒）拒收');
+  assert.equal(extractActivityStartAt({ created_at: 9e12 }), null, '不合理量级拒收');
   // 全缺/脏值 → null
   assert.equal(extractActivityStartAt({}), null);
   assert.equal(extractActivityStartAt({ created_at: 0 }), null);
@@ -488,6 +507,12 @@ test('getFitKey/getFileRef: 详情顶层 unwrap（新形态无 ridingRecord 包�
     if (String(url).endsWith('/analysis/mongo-none')) {
       return new Response(JSON.stringify({ code: 200, message: '', data: { ridingRecord: {} } }), { status: 200 });
     }
+    if (String(url).endsWith('/analysis/signed-2')) {
+      return new Response(
+        JSON.stringify({ code: 200, message: '', data: { fit_url: 'https://cdn.example.com/geo/2026/plain.fit' } }),
+        { status: 200 },
+      );
+    }
     return new Response(JSON.stringify({ code: 4004, message: 'no such activity' }), { status: 200 });
   };
   const client = listClient(fetchImpl);
@@ -507,6 +532,11 @@ test('getFitKey/getFileRef: 详情顶层 unwrap（新形态无 ridingRecord 包�
   const ref3 = await client.getFileRef(session, { id: 'mongo-id-3', startAt: null });
   assert.equal(ref3.key, 'https://oss.example.com/dl/x.fit?Expires=9');
   assert.equal(ref3.fileName, 'x.fit');
+
+  // ②b 无 query 的 /geo/ URL 仍剥成 fit_content 路径（老 fit_url 形态正向分支）
+  const ref2b = await client.getFileRef(session, { id: 'signed-2', startAt: null });
+  assert.equal(ref2b.key, 'geo/2026/plain.fit');
+  assert.equal(ref2b.fileName, 'plain.fit');
 
   // 无文件 → no_file
   await assert.rejects(
@@ -621,6 +651,17 @@ test('listSince 合并编排（e2e）: 日历失败 → 显式报错（完整性
   }
 });
 
+test('listSince: 日历回空数组而旧路有记录——矛盾守卫报错（软故障回空，§38 回审 P2-3）', async () => {
+  const { fetchImpl } = fakeListFetch(
+    [{ list: [{ id: 1, start_riding_time: rideTime(1) }, { id: 2, start_riding_time: rideTime(40) }] }],
+    { calendarEmpty: true },
+  );
+  await assert.rejects(
+    () => listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000)),
+    (e) => e.code === 'api' && /返回空数组/.test(e.message),
+  );
+});
+
 test('listSince 合并编排（e2e）: 双路皆败 → 显式报错（水位线由编排层冻结）', async () => {
   const server = createMockOnelapServer({ activityCount: 2, failLegacyList: true, failCalendar: true });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -698,9 +739,11 @@ test('listSince 合并编排（e2e）: 日历补缺正向——旧路缺失的�
 });
 
 test('listSince: 日历可用时旧路守卫错误被降级——返回日历结果而非整轮失败', async () => {
-  // 旧路报「新侧丢弃」（守卫抛错），日历返回全量可信数据（默认 stub 空数组）→ 编排选择日历独供
+  // 旧路报「新侧丢弃」（守卫抛错），日历返回空库（可信形状，legacy=null 故矛盾守卫不触发）
+  // → 编排选择日历独供（空结果成立），不再抛守卫错误
   const { fetchImpl } = fakeListFetch(
     [{ list: [{ start_riding_time: rideTime(1) }, { id: 2, start_riding_time: rideTime(40) }] }],
+    { calendarEmpty: true },
   );
   const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
   assert.deepEqual(list, [], '日历（空库）可信 → 空结果成立，不再抛守卫错误');
