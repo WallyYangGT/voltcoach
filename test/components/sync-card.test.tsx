@@ -15,6 +15,7 @@
  */
 import React from 'react';
 import { Alert } from 'react-native';
+import dayjs from 'dayjs';
 import { act, fireEvent, userEvent } from '@testing-library/react-native';
 import { SyncCard } from '@/components/SyncCard';
 import type { SyncState } from '@/db';
@@ -176,9 +177,28 @@ describe('SyncCard（多平台）', () => {
     expect(screen.getByDisplayValue('rider@example.com')).toBeTruthy();
     expect(screen.getByText('解除绑定')).toBeTruthy();
     expect(screen.getByText('立即同步')).toBeEnabled();
-    expect(screen.getByText('2026-10-12 08:30 · ✓')).toBeTruthy();
+    // ISO 是 UTC，展示按本地时区格式化（dayjs）
+    expect(screen.getByText(`${dayjs('2026-10-12T08:30:00.000Z').format('YYYY-MM-DD HH:mm')} · ✓`)).toBeTruthy();
     // 密码不回显（密文位；平台行不是输入框，故 [0]=账号、[1]=密码）
     expect(screen.getAllByTestId('text-input-outlined')[1].props.value).toBe('');
+  });
+
+  it('上次同步行优先展示 last_run_at（水位线冻结/失败保位时仍如实反映最近一轮）', async () => {
+    onelap.loadCredentials.mockResolvedValue({ kind: 'password', account: 'rider@example.com', password: 'pw' });
+    (getSyncState as jest.Mock).mockResolvedValue({
+      ...EMPTY_STATE,
+      providers: {
+        onelap: {
+          last_sync_at: '2026-10-16T02:00:00.000Z', // 冻结的旧水位线
+          last_run_at: '2026-10-23T09:30:00.000Z', // 最近一轮实际跑过
+          last_result: 'ok',
+          last_error: null,
+          last_counts: { imported: 0, skipped: 0, failed: 0 },
+        },
+      },
+    });
+    const screen = await mountCard();
+    expect(screen.getByText(`${dayjs('2026-10-23T09:30:00.000Z').format('YYYY-MM-DD HH:mm')} · ✓`)).toBeTruthy();
   });
 
   it('平台下拉：显示当前生效平台与绑定态，按注册表列出可选平台', async () => {

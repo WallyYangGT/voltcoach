@@ -38,8 +38,20 @@ export interface SyncCounts {
 
 /** 单平台的同步进度（水位线 + 最近结果） */
 export interface ProviderSyncState {
-  /** 水位线：上次同步时刻（ISO）；null = 从未同步 */
+  /**
+   * 水位线：增量拉取的窗口边界（上次拉到**非空**窗口的时刻，ISO）；
+   * null = 尚未拉到过非空窗口（从未同步，或首次同步就遇空窗被冻结——下轮仍回溯完整
+   * 90 天窗口）。空窗轮冻结不推进、失败轮保位（decisions §37）——「上次同步时间」的
+   * 展示职责已移交 last_run_at，本字段只反映增量边界。
+   */
   last_sync_at: string | null;
+  /**
+   * 展示用：上次**实际跑过**同步的时刻（ISO）。
+   * 与水位线分叉的场景：空窗轮水位线冻结（2026-10 顽鹿增量失效事故的防御——列表异常
+   * 回空时推进水位线会把缺口永久藏住）、失败轮水位线保位。可选：本字段引入（2026-10-23）
+   * 之前的行都没有该字段，读侧回退 last_sync_at。
+   */
+  last_run_at?: string | null;
   last_result: 'ok' | 'error' | null;
   last_error: string | null;
   last_counts: SyncCounts | null;
@@ -58,6 +70,7 @@ export interface SyncState {
 /** 共享空态（冻结：读侧会直接把它当返回值发出去，别让某处手滑就地改到） */
 export const EMPTY_PROVIDER_STATE: ProviderSyncState = Object.freeze({
   last_sync_at: null,
+  last_run_at: null,
   last_result: null,
   last_error: null,
   last_counts: null,
@@ -84,6 +97,7 @@ function count(v: unknown): number {
 function normalizeSlot(raw: Record<string, unknown>): ProviderSyncState {
   const slot: ProviderSyncState = { ...EMPTY_PROVIDER_STATE };
   if (typeof raw.last_sync_at === 'string') slot.last_sync_at = raw.last_sync_at;
+  if (typeof raw.last_run_at === 'string') slot.last_run_at = raw.last_run_at;
   if (raw.last_result === 'ok' || raw.last_result === 'error') slot.last_result = raw.last_result;
   if (typeof raw.last_error === 'string') slot.last_error = raw.last_error;
   const c = raw.last_counts;

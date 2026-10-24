@@ -271,9 +271,15 @@ function createPasswordProvider<S extends object>(spec: PasswordProviderSpec<S>)
 // ---------------- 顽鹿（Onelap） ----------------
 
 /** 联调端点覆盖（EXPO_PUBLIC_ONELAP_BASE 打包期内联；生产构建不设即 undefined） */
-function onelapOverrides(): { login: string; rideRecord: string } | undefined {
+function onelapOverrides(): { login: string; rideRecord: string; calendar: string } | undefined {
   const base = process.env.EXPO_PUBLIC_ONELAP_BASE;
-  return base ? { login: `${base}/api/login`, rideRecord: `${base}/api/otm/ride_record` } : undefined;
+  return base
+    ? {
+        login: `${base}/api/login`,
+        rideRecord: `${base}/api/otm/ride_record`,
+        calendar: `${base}/api/otm/calendar/calendar/records`,
+      }
+    : undefined;
 }
 
 export const ONELAP_PROVIDER: SyncProvider = createPasswordProvider({

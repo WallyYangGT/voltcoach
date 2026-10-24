@@ -13,7 +13,7 @@
  * 整体替换——被测对象只有 runSyncOnce 的编排与保活配对，平台协议行为由桩 runner
  * 注入（各平台客户端另有 L1 直测）。
  */
-import { runSync } from '@/services/sync';
+import { maybeAutoSync, runSync } from '@/services/sync';
 import { acquireGenerationKeepAlive } from '@/ai/keepalive';
 import { getSyncState, setSyncState } from '@/db';
 import { SyncError } from '@/sync/common';
@@ -97,7 +97,7 @@ describe('云同步编排 × 保活壳接线', () => {
     expect(acquireGenerationKeepAlive).not.toHaveBeenCalled();
   });
 
-  it('正常同步（空列表）：acquire 一次、release 恰好一次、水位线写 ok', async () => {
+  it('首次同步空列表：水位线保持 null（冻结，不吞 90 天回溯窗口）、last_run_at 照写', async () => {
     const outcome = await runSync();
     expect(outcome.error).toBeNull();
     expect(acquireGenerationKeepAlive).toHaveBeenCalledTimes(1);
@@ -113,7 +113,83 @@ describe('云同步编排 × 保活壳接线', () => {
     const { state, slot } = writtenSlot();
     expect(state.provider).toBe('onelap');
     expect(slot.last_result).toBe('ok');
+    expect(slot.last_sync_at).toBeNull(); // 空窗轮冻结（decisions §37）：首次同步回空不推进
+    expect(typeof slot.last_run_at).toBe('string');
+  });
+
+  it('空窗轮水位线冻结（2026-10 事故防御）：已有水位线 + 列表为空 → last_sync_at 不动、last_run_at 照写', async () => {
+    const WATERMARK = '2026-10-16T02:00:00.000Z';
+    const slotState = {
+      provider: 'onelap' as const,
+      auto: false,
+      providers: {
+        onelap: { last_sync_at: WATERMARK, last_run_at: null, last_result: 'ok', last_error: null, last_counts: null },
+      },
+    };
+    (getSyncState as jest.Mock).mockResolvedValue(slotState);
+    stubProvider({ listSince: jest.fn(() => Promise.resolve([])) });
+    const outcome = await runSync();
+    expect(outcome.error).toBeNull();
+    const { slot } = writtenSlot();
+    expect(slot.last_sync_at).toBe(WATERMARK); // 冻结：空结果不推进（防列表异常把缺口藏住）
+    expect(typeof slot.last_run_at).toBe('string'); // 展示时刻照常更新
+    expect(slot.last_result).toBe('ok');
+  });
+
+  it('列表非空的正常轮：水位线照常推进到当前时刻', async () => {
+    stubProvider({
+      listSince: jest.fn(() => Promise.resolve([{ id: '1', startAt: new Date('2026-10-20T08:00:00Z') }])),
+      getFileRef: jest.fn(() => Promise.resolve(null)), // 云端无文件 → 计跳过（listed 仍 >0）
+    });
+    const WATERMARK = '2026-10-16T02:00:00.000Z';
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: false,
+      providers: {
+        onelap: { last_sync_at: WATERMARK, last_run_at: null, last_result: 'ok', last_error: null, last_counts: null },
+      },
+    });
+    await runSync();
+    const { slot } = writtenSlot();
+    expect(slot.last_sync_at).not.toBe(WATERMARK);
     expect(typeof slot.last_sync_at).toBe('string');
+  });
+
+  it('未来水位线夹逼（§38 回审 P2-2）：脏锚点写入前被夹到当前时刻，防窗口恒空停摆', async () => {
+    const FUTURE = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    stubProvider({ listSince: jest.fn(() => Promise.resolve([])) }); // 空窗冻结轮
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: false,
+      providers: {
+        onelap: { last_sync_at: FUTURE, last_run_at: null, last_result: 'ok', last_error: null, last_counts: null },
+      },
+    });
+    await runSync();
+    const { slot } = writtenSlot();
+    expect(slot.last_sync_at).not.toBe(FUTURE); // 冻结写回的未来值被夹逼
+    expect(new Date(slot.last_sync_at as string).getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('逐活动失败（failureFloor）：水位线锚定到最旧失败活动时间，不因失败被冻结在旧值', async () => {
+    stubProvider({
+      listSince: jest.fn(() => Promise.resolve([{ id: '1', startAt: new Date('2026-10-20T08:00:00Z') }])),
+      getFileRef: jest.fn(() => Promise.reject(new Error('下载失败'))),
+    });
+    const WATERMARK = '2026-10-16T02:00:00.000Z';
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: false,
+      providers: {
+        onelap: { last_sync_at: WATERMARK, last_run_at: null, last_result: 'ok', last_error: null, last_counts: null },
+      },
+    });
+    const outcome = await runSync();
+    expect(outcome.error).toBeNull();
+    expect(outcome.failed).toBe(1);
+    const { slot } = writtenSlot();
+    expect(slot.last_sync_at).toBe('2026-10-20T08:00:00.000Z'); // failureFloor 优先于冻结
+    expect(slot.last_result).toBe('ok');
   });
 
   it('建会话失败早退：release 恰好一次（finally 覆盖），水位线记 error 但不动时间戳', async () => {
@@ -125,11 +201,13 @@ describe('云同步编排 × 保活壳接线', () => {
       (h: { release: jest.Mock }) => h.release,
     );
     expect(release).toHaveBeenCalledTimes(1);
-    // 出错轮：last_result=error、last_error 透出，last_sync_at 保持原值（null）
+    // 出错轮：last_result=error、last_error 透出，last_sync_at 保持原值（null），
+    // last_run_at 照写（展示「上次实际跑过」）
     const { slot } = writtenSlot();
     expect(slot.last_result).toBe('error');
     expect(slot.last_error).toBe('账号或密码错误');
     expect(slot.last_sync_at).toBeNull();
+    expect(typeof slot.last_run_at).toBe('string');
   });
 
   it('列表失败早退：release 恰好一次', async () => {
@@ -201,5 +279,50 @@ describe('云同步编排 × 保活壳接线', () => {
     const [a, b] = await Promise.all([pa, pb]);
     expect(a).toBe(b); // 同一 outcome 对象 = 共享同一 promise
     expect(acquireGenerationKeepAlive).toHaveBeenCalledTimes(1);
+  });
+
+  // ⚠️ 以下两个节流用例依赖模块级 lastAutoAttempt 未被触发：必须先于任何真正跑起来的
+  // maybeAutoSync 用例执行（新增用例时勿插到它们前面——成功轮断言可能因模块节流假通过）
+
+  it('自动同步节流：成功轮（含空窗冻结轮）以 last_run_at 为基准，刚跑过不再跑', async () => {
+    stubProvider();
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: true,
+      providers: {
+        onelap: {
+          last_sync_at: '2026-10-16T02:00:00.000Z', // 冻结的旧水位线
+          last_run_at: new Date().toISOString(), // 刚实际跑过（成功轮）
+          last_result: 'ok',
+          last_error: null,
+          last_counts: null,
+        },
+      },
+    });
+    await maybeAutoSync();
+    // 水位线冻结时不因 last_sync_at 过期而白跑：节流挡在 createRunner 之前
+    const provider = (providerById as jest.Mock).mock.results[0].value as { createRunner: jest.Mock };
+    expect(provider.createRunner).not.toHaveBeenCalled();
+  });
+
+  it('自动同步节流：失败轮回退 last_sync_at——刚失败过也可立即重试', async () => {
+    stubProvider();
+    (getSyncState as jest.Mock).mockResolvedValue({
+      provider: 'onelap' as const,
+      auto: true,
+      providers: {
+        onelap: {
+          last_sync_at: new Date(Date.now() - 3 * 3600 * 1000).toISOString(),
+          last_run_at: new Date().toISOString(), // 刚失败过（last_result=error）
+          last_result: 'error',
+          last_error: 'network down',
+          last_counts: null,
+        },
+      },
+    });
+    await maybeAutoSync();
+    // 瞬时失败不让自动同步静默 1h：失败轮按 last_sync_at（3h 前）判定节流通过
+    const provider = (providerById as jest.Mock).mock.results[0].value as { createRunner: jest.Mock };
+    expect(provider.createRunner).toHaveBeenCalled();
   });
 });

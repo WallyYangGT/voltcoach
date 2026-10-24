@@ -132,11 +132,24 @@ async function runSyncOnce(): Promise<SyncOutcome> {
     });
 
     const prev = providerState(state, state.provider);
-    const outcome = await pullActivities(provider, prev);
+    const { outcome, listed } = await pullActivities(provider, prev);
     const err = outcome.error;
-    // 水位线推进锚点：正常→当前时刻；有失败活动→最旧失败活动时间（下次窗口重试，
-    // 成功项按文件名幂等跳过）；本轮出错（未拉到列表）→不动
-    const nextSyncAt = err ? prev.last_sync_at : outcome.failureFloor ?? new Date().toISOString();
+    // 水位线推进锚点：有失败活动→最旧失败活动时间（下次窗口重试，成功项按文件名幂等
+    // 跳过）；云端列表为空（listed === 0）→ **冻结不推进**（含首次同步——水位线保持
+    // null，下轮仍回溯完整 90 天窗口）：空结果只有在客户端扫到过窗口边界时才可信，
+    // 服务端软故障回空的兜底在这里，照常推进会把 24h 缓冲外的记录永久藏住（2026-10
+    // 顽鹿增量失效事故，decisions §37）。冻结的代价只是空窗下轮多扫一点（窗口有
+    // now−90 天下限兜底，扫到的旧活动按文件名幂等跳过）。本轮出错（未拉到列表）→不动。
+    const ranAt = new Date().toISOString();
+    let nextSyncAt = err
+      ? prev.last_sync_at
+      : outcome.failureFloor ?? (listed === 0 ? prev.last_sync_at : ranAt);
+    // 未来时间防御（§38 评审 P2-2 纵深）：脏锚点（如解析错乱的时间字段进了 failureFloor）
+    // 写进水位线会让窗口恒空、同步永久停摆——夹逼到当前时刻
+    if (nextSyncAt && new Date(nextSyncAt).getTime() > Date.now() + 60_000) {
+      console.warn(`云同步水位线出现未来时间（${nextSyncAt}），夹逼到当前时刻`);
+      nextSyncAt = ranAt;
+    }
     // ⚠️ 收尾必须**重读状态行再只写目标平台槽位**：首次 90 天全量是分钟级，用户在同步
     // 途中切平台/关自动开关都会被开头那份快照整行覆盖写回（界面随后 load() 又把用户
     // 改动读回来，看起来像「切了没生效」）——provider/auto 以库内现值为准（评审 P2-1）
@@ -144,6 +157,9 @@ async function runSyncOnce(): Promise<SyncOutcome> {
     await setSyncState(
       withProviderState(latest, state.provider, {
         last_sync_at: nextSyncAt,
+        // 上次**实际跑过**的时刻（展示用）：水位线被冻结/失败保位时，卡片上的
+        // 「上次同步」仍如实反映最近一轮尝试（错误轮也更新）
+        last_run_at: ranAt,
         last_result: err ? 'error' : 'ok',
         last_error: err?.message || null,
         last_counts: err
@@ -165,25 +181,29 @@ async function runSyncOnce(): Promise<SyncOutcome> {
 /**
  * 取会话 → 拉取 → 入库；逐活动失败仅计数不中断（口径），鉴权失败终止本轮。
  * 会话：优先复用缓存令牌，401 时清缓存重登一次并重试原请求（只重试一次）。
+ * 返回 listed = 云端列表实际给出的窗口内活动数（0 = 空窗轮，水位线冻结的判据）。
  */
-async function pullActivities(provider: SyncProvider, prev: ProviderSyncState): Promise<SyncOutcome> {
+async function pullActivities(
+  provider: SyncProvider,
+  prev: ProviderSyncState,
+): Promise<{ outcome: SyncOutcome; listed: number }> {
   let runner: SyncRunner;
   try {
     runner = await provider.createRunner();
     await runner.start();
   } catch (e) {
-    return { ...noCounts(), error: toError(e), failureFloor: null };
+    return { outcome: { ...noCounts(), error: toError(e), failureFloor: null }, listed: 0 };
   }
 
   // 窗口起点：水位线前移 24h 缓冲，但不早于「最近 SYNC_WINDOW_DAYS 天」（首次同步
   // 与长期未同步都截断——只回溯 3 个月，降低抓取观感，见 sync/common.syncWindowStart）
   const since = syncWindowStart(prev.last_sync_at);
 
-  let cloudList;
+  let cloudList: Awaited<ReturnType<SyncRunner['listSince']>>;
   try {
     cloudList = await runner.listSince(since);
   } catch (e) {
-    return { ...noCounts(), error: toError(e), failureFloor: null };
+    return { outcome: { ...noCounts(), error: toError(e), failureFloor: null }, listed: 0 };
   }
 
   const existing = new Set(await listActivityFileNames());
@@ -224,7 +244,7 @@ async function pullActivities(provider: SyncProvider, prev: ProviderSyncState): 
       outcome.imported += 1;
     } catch (e) {
       if (e instanceof SyncError && (e.code === 'auth' || e.code === 'reauth')) {
-        return { ...outcome, error: toError(e) };
+        return { outcome: { ...outcome, error: toError(e) }, listed: cloudList.length };
       }
       outcome.failed += 1;
       // 记录最旧失败活动时间，作为本轮水位线锚点（下次窗口覆盖重试）
@@ -235,7 +255,7 @@ async function pullActivities(provider: SyncProvider, prev: ProviderSyncState): 
       console.warn(`${provider.id} 活动 ${act.id} 同步失败（跳过继续）:`, e);
     }
   }
-  return outcome;
+  return { outcome, listed: cloudList.length };
 }
 
 let lastAutoAttempt = 0;
@@ -252,7 +272,12 @@ export async function maybeAutoSync(): Promise<void> {
     const creds = await provider.loadCredentials();
     if (!creds) return;
     const prev = providerState(state, state.provider);
-    if (prev.last_sync_at && Date.now() - new Date(prev.last_sync_at).getTime() < AUTO_THROTTLE_MS) return;
+    // 节流基准：成功轮（含空窗冻结轮）用 last_run_at——冻结后水位线长期不动，若用
+    // last_sync_at 会每次回前台都白跑一轮空同步；失败轮回退 last_sync_at（旧语义：
+    // 失败后下次回前台即可重试，瞬时网络错误不让自动同步静默 1h）
+    const throttleAt =
+      prev.last_result === 'ok' ? prev.last_run_at ?? prev.last_sync_at : prev.last_sync_at;
+    if (throttleAt && Date.now() - new Date(throttleAt).getTime() < AUTO_THROTTLE_MS) return;
     if (Date.now() - lastAutoAttempt < AUTO_THROTTLE_MS) return;
     lastAutoAttempt = Date.now();
     await runSync();

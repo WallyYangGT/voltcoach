@@ -34,12 +34,14 @@ export class SyncError extends Error {
 
 // ---------------- 平台客户端接口 ----------------
 
-/** 云端活动（平台无关的最小形状：只需要 id 与起骑时刻） */
+/** 云端活动（平台无关的最小形状：id 与起骑时刻必须，时长可选供跨源匹配） */
 export interface RemoteActivity {
   /** 云端活动 id（字符串归一化，便于拼 URL 与日志） */
   id: string;
   /** 起骑时刻（本地时区 Date）；平台时间串解析失败为 null（仅影响失败重试锚点） */
   startAt: Date | null;
+  /** 活动时长秒（可选；跨源列表合并做「本地日+时长」骑行级匹配用，2026-10 顽鹿日历） */
+  durationSec?: number | null;
 }
 
 /**
@@ -57,9 +59,14 @@ export interface FileRef {
  */
 export interface SyncClient<S> {
   /**
-   * 按 since 增量拉活动列表（新→旧翻页，遇早于 since 的记录停止）。
-   * since=null 表示不设起点（全量，仅测试用）；生产路径恒传窗口起点，
-   * 上限 maxPages 防失控（部分平台无服务端时间过滤，过滤在客户端做）。
+   * 按 since 增量拉窗口内活动列表。生产路径恒传窗口起点，上限 maxPages 防失控
+   * （部分平台无服务端时间过滤，过滤在客户端做）。
+   * 实现契约（2026-10 顽鹿增量失效事故，decisions §37）：**「看不见的空/缺」不得当作
+   * 「没有新数据」**——扫不到窗口边界（没见过任何可解析的早于 since 条目）的空结果、
+   * 以及结果不完整（新侧存在无法定位时间的丢弃条目）都必须显式报错，不得静默返回：
+   * 编排层把不完整的列表当「没有新记录」并推进水位线，会把缺口永久藏住。列表顺序
+   * 同样不得作为正确性依赖（顽鹿实现按时间方向自适应；迹驰全量翻页过滤；Wahoo 依赖
+   * 官方文档化的降序承诺——各实现按平台契约对号）。
    */
   listSince(session: S, since: Date | null, maxPages?: number): Promise<RemoteActivity[]>;
   /**
@@ -187,7 +194,8 @@ export const SYNC_WINDOW_DAYS = 90;
 export const SYNC_WATERMARK_BUFFER_MS = 24 * 3600 * 1000;
 
 /**
- * 本轮同步的窗口起点（列表按起骑时间新→旧，早于该点即停止翻页）：
+ * 本轮同步的窗口起点（各平台列表实现按该点做窗口过滤/提前停止，顺序契约见
+ * SyncClient.listSince）：
  *  - 首次同步（无水位线）：now − SYNC_WINDOW_DAYS；
  *  - 有水位线：上次同步时间前移 24h 缓冲，但**不早于** now − SYNC_WINDOW_DAYS
  *    （长时间未同步时截断，避免一次拉几百天的记录）。

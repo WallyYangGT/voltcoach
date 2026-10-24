@@ -15,6 +15,7 @@
  * 错误提示按 SyncErrorCode 映射双语词条（data.sync.* 键沿用 M4 命名空间）。
  */
 import { useFocusEffect } from 'expo-router';
+import dayjs from 'dayjs';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, StyleSheet, Text, View } from 'react-native';
 import { Button, Divider, Icon, Switch, TextInput, TouchableRipple } from 'react-native-paper';
@@ -190,9 +191,13 @@ export function SyncCard() {
     }
   };
 
-  const lastSyncLine = activeState?.last_sync_at
-    ? `${activeState.last_sync_at.slice(0, 16).replace('T', ' ')} · ${
-        activeState.last_result === 'ok' ? '✓' : `✗ ${activeState.last_error ?? ''}`
+  // 展示取「上次实际跑过」的时刻：水位线在空窗轮冻结（decisions §37）、失败轮保位，
+  // last_sync_at 可能长期不动——用户需要看到的是「我刚点过同步且它跑完了」。
+  // ISO 是 UTC，slice 直排会比本地时区差 8 小时，用 dayjs 转本地格式
+  const lastRunAt = activeState?.last_run_at ?? activeState?.last_sync_at ?? null;
+  const lastSyncLine = lastRunAt
+    ? `${dayjs(lastRunAt).format('YYYY-MM-DD HH:mm')} · ${
+        activeState?.last_result === 'ok' ? '✓' : `✗ ${activeState?.last_error ?? ''}`
       }`
     : t('data.sync.never');
   const overrideBase = active?.overrideBase() ?? null;
