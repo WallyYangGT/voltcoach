@@ -101,14 +101,14 @@ export function createMockOnelapServer({
   fitFile = process.env.MOCK_FIT_FILE ?? null,
   failLegacyList = false,
   failCalendar = false,
-  calendarOnlyIds = false,
+  /** 旧 ride_record/list 只返回前 N 条（模拟旧记录面对新记录缺失；日历仍全量，验证补缺） */
+  legacyListMax = Infinity,
 } = {}) {
   // acceptPassword：指定时校验密码（node:test 覆盖登录失败路径）；null 任意密码放行（模拟器联调）
   // oldActivityCount：追加窗口外（>90 天）的老活动，验证同步窗口截断（默认关，不影响单测断言）
   // revokeTokenOnce：首个带鉴权的请求回 401（模拟 token 过期），验证客户端自动重登一次
   // fitFile：指定时所有活动都回该文件的字节（演练「同一趟骑行、不同文件名」的去重场景）
   // failLegacyList / failCalendar：两路列表各自的故障注入（验证合并编排的回落，2026-10 适配）
-  // 日历路由的 _id 与旧 list 的数字 id 是两个独立 id 空间（测试按 '6a' 前缀区分）
   const acceptPasswordMd5 = acceptPassword === null
     ? null
     : crypto.createHash('md5').update(acceptPassword, 'utf8').digest('hex');
@@ -173,7 +173,8 @@ export function createMockOnelapServer({
       const body = JSON.parse((await readBody(req)) || '{}');
       const page = Number(body.page) || 1;
       const limit = Number(body.limit) || 20;
-      const slice = activities.slice((page - 1) * limit, page * limit);
+      const source = activities.slice(0, legacyListMax);
+      const slice = source.slice((page - 1) * limit, page * limit);
       return json(res, 200, {
         code: 200,
         message: '',
@@ -187,9 +188,9 @@ export function createMockOnelapServer({
           pagination: {
             current_page: page,
             per_page: limit,
-            total: activities.length,
+            total: source.length,
             total_pages: Math.ceil(activities.length / limit),
-            has_more: page * limit < activities.length,
+            has_more: page * limit < source.length,
           },
         },
       });
@@ -197,7 +198,7 @@ export function createMockOnelapServer({
 
     // ---------------- OTM 日历记录：全量数组（2026-10 新记录面，无文件引用） ----------------
     if (req.method === 'POST' && path === '/api/otm/calendar/calendar/records') {
-      if (failCalendar) return json(res, 403, { code: 403, error: 'calendar fail (fault injection)' });
+      if (failCalendar) return json(res, 500, { code: 500, error: 'calendar fail (fault injection)' });
       return json(res, 200, {
         code: 200,
         message: 'success',

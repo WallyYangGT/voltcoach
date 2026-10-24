@@ -142,6 +142,14 @@ export function localDateKey(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** 合并去重键：本地日 + 时长分钟档（§38 评审 P2-4：同一天多趟骑行只有日级 key 会互吞）。
+ *  任一方缺时长退化为仅日期（key 以 "|" 结尾）——宁重勿漏，重合由指纹兜底 */
+function coverageKey(a: RemoteActivity): string {
+  const day = a.startAt ? localDateKey(a.startAt) : '';
+  const mins = a.durationSec == null ? '' : String(Math.round(a.durationSec / 60));
+  return `${day}|${mins}`;
+}
+
 /** Date → 当地当日 0 点（日期粒度比较用：多拉不少拉，宁宽勿窄） */
 function dayStart(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -170,7 +178,7 @@ export function parseCalendarRecords(json: unknown): RemoteActivity[] {
   const out: RemoteActivity[] = [];
   let bad = 0;
   for (const item of payload.data) {
-    const rec = item as { _id?: unknown; date?: unknown };
+    const rec = item as { _id?: unknown; date?: unknown; time?: unknown };
     const id = typeof rec?._id === 'string' ? rec._id.trim() : '';
     const date = typeof rec?.date === 'string' ? rec.date.trim() : '';
     const d = /^\d{4}-\d{2}-\d{2}$/.test(date)
@@ -180,13 +188,21 @@ export function parseCalendarRecords(json: unknown): RemoteActivity[] {
       bad += 1;
       continue;
     }
-    out.push({ id, startAt: d });
+    const time = typeof rec?.time === 'number' ? rec.time : Number(rec?.time);
+    out.push({
+      id,
+      startAt: d,
+      durationSec: Number.isFinite(time) && time > 0 ? time : null,
+    });
   }
+  // 坏条目升格为报错（§38 评审 P2-3）：日历是完整性权威源、无方向性，坏条目可能正是
+  // 未同步的新记录——「部分坏仍报成功」会复刻 §37 的静默缺口。取舍与 §37 已知边界①
+  // 同源：服务端长期存在垃圾行时会卡整轮（显式可见），恢复后自动补回。
   if (bad > 0) {
-    if (out.length === 0) {
-      throw new SyncError('api', `OTM 日历返回 ${bad} 条均缺少可解析的 _id/date（形状疑似变更）`);
-    }
-    console.warn(`onelap OTM 日历：${bad} 条坏条目被跳过（保留 ${out.length} 条）`);
+    throw new SyncError(
+      'api',
+      `OTM 日历返回 ${payload.data.length} 条中有 ${bad} 条缺少可解析的 _id/date（响应形状疑似变更），已中止本轮以防漏同步`,
+    );
   }
   return out;
 }
@@ -207,8 +223,13 @@ export function extractActivityStartAt(item: {
   if (modern) return modern;
   const raw = item?.created_at;
   if (raw === undefined || raw === null || raw === '') return null;
-  const sec = typeof raw === 'number' ? raw : Number(String(raw).trim());
-  if (!Number.isFinite(sec) || sec <= 0) return null;
+  // 量级校验（§38 评审 P2-2）：毫秒值被当秒会推出 5 万年后的「未来时间」，若写进
+  // failureFloor → 水位线到未来 → 窗口恒空、同步永久停摆。秒口径合理域 [1e9, 4e9]
+  //（2001–2096），超域且 ≥1e11 视为毫秒折算，其余拒绝。
+  const num = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isFinite(num) || num <= 0) return null;
+  const sec = num >= 1e11 ? num / 1000 : num;
+  if (sec < 1e9 || sec > 4e9) return null;
   const d = new Date(sec * 1000);
   return Number.isNaN(d.getTime()) ? null : d;
 }
@@ -333,8 +354,12 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
       if (!value) continue;
       if (/^https?:\/\//i.test(value)) {
         try {
-          const path = new URL(value).pathname;
-          if (path.startsWith('/geo/')) return path.replace(/^\//, '');
+          const u = new URL(value);
+          // 仅「/geo/ 路径且无 query」才剥成 fit_content 路径：带 query 即签名直链
+          //（签名对象含完整 URL），剥掉 host/签名会让每轮 404（§38 评审 P2-1）
+          if (u.pathname.startsWith('/geo/') && u.search === '' && !u.hash) {
+            return u.pathname.replace(/^\//, '');
+          }
         } catch {
           // URL 解析失败按直链原样处理
         }
@@ -440,8 +465,12 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
           start_riding_time?: unknown;
           start_time?: unknown;
           created_at?: unknown;
+          time_seconds?: unknown;
         };
         const id = map?.id ?? map?.activity_id;
+        // 时长秒（跨源合并的骑行级匹配键，缺省 null）
+        const durRaw = typeof map?.time_seconds === 'number' ? map.time_seconds : Number(map?.time_seconds);
+        const durationSec = Number.isFinite(durRaw) && durRaw > 0 ? durRaw : null;
         const hasAnyTimeField =
           map?.start_riding_time !== undefined ||
           map?.start_time !== undefined ||
@@ -459,7 +488,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
           // 时间字段在但全部不可解析：保既定口径——条目仍入列表（startAt 仅失败
           // 重试锚点用，null 不影响下载导入），只计诊断。格式漂移不升级成丢记录。
           recovered += 1;
-          out.push({ id: String(id), startAt: null });
+          out.push({ id: String(id), startAt: null, durationSec });
           continue;
         }
         parsed += 1;
@@ -471,7 +500,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
           sawOldParsed = true;
           continue;
         }
-        out.push({ id: String(id), startAt });
+        out.push({ id: String(id), startAt, durationSec });
       }
       if (!data.pagination?.has_more) {
         stopReason = 'end';
@@ -575,6 +604,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
       }
 
       let calendar: RemoteActivity[] | null = null;
+      let calendarError: SyncError | null = null;
       try {
         const json = (await postJson(calendarUrl, authHeaders(session), {})) as unknown;
         const all = parseCalendarRecords(json);
@@ -583,27 +613,38 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
           ? all.filter((a) => a.startAt && dayStart(a.startAt) >= dayStart(since))
           : all;
       } catch (e) {
-        const msg = e instanceof SyncError ? e.message : String(e);
-        console.warn(`onelap OTM 日历列表失败${legacy ? '（旧列表可用，忽略）' : ''}: ${msg}`);
+        calendarError = e instanceof SyncError ? e : new SyncError('api', String(e));
       }
 
-      if (!legacy && !calendar) {
-        throw legacyError ?? new SyncError('api', '活动列表两路均失败');
+      // ⚠️ 日历是完整性的权威源（全量、覆盖新记录面），它失败 ⇒ 本轮「有没有新记录」
+      // 不可知——按 §37 纪律显式报错（水位线由编排层冻结），绝不静默用旧路结果推进
+      // 水位线：旧路对已迁移账号不吐新记录，「成功」只是假象，缺口会被 24h 缓冲永久藏住
+      //（§38 评审 P0）。旧路失败可回落（日历独供），方向相反不行。
+      if (!calendar) {
+        if (calendarError && legacy) {
+          throw new SyncError(
+            'api',
+            `OTM 日历列表失败（旧记录面不可作为完整性依据，已中止本轮以防漏同步）: ${calendarError.message}`,
+          );
+        }
+        // 双失败：旧路错误优先（守卫信息更本质，如形状异常/截断），无旧路错误才抛日历的
+        throw legacyError ?? calendarError ?? new SyncError('api', '活动列表两路均失败');
       }
-      if (!calendar) return legacy!;
       if (!legacy) {
         console.log(`onelap 列表：OTM 日历独供 ${calendar.length} 条（窗口 ${since ? since.toISOString() : '全量'}）`);
         return calendar;
       }
-      const coveredDays = new Set(
-        legacy.filter((a) => a.startAt).map((a) => localDateKey(a.startAt as Date)),
+      // 骑行级匹配（§38 评审 P2-4）：同一天可能有多趟骑行，仅按日期去重会把第二趟吞掉。
+      // key = 本地日 + 时长分钟档（任一方缺时长退化为仅日期，宁重勿漏）。
+      const coveredKeys = new Set(
+        legacy.map((a) => coverageKey(a)),
       );
       const supplementary = calendar.filter(
-        (a) => !a.startAt || !coveredDays.has(localDateKey(a.startAt)),
+        (a) => !coveredKeys.has(coverageKey(a)),
       );
       console.log(
         `onelap 列表合并：旧记录面 ${legacy.length} 条 + OTM 日历补充 ${supplementary.length} 条` +
-          `（日历窗口内 ${calendar.length} 条，重叠 ${calendar.length - supplementary.length} 日按旧路优先去重）`,
+          `（日历窗口内 ${calendar.length} 条，重合 ${calendar.length - supplementary.length} 条按旧路优先去重）`,
       );
       return [...legacy, ...supplementary];
     },
@@ -630,7 +671,15 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
       );
       let bytes: ArrayBuffer;
       try {
-        if (res.status === 401 || res.status === 403) throw new SyncError('auth', '下载被拒（会话过期）');
+        // 直链（durl 签名 URL）的 401/403 归 api 而非 auth——直链与会话无关（签名过期/
+        // OSS 拒绝），归 auth 会触发 withAuthRetry 的无效重登并中止整轮、水位线卡死在
+        // 同一活动（§38 评审 P1-1，对齐 igpsport.ts 的直链口径）；fit_content 路径仍是
+        // 会话级端点，401/403 归 auth 走重登自愈。
+        if (res.status === 401 || res.status === 403) {
+          throw isDirectUrl
+            ? new SyncError('api', `FIT 直链被拒（HTTP ${res.status}，签名可能已过期）`)
+            : new SyncError('auth', '下载被拒（会话过期）');
+        }
         if (!res.ok) throw new SyncError('api', `FIT 下载异常（HTTP ${res.status}）`);
         bytes = await res.arrayBuffer();
       } catch (e) {

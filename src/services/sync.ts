@@ -141,9 +141,15 @@ async function runSyncOnce(): Promise<SyncOutcome> {
     // 顽鹿增量失效事故，decisions §37）。冻结的代价只是空窗下轮多扫一点（窗口有
     // now−90 天下限兜底，扫到的旧活动按文件名幂等跳过）。本轮出错（未拉到列表）→不动。
     const ranAt = new Date().toISOString();
-    const nextSyncAt = err
+    let nextSyncAt = err
       ? prev.last_sync_at
       : outcome.failureFloor ?? (listed === 0 ? prev.last_sync_at : ranAt);
+    // 未来时间防御（§38 评审 P2-2 纵深）：脏锚点（如解析错乱的时间字段进了 failureFloor）
+    // 写进水位线会让窗口恒空、同步永久停摆——夹逼到当前时刻
+    if (nextSyncAt && new Date(nextSyncAt).getTime() > Date.now() + 60_000) {
+      console.warn(`云同步水位线出现未来时间（${nextSyncAt}），夹逼到当前时刻`);
+      nextSyncAt = ranAt;
+    }
     // ⚠️ 收尾必须**重读状态行再只写目标平台槽位**：首次 90 天全量是分钟级，用户在同步
     // 途中切平台/关自动开关都会被开头那份快照整行覆盖写回（界面随后 load() 又把用户
     // 改动读回来，看起来像「切了没生效」）——provider/auto 以库内现值为准（评审 P2-1）

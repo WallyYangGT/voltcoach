@@ -232,7 +232,7 @@ function fakeListFetch(pages, { calendarFails = false } = {}) {
   const calls = [];
   const fetchImpl = async (url, init) => {
     if (String(url).includes('/calendar/')) {
-      if (calendarFails) return new Response(JSON.stringify({ code: 403, error: 'calendar down' }), { status: 403 });
+      if (calendarFails) return new Response(JSON.stringify({ code: 500, error: 'calendar down' }), { status: 500 });
       return new Response(JSON.stringify({ code: 200, message: 'success', data: [] }), { status: 200 });
     }
     const page = Number(JSON.parse(init?.body ?? '{}').page) || 1;
@@ -451,9 +451,11 @@ test('parseCalendarRecords: 用户实证形状（code/data 数组/_id+date）→
   // 错误码 / data 非数组 → 显式 api 错误
   assert.throws(() => parseCalendarRecords({ code: 403, error: 'Authorization fail!' }), (e) => e.code === 'api');
   assert.throws(() => parseCalendarRecords({ code: 200, data: {} }), (e) => e.code === 'api');
-  // 坏条目跳过；全坏才报错
-  const partial = parseCalendarRecords({ code: 200, data: [{ date: '2026-10-20' }, { _id: 'x', date: '2026-10-21' }] });
-  assert.equal(partial.length, 1);
+  // 坏条目升格为报错（§38 评审 P2-3：坏条目可能正是未同步的新记录）
+  assert.throws(
+    () => parseCalendarRecords({ code: 200, data: [{ date: '2026-10-20' }, { _id: 'x', date: '2026-10-21' }] }),
+    (e) => e.code === 'api' && /2 条中有 1 条/.test(e.message),
+  );
   assert.throws(() => parseCalendarRecords({ code: 200, data: [{}, { date: '' }] }), (e) => e.code === 'api');
 });
 
@@ -496,9 +498,9 @@ test('getFitKey/getFileRef: 详情顶层 unwrap（新形态无 ridingRecord 包�
   assert.equal(ref1.key, 'ONELAP_677767-2026-10-18-20-33-08.st');
   assert.equal(ref1.fileName, 'ONELAP_677767-2026-10-18-20-33-08.fit');
 
-  // ② 蛇形 fit_url 且是 /geo/ 开头的 URL → 剥成 fit_content 路径（query 丢弃）
+  // ② 蛇形 fit_url 且 /geo/ 路径带 query（签名直链）→ 保持直链不被剥（§38 评审 P2-1）
   const ref2 = await client.getFileRef(session, { id: 'mongo-id-2', startAt: null });
-  assert.equal(ref2.key, 'geo/2026/a.fit');
+  assert.equal(ref2.key, 'https://oss.example.com/geo/2026/a.fit?sig=1');
   assert.equal(ref2.fileName, 'a.fit');
 
   // ③ durl 签名直链：key 存完整 URL，文件名剥 query
@@ -557,54 +559,6 @@ test('listSince 合并编排（e2e）: 旧路优先按本地日去重，日历�
       ...nodeDeps,
       fetchImpl: fetch,
       baseUrlOverrides: {
-        login: `http://127.0.0.1:${port}/api/login`,
-        rideRecord: `http://127.0.0.1:${port}/api/otm/ride_record`,
-calendar: `http://127.0.0.1:${port}/api/otm/calendar/calendar/records`,
-      },
-    });
-    const session = await client.login('rider@example.com', 'any');
-    const all = await client.listSince(session, null);
-    // 旧路 5 条（数字 id）覆盖了日历全部日期 → 日历全去重
-    assert.equal(all.length, 5);
-    assert.ok(all.every((a) => /^\d+$/.test(a.id)), '重叠日期由旧路（数字 id）优先');
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test('listSince 合并编排（e2e）: 旧列表失败 → OTM 日历独供（Mongo id）', async () => {
-  const server = createMockOnelapServer({ activityCount: 3, failLegacyList: true });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  try {
-    const client = createOnelapClient({
-      ...nodeDeps,
-      fetchImpl: fetch,
-      baseUrlOverrides: {
-        login: `http://127.0.0.1:${port}/api/login`,
-        rideRecord: `http://127.0.0.1:${port}/api/otm/ride_record`,
-calendar: `http://127.0.0.1:${port}/api/otm/calendar/calendar/records`,
-      },
-    });
-    const session = await client.login('rider@example.com', 'any');
-    const all = await client.listSince(session, null);
-    assert.equal(all.length, 3);
-    assert.ok(all.every((a) => a.id.startsWith('6a')), '回落后 id 来自 OTM 日历的 Mongo id');
-    assert.ok(all.every((a) => a.startAt instanceof Date));
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
-});
-
-test('listSince 合并编排（e2e）: 旧路优先按本地日去重，日历只补缺口', async () => {
-  const server = createMockOnelapServer({ activityCount: 5 });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const { port } = server.address();
-  try {
-    const client = createOnelapClient({
-      ...nodeDeps,
-      fetchImpl: fetch,
-      baseUrlOverrides: {
         login: 'http://127.0.0.1:' + port + '/api/login',
         rideRecord: 'http://127.0.0.1:' + port + '/api/otm/ride_record',
 calendar: 'http://127.0.0.1:' + port + '/api/otm/calendar/calendar/records',
@@ -641,7 +595,7 @@ calendar: 'http://127.0.0.1:' + port + '/api/otm/calendar/calendar/records',
     await new Promise((resolve) => server.close(resolve));
   }
 });
-test('listSince 合并编排（e2e）: 日历失败 → 旧列表兜底（旧行为回归）', async () => {
+test('listSince 合并编排（e2e）: 日历失败 → 显式报错（完整性权威不可用，§38 评审 P0）', async () => {
   const server = createMockOnelapServer({ activityCount: 4, failCalendar: true });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
@@ -652,13 +606,16 @@ test('listSince 合并编排（e2e）: 日历失败 → 旧列表兜底（旧行
       baseUrlOverrides: {
         login: 'http://127.0.0.1:' + port + '/api/login',
         rideRecord: 'http://127.0.0.1:' + port + '/api/otm/ride_record',
-calendar: 'http://127.0.0.1:' + port + '/api/otm/calendar/calendar/records',
+        calendar: 'http://127.0.0.1:' + port + '/api/otm/calendar/calendar/records',
       },
     });
     const session = await client.login('rider@example.com', 'any');
-    const all = await client.listSince(session, null);
-    assert.equal(all.length, 4);
-    assert.ok(all.every((a) => /^\d+$/.test(a.id)));
+    // 日历是完整性权威源：它失败时即便旧路「正常」也必须报错（水位线由编排层冻结），
+    // 否则旧路照常推进会把日历独有的新记录永久藏住
+    await assert.rejects(
+      () => client.listSince(session, null),
+      (e) => e.code === 'api' && /日历/.test(e.message),
+    );
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -710,4 +667,77 @@ calendar: 'http://127.0.0.1:' + port + '/api/otm/calendar/calendar/records',
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('listSince 合并编排（e2e）: 日历补缺正向——旧路缺失的记录由日历按骑行级 key 补齐', async () => {
+  const server = createMockOnelapServer({ activityCount: 5, legacyListMax: 2 });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  try {
+    const client = createOnelapClient({
+      ...nodeDeps,
+      fetchImpl: fetch,
+      baseUrlOverrides: {
+        login: 'http://127.0.0.1:' + port + '/api/login',
+        rideRecord: 'http://127.0.0.1:' + port + '/api/otm/ride_record',
+        calendar: 'http://127.0.0.1:' + port + '/api/otm/calendar/calendar/records',
+      },
+    });
+    const session = await client.login('rider@example.com', 'any');
+    const all = await client.listSince(session, null);
+    assert.equal(all.length, 5, '旧路前 2 条 + 日历补后 3 条');
+    const numeric = all.filter((a) => /^\d+$/.test(a.id));
+    const mongo = all.filter((a) => a.id.startsWith('6a'));
+    assert.equal(numeric.length, 2);
+    assert.equal(mongo.length, 3, '缺失的记录来自日历（Mongo id）');
+    // 补充条目带时长（骑行级匹配键可用）
+    assert.ok(mongo.every((a) => typeof a.durationSec === 'number' && a.durationSec > 0));
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('listSince: 日历可用时旧路守卫错误被降级——返回日历结果而非整轮失败', async () => {
+  // 旧路报「新侧丢弃」（守卫抛错），日历返回全量可信数据（默认 stub 空数组）→ 编排选择日历独供
+  const { fetchImpl } = fakeListFetch(
+    [{ list: [{ start_riding_time: rideTime(1) }, { id: 2, start_riding_time: rideTime(40) }] }],
+  );
+  const list = await listClient(fetchImpl).listSince({ token: 't', uid: '1' }, new Date(Date.now() - 5 * 24 * 3600 * 1000));
+  assert.deepEqual(list, [], '日历（空库）可信 → 空结果成立，不再抛守卫错误');
+});
+
+test('download: 直链 403 归 api 而非 auth（签名直链与会话无关，§38 评审 P1-1）', async () => {
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(String(url));
+    return new Response('AccessDenied', { status: 403 });
+  };
+  const client = listClient(fetchImpl);
+  await assert.rejects(
+    () => client.download({ token: 't', uid: '1' }, { key: 'https://oss.example.com/dl/x.fit?Expires=1', fileName: 'x.fit' }),
+    (e) => e.code === 'api' && /直链/.test(e.message),
+  );
+  // fit_content 路径的 403 仍是 auth（会话级端点）
+  await assert.rejects(
+    () => client.download({ token: 't', uid: '1' }, { key: 'geo/x.fit', fileName: 'x.fit' }),
+    (e) => e.code === 'auth',
+  );
+});
+
+test('getFitKey: /geo/ 带签名 query 的 URL 保持直链（不被剥成 fit_content 键，§38 评审 P2-1）', async () => {
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith('/analysis/signed-1')) {
+      return new Response(
+        JSON.stringify({ code: 200, message: '', data: { fit_url: 'https://cdn.example.com/geo/2026/x.fit?Expires=9&Signature=abc' } }),
+        { status: 200 },
+      );
+    }
+    return new Response(JSON.stringify({ code: 4004, message: 'x' }), { status: 200 });
+  };
+  const ref = await listClient(fetchImpl).getFileRef(
+    { token: 't', uid: '1' },
+    { id: 'signed-1', startAt: null },
+  );
+  assert.equal(ref.key, 'https://cdn.example.com/geo/2026/x.fit?Expires=9&Signature=abc');
+  assert.equal(ref.fileName, 'x.fit');
 });

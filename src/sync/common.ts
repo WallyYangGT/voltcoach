@@ -34,12 +34,14 @@ export class SyncError extends Error {
 
 // ---------------- 平台客户端接口 ----------------
 
-/** 云端活动（平台无关的最小形状：只需要 id 与起骑时刻） */
+/** 云端活动（平台无关的最小形状：id 与起骑时刻必须，时长可选供跨源匹配） */
 export interface RemoteActivity {
   /** 云端活动 id（字符串归一化，便于拼 URL 与日志） */
   id: string;
   /** 起骑时刻（本地时区 Date）；平台时间串解析失败为 null（仅影响失败重试锚点） */
   startAt: Date | null;
+  /** 活动时长秒（可选；跨源列表合并做「本地日+时长」骑行级匹配用，2026-10 顽鹿日历） */
+  durationSec?: number | null;
 }
 
 /**
