@@ -244,3 +244,40 @@ test('功率数据质量技能：FTP 标记感知口径（防旧表述回归）'
   assert.ok(en.content.includes('is flag-aware'), 'en 应为 flag-aware 口径');
   assert.ok(!en.content.includes('is not flag-aware'), 'en 不得残留 "not flag-aware" 旧表述');
 });
+
+// 语气红线（2026-10-24）：04/07/10 技能 zh/en 均须含「禁扫兴判定语」口径，
+// 短语清单与 role 段规范源同步（见 prompts.ts 头注释）——防某语言单侧缺失或被整段删除
+test('语气红线：04/07/10 技能 zh/en 均含禁扫兴判定语口径', () => {
+  const get = (lang, name) => {
+    const f = SKILL_FILES[lang].find((x) => x.name === name);
+    assert.ok(f, `缺少 ${name}`);
+    return f.content;
+  };
+  // 04 报告规范：完成即肯定
+  assert.ok(get('zh', '04-report-writing.md').includes('负荷白费/花掉了'), '04 zh 应含红线短语');
+  const en04 = get('en', '04-report-writing.en.md');
+  assert.ok(
+    en04.includes('"the workout failed"') &&
+      en04.includes('"that ride was wasted"') &&
+      en04.includes('"the training load went to waste"'),
+    '04 en 应含红线短语',
+  );
+  // 07 执行对比：内部分析口径 vs 对用户中性措辞
+  const zh07 = get('zh', '07-training-plan.md');
+  assert.ok(zh07.includes('执行失败') && zh07.includes('中性、面向下一步'), '07 zh 应含红线口径');
+  const en07 = get('en', '07-training-plan.en.md');
+  assert.ok(en07.includes('the execution failed') && en07.includes('neutral and forward-looking'), '07 en 应含红线口径');
+  // 10 业余教练：骑行本身就是成功（最高优先级沟通规则）
+  const zh10 = get('zh', '10-amateur-coach.md');
+  assert.ok(
+    zh10.includes('骑行本身就是成功') && zh10.includes('刺激没拿到') && zh10.includes('室内骑行台也一样'),
+    '10 zh 应含红线口径',
+  );
+  const en10 = get('en', '10-amateur-coach.en.md');
+  assert.ok(
+    en10.includes('Riding is success in itself') &&
+      en10.includes('"that ride was wasted"') &&
+      en10.includes('"the training stimulus was missed"'),
+    '10 en 应含红线口径',
+  );
+});

@@ -2,7 +2,8 @@
  * prompts.test.mjs — src/prompts 提示词层回归测试。
  * 自 fit-reader Web 版 test/（web.test.mjs 提示词相关断言 + skills/ai 测试中的拼装口径）
  * 同源搬运：四场景拼装结构、数据整形压缩、时间戳本地化、记忆段、对话系统段。
- * zh 文案 2026-09-25 客观性修正起与旧 repo 逐字同步（回归断言依赖）。
+ * zh 文案 2026-09-25 客观性修正起与旧 repo 逐字同步；2026-10-24 起本仓为提示词
+ * 口径权威（旧仓随发版回同步），新增语气红线等文案以本仓为准（回归断言依赖）。
  */
 
 import { test } from 'node:test';
@@ -51,6 +52,15 @@ test('复盘提示词：角色 + 口径 + 当前时间 + 数据段 + 编号问�
   assert.match(p, /^## 角色\n\n你是一位严谨、务实的自行车教练/);
   // 客观性修正（2026-09-25）：评价平衡口径与数据口径注意钉死
   assert.match(p, /评价客观平衡——做得好的地方（有数据支撑）明确肯定，存在的问题也直接指出，不回避不美化/);
+  // 沟通红线（2026-10-24）：禁「执行失败/白骑了/负荷白费/刺激没拿到」式扫兴判定语；
+  // 室内骑行台同口径；数据可信度与安全警示不受红线弱化
+  assert.match(p, /沟通红线（所有场景、所有模式生效）/);
+  assert.match(p, /禁止用「执行失败」「白骑了」「负荷白费\/花掉了」「刺激没拿到」「这趟不算」一类说法否定整趟骑行/);
+  assert.match(p, /用户完成了一次骑行（室内骑行台也一样）/);
+  assert.match(p, /功率失真、TSB 过低、伤病与安全风险等警示照常明确指出/);
+  // 复盘问句不诱导「这趟训练没必要」式结论（问角色与衔接，不问必要性）
+  assert.match(p, /说明这次训练在当前训练周期中的位置与承担的角色（新增负荷\/维持\/恢复）/);
+  assert.doesNotMatch(p, /位置与必要性/);
   assert.match(p, /## 指标口径与骑手参数/);
   assert.match(p, new RegExp(`骑手参数：FTP ${ATHLETE.ftp_watts}W，最大心率 ${ATHLETE.max_hr}bpm，体重 ${ATHLETE.weight_kg}kg`));
   assert.match(p, /数据口径注意：/);
@@ -493,6 +503,10 @@ test('agentic 工具指引段：18 个工具与 7 条规则（save_memory 在记
 
 test('对话指令与当前时间段：双语切换', () => {
   assert.match(buildChatInstruction('follow_up', 'zh'), /每次回答控制在 200 字以内/);
+  // follow_up 不注 role/skills（见对话系统段用例），语气红线必须随快答指令自带
+  assert.match(buildChatInstruction('follow_up', 'zh'), /先认可完成骑行这件事（室内骑行台也一样）/);
+  assert.match(buildChatInstruction('follow_up', 'zh'), /禁用「执行失败」「白骑了」「负荷白费\/花掉了」「刺激没拿到」/);
+  assert.match(buildChatInstruction('follow_up', 'zh'), /数据与安全警示照常明确指出/);
   assert.match(buildChatInstruction('chat', 'zh'), /你是用户的随身 AI 训练顾问/);
   assert.match(buildChatInstruction('plan', 'zh'), /训练计划」对话中/);
   assert.match(buildChatInstruction('plan', 'zh'), /update_training_plan/);
@@ -500,6 +514,8 @@ test('对话指令与当前时间段：双语切换', () => {
   assert.match(buildChatInstruction('plan', 'zh'), /肯定答复/); // 确认落实协议
   assert.match(buildChatInstruction('plan', 'en'), /adjust_plan_sessions/);
   assert.match(buildChatInstruction('follow_up', 'en'), /within 200 characters/);
+  assert.match(buildChatInstruction('follow_up', 'en'), /acknowledge the completed ride first/);
+  assert.match(buildChatInstruction('follow_up', 'en'), /the training load went to waste/);
   assert.match(buildDateSection(new Date('2026-03-26T10:00:00'), 'zh'), /今天是 2026-03-26/);
   assert.match(buildDateSection(new Date('2026-03-26T10:00:00'), 'en'), /2026-03-26/);
   assert.equal(buildDateSection(null), null);
@@ -757,6 +773,19 @@ test('英文复盘提示词：角色/口径/时间/问题全英', () => {
   assert.match(p, /^## Role\n\nYou are a rigorous, pragmatic cycling coach/);
   // 客观性修正：en 口径注意与评价平衡同步钉死
   assert.match(p, /Be objective and balanced: explicitly acknowledge what the data shows was done well/);
+  // 沟通红线（2026-10-24）：en 同步钉死——五条禁语逐一钉住，防单条被静默删除
+  assert.match(p, /Communication red line \(applies to all scenarios and all modes\)/);
+  assert.match(p, /Never write off a completed ride/);
+  assert.match(p, /"the workout failed"/);
+  assert.match(p, /"that ride was wasted"/);
+  assert.match(p, /"the training load went to waste"/);
+  assert.match(p, /"the training stimulus was missed"/);
+  assert.match(p, /"this one doesn't count"/);
+  assert.match(p, /indoors on the trainer counts just the same/);
+  assert.match(p, /injury and safety warnings are still stated plainly/);
+  // en review.q.4 同步：问角色不问必要性
+  assert.match(p, /what role it played \(new load \/ maintenance \/ recovery\)/);
+  assert.doesNotMatch(p, /whether it was necessary/);
   assert.match(p, /a high Z1 share does not mean the rider was not pedaling/);
   assert.match(p, /judging the baseline against the user-assigned category and context/);
   assert.match(p, /do not place a pause into a hard segment by guesswork/);
