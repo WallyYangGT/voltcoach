@@ -25,6 +25,7 @@ import {
   base64Encode,
   DOWNLOAD_TIMEOUT_MS,
   fetchWithTimeout,
+  isFitBytes,
   REQUEST_TIMEOUT_MS,
   utf8ToBytes,
   SyncError,
@@ -37,6 +38,13 @@ import {
 /** 登录/列表/下载的基础地址（override 仅限测试与模拟器 mock 使用） */
 export const ONELAP_LOGIN_URL = 'https://www.onelap.cn/api/login';
 export const ONELAP_RIDE_RECORD_BASE = 'https://otm.onelap.cn/api/otm/ride_record';
+/**
+ * OTM 日历记录列表（2026-10 中服务端变更后的新记录面，POST 无 body 一次返回全量）。
+ * 用户浏览器实证：111 条覆盖 2025-08 至今（含旧 ride_record/list 已不再返回的新记录），
+ * 每条 `{_id: Mongo hex, date: "YYYY-MM-DD", time, totalDistance, NP, TSS, ...}`——
+ * **只有汇总数据，没有文件下载引用**（下载寻址待 OTM 详情端点，见 getFitKey 注释）。
+ */
+export const ONELAP_CALENDAR_URL = 'https://otm.onelap.cn/api/otm/calendar/calendar/records';
 /** 登录签名密钥（OnelapSyncStrava 内置常量，服务端约定值） */
 export const ONELAP_SECRET = 'fe9f8382418fcdeb136461cac6acae7b';
 
@@ -55,7 +63,7 @@ export interface OnelapDeps {
   randomBytes?: (length: number) => Uint8Array;
   /** unix 秒（登录 timestamp 用） */
   now?: () => number;
-  baseUrlOverrides?: { login?: string; rideRecord?: string };
+  baseUrlOverrides?: { login?: string; rideRecord?: string; calendar?: string };
   /** 超时覆盖（单测把 30s/120s 压到几十毫秒；不传即生产口径） */
   timeouts?: { requestMs?: number; downloadMs?: number };
 }
@@ -63,10 +71,12 @@ export interface OnelapDeps {
 export interface OnelapClient extends SyncClient<OnelapSession> {
   login(account: string, password: string): Promise<OnelapSession>;
   /**
-   * 查活动云端文件 key（fileKey，.st 日志类为 fitUrl）。同步编排先用它算文件名、
-   * 与本地集合比对跳过已知活动，再对未知活动下载——省掉无谓下载。
-   * 云端确实没有原始文件时抛 `no_file`（编排层计失败并锚定水位线重试：顽鹿的文件
-   * 可能是转码未完成的暂时缺档，重试比放弃更符合预期）。
+   * 查活动云端文件的下载描述。返回值两种形态（2026-10 中服务端变更适配，对齐
+   * WanSync 的当代实现）：
+   *  - fit_content 路径（`geo/...`、`MATCH_*.st`、`ONELAP_*.st|.fit` 裸名）——download
+   *    时 base64 拼进 fit_content 端点；
+   *  - 完整 http(s) URL（签名直链 `durl` 等）——download 时裸 GET，不带鉴权头。
+   * 云端确实没有原始文件时抛 `no_file`（编排层计失败并锚定水位线重试）。
    */
   getFitKey(session: OnelapSession, activityId: string): Promise<string>;
 }
@@ -126,13 +136,92 @@ export function parseRideTime(value: string): Date | null {
   return Number.isNaN(instant.getTime()) ? null : instant;
 }
 
+/** Date → 本地日历日 "YYYY-MM-DD"（列表合并的日期去重键，§24 本地日口径） */
+export function localDateKey(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Date → 当地当日 0 点（日期粒度比较用：多拉不少拉，宁宽勿窄） */
+function dayStart(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 /**
- * fileKey/fitUrl → 规范化活动文件名（upsert 去重键）：取 basename、去原扩展名、
- * 强制 .fit 后缀（.st 日志由顽鹿服务端转码为 FIT，落盘名也统一）；无法取名的
+ * OTM 日历响应 → 活动列表（纯函数）。`{"code":200,"data":[{_id, date, ...}]}`：
+ * `_id` 为 Mongo hex（新记录面唯一身份），`date` 为本地日历日（无时刻——窗口比较按
+ * 日粒度）。坏条目跳过并计数：全量可信源没有方向性，坏条目只在「一条都解析不出」时
+ * 升级为报错，其余 warn 留痕（用户实证 111 条全干净，防御性处理）。
+ */
+export function parseCalendarRecords(json: unknown): RemoteActivity[] {
+  const payload = json as { code?: number; message?: string; data?: unknown } | null;
+  if (payload?.code !== 200) {
+    throw new SyncError(
+      'api',
+      `OTM 日历列表失败: ${payload?.message ?? JSON.stringify(payload ?? {}).slice(0, 200)}`,
+    );
+  }
+  if (!Array.isArray(payload.data)) {
+    throw new SyncError(
+      'api',
+      `OTM 日历列表响应缺少 data 数组（响应形状疑似变更）: ${JSON.stringify(payload).slice(0, 200)}`,
+    );
+  }
+  const out: RemoteActivity[] = [];
+  let bad = 0;
+  for (const item of payload.data) {
+    const rec = item as { _id?: unknown; date?: unknown };
+    const id = typeof rec?._id === 'string' ? rec._id.trim() : '';
+    const date = typeof rec?.date === 'string' ? rec.date.trim() : '';
+    const d = /^\d{4}-\d{2}-\d{2}$/.test(date)
+      ? new Date(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10)))
+      : null;
+    if (!id || !d || Number.isNaN(d.getTime())) {
+      bad += 1;
+      continue;
+    }
+    out.push({ id, startAt: d });
+  }
+  if (bad > 0) {
+    if (out.length === 0) {
+      throw new SyncError('api', `OTM 日历返回 ${bad} 条均缺少可解析的 _id/date（形状疑似变更）`);
+    }
+    console.warn(`onelap OTM 日历：${bad} 条坏条目被跳过（保留 ${out.length} 条）`);
+  }
+  return out;
+}
+
+/**
+ * 列表条目 → 起骑时刻（多形态兜底，2026-10 中服务端变更适配）：老形态
+ * `start_riding_time`（本地墙钟串）→ 新形态 `start_time` → `created_at`（epoch 秒，
+ * WanSync 实证的字段次序）。全缺返回 null（调用方按丢弃计数走守卫）。
+ */
+export function extractActivityStartAt(item: {
+  start_riding_time?: string;
+  start_time?: string;
+  created_at?: number | string;
+}): Date | null {
+  const legacy = item?.start_riding_time ? parseRideTime(item.start_riding_time) : null;
+  if (legacy) return legacy;
+  const modern = item?.start_time ? parseRideTime(item.start_time) : null;
+  if (modern) return modern;
+  const raw = item?.created_at;
+  if (raw === undefined || raw === null || raw === '') return null;
+  const sec = typeof raw === 'number' ? raw : Number(String(raw).trim());
+  if (!Number.isFinite(sec) || sec <= 0) return null;
+  const d = new Date(sec * 1000);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * fileKey/fitUrl/下载 URL → 规范化活动文件名（upsert 去重键）：取 basename、剥
+ * query/hash、去原扩展名、强制 .fit 后缀（.st 日志由顽鹿服务端转码为 FIT，落盘名
+ * 也统一；2026-10 新形态 `ONELAP_<id>-<日期时间>.st` 裸名同样适用）；无法取名的
  * 回退 onelap-<id>.fit。
  */
 export function extractFitFileName(fileKey: string, activityId: string): string {
-  const base = (fileKey ?? '').split(/[\\/]/).pop() ?? '';
+  let base = (fileKey ?? '').split(/[\\/]/).pop() ?? '';
+  base = base.split(/[?#]/)[0] ?? '';
   const stem = safeName(base.replace(/\.[^.]+$/, ''));
   if (!stem) return `onelap-${activityId}.fit`;
   return `${stem}.fit`;
@@ -152,6 +241,7 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
   const now = deps.now ?? (() => Math.floor(Date.now() / 1000));
   const loginUrl = deps.baseUrlOverrides?.login ?? ONELAP_LOGIN_URL;
   const rideBase = deps.baseUrlOverrides?.rideRecord ?? ONELAP_RIDE_RECORD_BASE;
+  const calendarUrl = deps.baseUrlOverrides?.calendar ?? ONELAP_CALENDAR_URL;
   const requestTimeoutMs = deps.timeouts?.requestMs ?? REQUEST_TIMEOUT_MS;
   const downloadTimeoutMs = deps.timeouts?.downloadMs ?? DOWNLOAD_TIMEOUT_MS;
 
@@ -220,22 +310,215 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
 
   const DESKTOP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Gecko/20100101 Firefox/152.0';
 
+  /**
+   * 下载描述归一（2026-10 中服务端变更，字段形状对齐 WanSync）：
+   *  - 详情 unwrap：`data.ridingRecord` 存在用它，否则**直接用 data 顶层**（新形态
+   *    不再包裹）；
+   *  - 字段候选：`fileKey` → `fit_url`（蛇形）→ `fitUrl` → `durl`（签名直链）；
+   *  - 值归一：http(s) URL 且 path 以 `/geo/` 开头 → 剥成 fit_content 路径；其余
+   *    URL 原样返回（download 走直链）；裸名仅认三类（`geo/` 前缀、`MATCH_*.st`、
+   *    `ONELAP_*.st|.fit`——防止把任意字符串 base64 后当路径打服务端）。
+   * 全空/无法识别 → no_file。
+   */
+  function normalizeDownloadRef(raw: Record<string, unknown>): string {
+    const rec = raw as {
+      fileKey?: unknown;
+      fit_url?: unknown;
+      fitUrl?: unknown;
+      durl?: unknown;
+    };
+    const candidates = [rec.fileKey, rec.fit_url, rec.fitUrl, rec.durl];
+    for (const c of candidates) {
+      const value = typeof c === 'string' ? c.trim() : '';
+      if (!value) continue;
+      if (/^https?:\/\//i.test(value)) {
+        try {
+          const path = new URL(value).pathname;
+          if (path.startsWith('/geo/')) return path.replace(/^\//, '');
+        } catch {
+          // URL 解析失败按直链原样处理
+        }
+        return value;
+      }
+      if (value.startsWith('geo/')) return value;
+      // 无分隔符的裸名（.st 日志 / .fit）：老 MATCH_ 形态与 2026-10 新 ONELAP_ 形态
+      if (!/[\\/?#]/.test(value) && /\.(st|fit)$/i.test(value)) return value;
+    }
+    return '';
+  }
+
   async function getFitKey(session: OnelapSession, activityId: string): Promise<string> {
     const analysis = (await getJson(`${rideBase}/analysis/${activityId}`, authHeaders(session))) as {
       code?: number;
       message?: string;
-      data?: { ridingRecord?: { fileKey?: string; fitUrl?: string } };
+      data?: Record<string, unknown> | { ridingRecord?: Record<string, unknown> };
     };
     if (analysis?.code !== 200) {
       throw new SyncError('api', `活动详情失败: ${analysis?.message ?? ''}`);
     }
-    const rec = analysis.data?.ridingRecord;
-    const key = rec?.fileKey || rec?.fitUrl || '';
-    if (!key) throw new SyncError('no_file', `活动 ${activityId} 云端无原始文件`);
-    return key;
+    const data = analysis.data;
+    // 新形态把下载字段直接放 data 顶层，旧形态包在 ridingRecord 里（两者都试）
+    const rec =
+      (data as { ridingRecord?: Record<string, unknown> })?.ridingRecord &&
+      typeof (data as { ridingRecord?: unknown }).ridingRecord === 'object'
+        ? ((data as { ridingRecord: Record<string, unknown> }).ridingRecord)
+        : (data as Record<string, unknown> | undefined);
+    const ref = rec ? normalizeDownloadRef(rec) : '';
+    if (!ref) throw new SyncError('no_file', `活动 ${activityId} 云端无原始文件`);
+    return ref;
   }
 
-  return {
+  /**
+   * 旧记录面扫描（ride_record/list 分页 + §37 全套守卫）。对已迁移账号不再返回
+   * 10-13 之后的新记录，但条目仍是数字 id + 精确时刻（旧 analysis 端点的最优
+   * 下载寻址），故保留为合并源；listSince 负责与 OTM 日历合并。
+   */
+  async function scanRideRecordList(
+    session: OnelapSession,
+    since: Date | null,
+    maxPages: number,
+  ): Promise<RemoteActivity[]> {
+    const out: RemoteActivity[] = [];
+    // 诊断与守卫计数（2026-10 顽鹿增量失效事故，decisions §37）：结果只有在
+    // 「扫到过可解析且早于 since 的窗口边界」且「新侧没有丢弃条目」时才可信；
+    // 不可信的结果一律显式报错交编排层按失败处理（水位线不动），绝不静默返回——
+    // 编排层把空/缺记录的列表当「没有新记录」并推进水位线，会把缺口永久藏住
+    //（症状：同步时间在走、永远 0 新增 0 跳过）。
+    let seen = 0;
+    let dropped = 0; // id/时间字段缺失被丢弃的条目（解析失败的条目入列表，不计入）
+    let droppedBeforeOld = 0; // 未见窗口边界时的丢弃（降序里位于边界新侧=疑似窗口内）
+    let droppedAfterOld = 0; // 见过窗口边界后的丢弃（升序里位于边界后=疑似窗口内）
+    let recovered = 0; // 时间字段在但解析失败、仍入列表的条目（不丢记录，仅诊断）
+    let parsed = 0;
+    let sawOldParsed = false;
+    let ascending = false; // 时间升序=旧→新序：遇旧条目只跳过，不再提前停
+    let lastParsedMs: number | null = null;
+    let stopReason: 'boundary' | 'end' | 'truncated' | null = null;
+    // 2026-10 中服务端变更：旧 limit=20 分页路径疑似失效（beta 实测列表终止在
+    // 10-13，而同期 WanSync 用 {page:1, limit:50} 单页仍拉到新记录）——列表请求
+    // 对齐其形状（单页大 limit 起步，窗口没扫完继续翻页）
+    const pageSize = 50;
+    for (let page = 1; page <= maxPages; page += 1) {
+      const json = (await postJson(`${rideBase}/list`, authHeaders(session), {
+        page,
+        limit: pageSize,
+      })) as {
+        code?: number;
+        message?: string;
+        data?: {
+          list?: Record<string, unknown>[] | null;
+          pagination?: { has_more?: boolean };
+        };
+      };
+      const data = json?.data;
+      if (json?.code !== 200 || !data) {
+        throw new SyncError('api', `活动列表失败: ${json?.message ?? JSON.stringify(json).slice(0, 200)}`);
+      }
+      if (data.list === undefined) {
+        // 合规响应恒有 list 键（上游 Go 结构与 mock 同源）；缺失 = 形状变更
+        throw new SyncError(
+          'api',
+          `活动列表响应缺少 list 字段（响应形状疑似变更）: ${JSON.stringify(json).slice(0, 200)}`,
+        );
+      }
+      // null（Go nil slice）按空页放行；其余非数组形态 = 形状变更，显式报错
+      if (data.list !== null && !Array.isArray(data.list)) {
+        throw new SyncError(
+          'api',
+          `活动列表响应 list 字段类型异常（响应形状疑似变更）: ${JSON.stringify(json).slice(0, 200)}`,
+        );
+      }
+      const list = data.list ?? [];
+      let pageHadOld = false;
+      for (const item of list) {
+        seen += 1;
+        // id 双命名兜底（新形态可能叫 activity_id，WanSync 同款）；时间三兜底见
+        // extractActivityStartAt
+        const map = item as {
+          id?: unknown;
+          activity_id?: unknown;
+          start_riding_time?: unknown;
+          start_time?: unknown;
+          created_at?: unknown;
+        };
+        const id = map?.id ?? map?.activity_id;
+        const hasAnyTimeField =
+          map?.start_riding_time !== undefined ||
+          map?.start_time !== undefined ||
+          (map?.created_at !== undefined && map?.created_at !== null && map?.created_at !== '');
+        const startAt = extractActivityStartAt(item ?? {});
+        if (!id || (!hasAnyTimeField && !startAt)) {
+          // id/时间字段全缺：无法定位 → 丢弃，但必须计数——「新侧」的丢弃条目会让
+          // 整份结果不可信（见收尾守卫），不能无声吞掉
+          dropped += 1;
+          if (sawOldParsed) droppedAfterOld += 1;
+          else droppedBeforeOld += 1;
+          continue;
+        }
+        if (!startAt) {
+          // 时间字段在但全部不可解析：保既定口径——条目仍入列表（startAt 仅失败
+          // 重试锚点用，null 不影响下载导入），只计诊断。格式漂移不升级成丢记录。
+          recovered += 1;
+          out.push({ id: String(id), startAt: null });
+          continue;
+        }
+        parsed += 1;
+        const startAtMs = startAt.getTime();
+        if (lastParsedMs !== null && startAtMs > lastParsedMs) ascending = true;
+        lastParsedMs = startAtMs;
+        if (since && startAtMs < since.getTime()) {
+          pageHadOld = true;
+          sawOldParsed = true;
+          continue;
+        }
+        out.push({ id: String(id), startAt });
+      }
+      if (!data.pagination?.has_more) {
+        stopReason = 'end';
+        break;
+      }
+      // 翻页停止判据放**页边界**而非条目中途：页内可能还混着窗口内条目（方向异常或
+      // 单条旧条目跨页时，条目中途停会把同页/后续页的窗口内记录漏掉）。降序（未见
+      // 升序）且本页见过旧条目、样本足够断序（parsed ≥ 2，首条旧条目无法判定方向）
+      // ⇒ 后面只可能更旧，到此为止，不为全量历史买单。先于截断判定——窗口已扫完时
+      // 「页数恰好用尽」不算异常。
+      if (since && !ascending && pageHadOld && parsed >= 2) {
+        stopReason = 'boundary';
+        break;
+      }
+      if (page >= maxPages) {
+        stopReason = 'truncated'; // 服务端还有下一页但翻页上限用尽：本轮不完整，不可信
+        break;
+      }
+    }
+    if (stopReason === 'truncated') {
+      throw new SyncError('api', `活动列表超过翻页上限（${maxPages} 页）仍未到头，已中止本轮以防漏同步`);
+    }
+    // 「新侧」存在丢弃条目 ⇒ 结果不完整（可能已把未同步的新记录丢掉），与 out 是否
+    // 为空无关——out 非空也照样可能丢掉了同侧的新记录：升序取边界后的丢弃数、降序
+    // 取边界前的丢弃数、方向未知（可解析样本不足两条）保守取两侧之和。显式报错，
+    // 服务端恢复后由水位线未动自动补回。
+    const suspicious =
+      ascending
+        ? droppedAfterOld
+        : parsed >= 2
+          ? droppedBeforeOld
+          : droppedBeforeOld + droppedAfterOld;
+    if (suspicious > 0) {
+      throw new SyncError(
+        'api',
+        `活动列表有 ${suspicious} 条记录缺少 id/起骑时间、无法确认是否为未同步的新记录（响应形状疑似变更），已中止本轮以防漏同步`,
+      );
+    }
+    console.log(
+      `onelap 列表：窗口 ${since ? since.toISOString() : '全量'} 收到 ${out.length} 条` +
+        `（扫描 ${seen} 条，时间不可解析仍导入 ${recovered} 条，丢弃 ${dropped} 条，` +
+        `停止=${stopReason ?? 'end'}${ascending ? '，旧→新序' : ''}）`,
+    );
+    return out;
+}
+
+  const client: OnelapClient = {
     async login(account, password) {
       const nonce = nonceFromBytes(randomBytes(64));
       const timestamp = String(now());
@@ -273,127 +556,56 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
       return { token: info.token, uid: String(extractUid(text) ?? info.userinfo?.uid ?? '') };
     },
 
+    /**
+     * 窗口内活动列表 = 旧记录面（ride_record/list）⊕ OTM 日历（calendar/records）。
+     * 2026-10 中服务端变更把记录面迁到 OTM 日历管线（旧 list 对已迁移账号终止在
+     * 10-13），而日历一次返回全量（Mongo _id + 本地日历日，无文件引用）。合并口径：
+     * 旧 list 条目**优先**（数字 id 可走既有 analysis 端点下载、时刻精确），日历只补
+     * 旧 list 未覆盖的**本地日历日**（按日去重，宁重勿漏——跨源重合活动由文件名预检
+     * 与内容指纹兜底）；单路失败不阻塞另一路，双路皆败才报错（水位线不动）。
+     */
     async listSince(session, since, maxPages = 500) {
-      const out: RemoteActivity[] = [];
-      // 诊断与守卫计数（2026-10 顽鹿增量失效事故，decisions §37）：结果只有在
-      // 「扫到过可解析且早于 since 的窗口边界」且「新侧没有丢弃条目」时才可信；
-      // 不可信的结果一律显式报错交编排层按失败处理（水位线不动），绝不静默返回——
-      // 编排层把空/缺记录的列表当「没有新记录」并推进水位线，会把缺口永久藏住
-      //（症状：同步时间在走、永远 0 新增 0 跳过）。
-      let seen = 0;
-      let dropped = 0; // id/时间字段缺失被丢弃的条目（解析失败的条目入列表，不计入）
-      let droppedBeforeOld = 0; // 未见窗口边界时的丢弃（降序里位于边界新侧=疑似窗口内）
-      let droppedAfterOld = 0; // 见过窗口边界后的丢弃（升序里位于边界后=疑似窗口内）
-      let recovered = 0; // 时间字段在但解析失败、仍入列表的条目（不丢记录，仅诊断）
-      let parsed = 0;
-      let sawOldParsed = false;
-      let ascending = false; // 时间升序=旧→新序：遇旧条目只跳过，不再提前停
-      let lastParsedMs: number | null = null;
-      let stopReason: 'boundary' | 'end' | 'truncated' | null = null;
-      for (let page = 1; page <= maxPages; page += 1) {
-        const json = (await postJson(`${rideBase}/list`, authHeaders(session), {
-          page,
-          limit: 20,
-        })) as {
-          code?: number;
-          message?: string;
-          data?: {
-            list?: { id?: number | string; start_riding_time?: string }[] | null;
-            pagination?: { has_more?: boolean };
-          };
-        };
-        const data = json?.data;
-        if (json?.code !== 200 || !data) {
-          throw new SyncError('api', `活动列表失败: ${json?.message ?? JSON.stringify(json).slice(0, 200)}`);
-        }
-        if (data.list === undefined) {
-          // 合规响应恒有 list 键（上游 Go 结构与 mock 同源）；缺失 = 形状变更
-          throw new SyncError(
-            'api',
-            `活动列表响应缺少 list 字段（响应形状疑似变更）: ${JSON.stringify(json).slice(0, 200)}`,
-          );
-        }
-        // null（Go nil slice）按空页放行；其余非数组形态 = 形状变更，显式报错
-        if (data.list !== null && !Array.isArray(data.list)) {
-          throw new SyncError(
-            'api',
-            `活动列表响应 list 字段类型异常（响应形状疑似变更）: ${JSON.stringify(json).slice(0, 200)}`,
-          );
-        }
-        const list = data.list ?? [];
-        let pageHadOld = false;
-        for (const item of list) {
-          seen += 1;
-          if (!item?.id || !item?.start_riding_time) {
-            // id/时间字段缺失：无法定位时间 → 丢弃（旧实现即如此），但必须计数——
-            // 「新侧」的丢弃条目会让整份结果不可信（见收尾守卫），不能无声吞掉
-            dropped += 1;
-            if (sawOldParsed) droppedAfterOld += 1;
-            else droppedBeforeOld += 1;
-            continue;
-          }
-          const startAt = parseRideTime(item.start_riding_time);
-          if (!startAt) {
-            // 时间字段在但解析失败：保旧实现语义——条目仍入列表（startAt 仅失败重试
-            // 锚点用，null 不影响下载导入）。格式漂移不升级成丢记录。
-            recovered += 1;
-            out.push({ id: String(item.id), startAt: null });
-            continue;
-          }
-          parsed += 1;
-          const startAtMs = startAt.getTime();
-          if (lastParsedMs !== null && startAtMs > lastParsedMs) ascending = true;
-          lastParsedMs = startAtMs;
-          if (since && startAtMs < since.getTime()) {
-            pageHadOld = true;
-            sawOldParsed = true;
-            continue;
-          }
-          out.push({ id: String(item.id), startAt });
-        }
-        if (!data.pagination?.has_more) {
-          stopReason = 'end';
-          break;
-        }
-        // 翻页停止判据放**页边界**而非条目中途：页内可能还混着窗口内条目（方向异常或
-        // 单条旧条目跨页时，条目中途停会把同页/后续页的窗口内记录漏掉）。降序（未见
-        // 升序）且本页见过旧条目、样本足够断序（parsed ≥ 2，首条旧条目无法判定方向）
-        // ⇒ 后面只可能更旧，到此为止，不为全量历史买单。先于截断判定——窗口已扫完时
-        // 「页数恰好用尽」不算异常。
-        if (since && !ascending && pageHadOld && parsed >= 2) {
-          stopReason = 'boundary';
-          break;
-        }
-        if (page >= maxPages) {
-          stopReason = 'truncated'; // 服务端还有下一页但翻页上限用尽：本轮不完整，不可信
-          break;
-        }
+      let legacy: RemoteActivity[] | null = null;
+      let legacyError: SyncError | null = null;
+      try {
+        legacy = await scanRideRecordList(session, since, maxPages);
+      } catch (e) {
+        legacyError = e instanceof SyncError ? e : new SyncError('api', String(e));
+        console.warn(`onelap 旧列表（ride_record/list）失败，回落 OTM 日历: ${legacyError.message}`);
       }
-      if (stopReason === 'truncated') {
-        throw new SyncError('api', `活动列表超过翻页上限（${maxPages} 页）仍未到头，已中止本轮以防漏同步`);
+
+      let calendar: RemoteActivity[] | null = null;
+      try {
+        const json = (await postJson(calendarUrl, authHeaders(session), {})) as unknown;
+        const all = parseCalendarRecords(json);
+        // 日粒度窗口过滤：date 起点日 ≥ since 起点日（日历无时刻，宁宽勿窄）
+        calendar = since
+          ? all.filter((a) => a.startAt && dayStart(a.startAt) >= dayStart(since))
+          : all;
+      } catch (e) {
+        const msg = e instanceof SyncError ? e.message : String(e);
+        console.warn(`onelap OTM 日历列表失败${legacy ? '（旧列表可用，忽略）' : ''}: ${msg}`);
       }
-      // 「新侧」存在丢弃条目 ⇒ 结果不完整（可能已把未同步的新记录丢掉），与 out 是否
-      // 为空无关——out 非空也照样可能丢掉了同侧的新记录：升序取边界后的丢弃数、降序
-      // 取边界前的丢弃数、方向未知（可解析样本不足两条）保守取两侧之和。显式报错，
-      // 服务端恢复后由水位线未动自动补回。
-      const suspicious =
-        ascending
-          ? droppedAfterOld
-          : parsed >= 2
-            ? droppedBeforeOld
-            : droppedBeforeOld + droppedAfterOld;
-      if (suspicious > 0) {
-        throw new SyncError(
-          'api',
-          `活动列表有 ${suspicious} 条记录缺少 id/起骑时间、无法确认是否为未同步的新记录（响应形状疑似变更），已中止本轮以防漏同步`,
-        );
+
+      if (!legacy && !calendar) {
+        throw legacyError ?? new SyncError('api', '活动列表两路均失败');
       }
-      console.log(
-        `onelap 列表：窗口 ${since ? since.toISOString() : '全量'} 收到 ${out.length} 条` +
-          `（扫描 ${seen} 条，时间不可解析仍导入 ${recovered} 条，丢弃 ${dropped} 条，` +
-          `停止=${stopReason ?? 'end'}${ascending ? '，旧→新序' : ''}）`,
+      if (!calendar) return legacy!;
+      if (!legacy) {
+        console.log(`onelap 列表：OTM 日历独供 ${calendar.length} 条（窗口 ${since ? since.toISOString() : '全量'}）`);
+        return calendar;
+      }
+      const coveredDays = new Set(
+        legacy.filter((a) => a.startAt).map((a) => localDateKey(a.startAt as Date)),
       );
-      return out;
+      const supplementary = calendar.filter(
+        (a) => !a.startAt || !coveredDays.has(localDateKey(a.startAt)),
+      );
+      console.log(
+        `onelap 列表合并：旧记录面 ${legacy.length} 条 + OTM 日历补充 ${supplementary.length} 条` +
+          `（日历窗口内 ${calendar.length} 条，重叠 ${calendar.length - supplementary.length} 日按旧路优先去重）`,
+      );
+      return [...legacy, ...supplementary];
     },
 
     getFitKey,
@@ -404,11 +616,16 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
     },
 
     async download(session, ref: FileRef) {
-      // 下载 FIT 字节（fit_content 路径 = base64(key)），body 读取同样在超时信号保护内
+      // 2026-10 适配：ref.key 是完整 http(s) URL（durl 签名直链）→ 裸 GET 不带鉴权头
+      //（OSS 签名对额外头敏感，对齐迹驰直链口径）；否则 base64(key) 走 fit_content 路径
+      const isDirectUrl = /^https?:\/\//i.test(ref.key);
+      const url = isDirectUrl ? ref.key : buildFitContentUrl(rideBase, ref.key);
+      const headers = isDirectUrl ? {} : authHeaders(session);
+      // 下载 FIT 字节，body 读取同样在超时信号保护内
       const { res, done } = await fetchWithTimeout(
         doFetch,
-        buildFitContentUrl(rideBase, ref.key),
-        { headers: authHeaders(session) },
+        url,
+        { headers },
         downloadTimeoutMs,
       );
       let bytes: ArrayBuffer;
@@ -423,9 +640,20 @@ export function createOnelapClient(deps: OnelapDeps = {}): OnelapClient {
       } finally {
         done();
       }
-      return new Uint8Array(bytes);
+      const data = new Uint8Array(bytes);
+      // 错误体检测（对齐 WanSync 的 _throwIfErrorBody）：下载到 JSON 错误页/HTML 时
+      // 给一句能看懂的话，别把垃圾字节丢给解析器
+      if (!isFitBytes(data)) {
+        const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+        const head = String.fromCharCode(...data.slice(0, 1));
+        if (contentType.includes('json') || contentType.includes('html') || head === '{' || head === '<') {
+          throw new SyncError('api', `FIT 下载返回了错误内容（${contentType || '未知类型'}），云端可能暂无该文件`);
+        }
+      }
+      return data;
     },
   };
+  return client;
 }
 
 /** 从登录响应原文提取 uid 数字串（JSON.parse 大整数会丢精度，此处保真） */

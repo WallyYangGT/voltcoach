@@ -46,6 +46,7 @@ function makeActivities(count = 5, oldCount = 0) {
     const start = new Date(now - (i + 1) * 24 * 3600 * 1000);
     return {
       id: 77000 + i,
+      _id: ('6a' + String(77000 + i)).padEnd(24, '0'), // OTM 日历的 Mongo hex id（独立 id 空间）
       start_riding_time: fmt(start),
       distance_km: 30 + i,
       time_seconds: 4500 + i * 60,
@@ -98,11 +99,16 @@ export function createMockOnelapServer({
   acceptPassword = null,
   revokeTokenOnce = false,
   fitFile = process.env.MOCK_FIT_FILE ?? null,
+  failLegacyList = false,
+  failCalendar = false,
+  calendarOnlyIds = false,
 } = {}) {
   // acceptPassword：指定时校验密码（node:test 覆盖登录失败路径）；null 任意密码放行（模拟器联调）
   // oldActivityCount：追加窗口外（>90 天）的老活动，验证同步窗口截断（默认关，不影响单测断言）
   // revokeTokenOnce：首个带鉴权的请求回 401（模拟 token 过期），验证客户端自动重登一次
   // fitFile：指定时所有活动都回该文件的字节（演练「同一趟骑行、不同文件名」的去重场景）
+  // failLegacyList / failCalendar：两路列表各自的故障注入（验证合并编排的回落，2026-10 适配）
+  // 日历路由的 _id 与旧 list 的数字 id 是两个独立 id 空间（测试按 '6a' 前缀区分）
   const acceptPasswordMd5 = acceptPassword === null
     ? null
     : crypto.createHash('md5').update(acceptPassword, 'utf8').digest('hex');
@@ -163,6 +169,7 @@ export function createMockOnelapServer({
 
     // ---------------- 活动列表：新→旧 + 分页 ----------------
     if (req.method === 'POST' && path === '/api/otm/ride_record/list') {
+      if (failLegacyList) return json(res, 500, { code: 500, message: 'legacy list broken (fault injection)' });
       const body = JSON.parse((await readBody(req)) || '{}');
       const page = Number(body.page) || 1;
       const limit = Number(body.limit) || 20;
@@ -185,6 +192,22 @@ export function createMockOnelapServer({
             has_more: page * limit < activities.length,
           },
         },
+      });
+    }
+
+    // ---------------- OTM 日历记录：全量数组（2026-10 新记录面，无文件引用） ----------------
+    if (req.method === 'POST' && path === '/api/otm/calendar/calendar/records') {
+      if (failCalendar) return json(res, 403, { code: 403, error: 'calendar fail (fault injection)' });
+      return json(res, 200, {
+        code: 200,
+        message: 'success',
+        data: activities.map(({ _id, start_riding_time, time_seconds, distance_km }) => ({
+          _id,
+          date: start_riding_time.slice(0, 10),
+          time: time_seconds,
+          totalTime: time_seconds + 30,
+          totalDistance: distance_km * 1000,
+        })),
       });
     }
 
