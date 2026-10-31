@@ -17,7 +17,7 @@
  */
 
 /** 训练库 schema 版本（备份包 manifest.schema_version 与导入迁移链共用此口径） */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** runMigrations 需要的最小 db 端口（expo-sqlite / node:sqlite 均可适配） */
 export interface MigrationDbPort {
@@ -166,6 +166,21 @@ const MIGRATIONS: Record<number, MigrationStep[]> = {
   ],
   // v2 → 3：实体 uuid 化 + 外键 + 指纹（表重建，事务执行）
   2: [{ kind: 'rebuild-v3' }],
+  // v3 → 4：ai_memories 加 superseded_at（被取代时刻）——失效记忆宽限期物理删除
+  // 的时间锚点（口径见 core/memory.ts MEMORY_PURGE_GRACE_DAYS）。存量被取代行回填
+  // 为取代者的 created_at（取代动作发生在那一刻）；取代者已被删的悬空指针无法考证，
+  // 回填为迁移时刻，从升级这一刻起再保留一个宽限期。
+  3: [
+    { kind: 'sql', sql: `ALTER TABLE ai_memories ADD COLUMN superseded_at TEXT;` },
+    {
+      kind: 'sql',
+      sql: `UPDATE ai_memories
+            SET superseded_at = COALESCE(
+                  (SELECT m2.created_at FROM ai_memories m2 WHERE m2.id = ai_memories.superseded_by),
+                  datetime('now'))
+            WHERE superseded_by IS NOT NULL AND superseded_at IS NULL;`,
+    },
+  ],
 };
 
 /**

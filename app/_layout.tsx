@@ -20,6 +20,7 @@ import { I18nProvider } from '@/i18n';
 import { queueShareFile } from '@/services/shareQueue';
 import { resumeInterruptedGenerations } from '@/services/aiGenerate';
 import { maybeAutoSync } from '@/services/sync';
+import { purgeInvalidatedMemoriesQuietly } from '@/db/memories';
 import { md3Dark, palette } from '@/theme';
 
 export default function RootLayout() {
@@ -36,6 +37,7 @@ export default function RootLayout() {
                 <ShareIntentDispatcher />
                 <AutoSyncDispatcher />
                 <GenerationResumeDispatcher />
+                <MemoryPurgeDispatcher />
                 <RootStack />
               </ShareIntentProvider>
             </KeyboardProvider>
@@ -69,6 +71,28 @@ function GenerationResumeDispatcher() {
       void resumeInterruptedGenerations().catch((e) =>
         console.warn('AI 残留续跑调度失败:', e),
       );
+    const timer = setTimeout(run, 3000);
+    const sub = AppState.addEventListener('change', (status: AppStateStatus) => {
+      if (status === 'active') run();
+    });
+    return () => {
+      clearTimeout(timer);
+      sub.remove();
+    };
+  }, []);
+  return null;
+}
+
+/**
+ * 失效记忆清除调度（schema v4）：过期/被取代的记忆满宽限期（core/memory 的
+ * MEMORY_PURGE_GRACE_DAYS，5 天）后物理删除——写路径（saveMemory）之外，失效
+ * 多发生在 App 闲置期间，靠本调度兜底：冷启动（延迟 3s，避开开库与首帧渲染）+
+ * 每次 background→active 各跑一次；1 小时节流与静默自吞在 purgeInvalidatedMemoriesQuietly
+ * 内部（重复调度无副作用），清库后发 memories 域事件，正开着的记忆页即时重取。
+ */
+function MemoryPurgeDispatcher() {
+  useEffect(() => {
+    const run = () => void purgeInvalidatedMemoriesQuietly();
     const timer = setTimeout(run, 3000);
     const sub = AppState.addEventListener('change', (status: AppStateStatus) => {
       if (status === 'active') run();

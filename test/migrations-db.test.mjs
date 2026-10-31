@@ -1,10 +1,10 @@
 /**
- * migrations-db.test.mjs — schema v3 迁移的真实 SQL 回归（node:sqlite，node:test）
+ * migrations-db.test.mjs — schema 迁移的真实 SQL 回归（node:sqlite，node:test）
  *
  * 覆盖 v2→v3 表重建：数据保留、uuid 回填唯一、报告/对话 file_name→uuid 映射、
  * 孤儿消息清理、user_version 盖戳、sqlite_sequence 续号、外键 ON DELETE SET NULL、
- * 同名 file_name 可并存、迁移失败事务回滚。设备侧 SQLCipher 行为不变（同一
- * SQLite 语义），锁与加密层由 L3 冒烟覆盖。
+ * 同名 file_name 可并存、迁移失败事务回滚；v3→v4 记忆清除列（superseded_at 加列
+ * 与存量回填）。设备侧 SQLCipher 行为不变（同一 SQLite 语义），锁与加密层由 L3 冒烟覆盖。
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
@@ -218,10 +218,10 @@ test('迁移失败事务回滚：旧表与 user_version 原样保留', async () 
   assert.equal(raw.prepare('SELECT COUNT(*) AS c FROM activities').get().c, 2);
 });
 
-test('migrateSchema：v2 存量库（含旧索引）直接升级，不再先跑 v3 建表脚本', async () => {
+test('migrateSchema：v2 存量库（含旧索引）直接升级，不再先跑最新建表脚本', async () => {
   const raw = freshDb();
   await migrateSchema(portOf(raw));
-  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 4);
   assert.equal(raw.prepare('SELECT COUNT(*) AS c FROM activities').get().c, 2);
   const report = raw.prepare('SELECT activity_uuid FROM ai_reports WHERE id=1').get();
   assert.match(report.activity_uuid, /^[0-9a-f]{32}$/);
@@ -231,37 +231,100 @@ test('migrateSchema：v2 存量库（含旧索引）直接升级，不再先跑 
   assert.ok(!idx.includes('idx_ai_reports_mode_created'));
 });
 
-test('migrateSchema：v1 崩溃残留（user_version=0 但有表）升到 v3', async () => {
+test('migrateSchema：v1 崩溃残留（user_version=0 但有表）升到最新版本', async () => {
   const raw = freshDb();
   raw.exec('PRAGMA user_version = 0;');
   await migrateSchema(portOf(raw));
-  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 4);
   assert.equal(raw.prepare('SELECT COUNT(*) AS c FROM activities').get().c, 2);
   assert.equal(raw.prepare('SELECT COUNT(*) AS c FROM ai_memories').get().c, 1);
 });
 
-test('migrateSchema：全新空库按 v3 脚本一次建齐', async () => {
+test('migrateSchema：全新空库按最新脚本一次建齐', async () => {
   const raw = new DatabaseSync(':memory:');
   await migrateSchema(portOf(raw));
-  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 4);
   const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map((r) => r.name);
   for (const t of ['activities', 'ai_reports', 'settings', 'ai_chats', 'ai_chat_messages', 'ai_memories']) {
     assert.ok(tables.includes(t), t);
   }
+  // v4 形状：ai_memories 直接带 superseded_at 列
+  const memCols = raw.prepare('PRAGMA table_info(ai_memories)').all().map((c) => c.name);
+  assert.ok(memCols.includes('superseded_at'));
 });
 
-test('migrateSchema：v3 结构但版本戳丢失（0）只盖戳，不重建 uuid', async () => {
+test('migrateSchema：最新结构但版本戳丢失（0）只盖戳，不重建 uuid', async () => {
   const raw = new DatabaseSync(':memory:');
   raw.exec(CREATE_SCHEMA_SQL);
   raw.exec(`INSERT INTO activities (uuid, file_name, date, summary_json)
             VALUES ('${'a'.repeat(32)}', 'a.fit', '2026-10-01', '{}')`);
   raw.exec('PRAGMA user_version = 0;');
   await migrateSchema(portOf(raw));
-  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 4);
   assert.equal(raw.prepare('SELECT uuid FROM activities').get().uuid, 'a'.repeat(32));
 });
 
-test('新建库脚本即 v3 形状（uuid/外键/同名可插）', async () => {
+test('v3→v4：ai_memories 加 superseded_at 并回填（取代者时刻；悬空指针回填迁移时刻）', async () => {
+  const raw = freshDb();
+  await runMigrations(portOf(raw), 2, 3); // 先到 v3（ai_memories 仍是 v3 形状，无 superseded_at）
+  // 造被取代行（#3 被 #2 取代）与悬空指针行（#4 指向不存在的 999）
+  raw.exec(`
+    INSERT INTO ai_memories (content, created_at) VALUES ('superseder', '2026-10-01 08:00:00');
+    INSERT INTO ai_memories (content, created_at, superseded_by) VALUES ('old-goal', '2026-09-01 08:00:00', 2);
+    INSERT INTO ai_memories (content, created_at, superseded_by) VALUES ('dangling', '2026-09-02 08:00:00', 999);
+  `);
+  await migrateSchema(portOf(raw));
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 4);
+  const byId = new Map(
+    raw.prepare('SELECT id, superseded_by, superseded_at FROM ai_memories').all().map((r) => [r.id, r]),
+  );
+  // 正常行：回填为取代者（#2）的 created_at——取代动作发生在那一刻
+  assert.equal(byId.get(3).superseded_at, '2026-10-01 08:00:00');
+  // 悬空指针：取代时刻无法考证，回填为迁移时刻（非空，从升级起再保留一个宽限期）
+  assert.match(byId.get(4).superseded_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  // 未被取代行：superseded_at 保持 NULL
+  assert.equal(byId.get(1).superseded_at, null);
+  assert.equal(byId.get(2).superseded_at, null);
+});
+
+test('v3→v4 重入：加列 duplicate column 容错跳过，回填幂等（NULL 守卫）', async () => {
+  const raw = freshDb();
+  // 'old'（id 2）被 V2_DATA 的 memory-1（id 1）取代
+  raw.exec(`INSERT INTO ai_memories (content, created_at, superseded_by) VALUES ('old', '2026-09-01 08:00:00', 1)`);
+  const port = portOf(raw);
+  await runMigrations(port, 2, 3); // 先走真实链路到 v3（重建不触及 ai_memories）
+  await runMigrations(port, 3, 4);
+  const first = raw.prepare('SELECT id, content, superseded_at FROM ai_memories ORDER BY id').all();
+  await runMigrations(port, 3, 4); // 重入：加列报 duplicate column 被容错，回填无 NULL 行可补
+  const second = raw.prepare('SELECT id, content, superseded_at FROM ai_memories ORDER BY id').all();
+  assert.deepEqual(second, first); // 行集与回填值完全不变
+  assert.match(second.find((r) => r.content === 'old').superseded_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  assert.equal(second.find((r) => r.content === 'memory-1').superseded_at, null);
+});
+
+test('migrateSchema：v3 形状残留库（uuid 在、user_version=0、缺 v4 列）从 v3 起跑补列', async () => {
+  // v3 时代「建库脚本跑完、版本戳未写」的残留库在 v4 App 打开：不能直接盖最新戳
+  // （IF NOT EXISTS 不给已存在的表补列，会把缺 superseded_at 的库永久标成 v4），
+  // 必须从 v3 起跑剩余迁移补齐——P1 回归（code-review 2026-10-31）
+  const raw = freshDb();
+  await runMigrations(portOf(raw), 2, 3); // 先得到纯 v3 形状（ai_memories 无 superseded_at）
+  raw.exec('PRAGMA user_version = 0;');
+  // 残留库里的被取代行：#2（residue）被 #1（V2_DATA 的 memory-1）取代
+  raw.exec(`INSERT INTO ai_memories (content, created_at, superseded_by) VALUES ('residue', '2026-09-01 08:00:00', 1)`);
+  await migrateSchema(portOf(raw));
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 4);
+  const memCols = raw.prepare('PRAGMA table_info(ai_memories)').all().map((c) => c.name);
+  assert.ok(memCols.includes('superseded_at'), 'v3 形状残留库必须补上 superseded_at 列');
+  // 数据保留且回填就位（正常行回填为取代者 created_at，未取代行保持 NULL）
+  const rows = raw.prepare('SELECT id, content, created_at, superseded_at FROM ai_memories ORDER BY id').all();
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].content, 'memory-1');
+  assert.equal(rows[0].superseded_at, null);
+  assert.equal(rows[1].content, 'residue');
+  assert.equal(rows[1].superseded_at, rows[0].created_at);
+});
+
+test('新建库脚本即最新形状（uuid/外键/同名可插）', async () => {
   const raw = new DatabaseSync(':memory:');
   raw.exec(CREATE_SCHEMA_SQL);
   raw.exec('PRAGMA foreign_keys = ON;');

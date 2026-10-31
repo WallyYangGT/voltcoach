@@ -3,11 +3,15 @@
  *
  * 新库（PRAGMA user_version = 0 且无表）直接按本脚本一次建齐；存量库走
  * ./migrations 的编号步进迁移。两者必须保持同源口径：本文件的列定义就是
- * 当前 SCHEMA_VERSION（v3）的权威形状。
+ * 当前 SCHEMA_VERSION（v4）的权威形状。
  *
  * v3（2026-10-19，decisions §34）：活动身份改为 `uuid`（对外唯一身份），
  * `file_name` 降级为来源元数据（不再唯一）；AI 报告/对话改 uuid 外键
  * （ON DELETE SET NULL，孤儿保留）；逐秒 records 以 uuid 命名。
+ *
+ * v4（2026-10-31）：ai_memories 加 `superseded_at`（被取代时刻）——失效记忆
+ * 过宽限期（core/memory.ts MEMORY_PURGE_GRACE_DAYS）物理删除的时间锚点；
+ * 过期失效仍由 created_at 运行时推导，不落库。
  */
 
 /** 活动表：整数 id 仅作内部插入序（合并重复按“最早入库”保留），uuid 是对外身份 */
@@ -105,7 +109,8 @@ const AI_MEMORIES_SQL = `
     source TEXT,
     scope TEXT NOT NULL DEFAULT 'long',
     created_at TEXT DEFAULT (datetime('now')),
-    superseded_by INTEGER
+    superseded_by INTEGER,
+    superseded_at TEXT
   );
 `;
 
@@ -124,7 +129,8 @@ export const CREATE_SCHEMA_SQL = [
  *
  * 存量库在迁移前不能执行 CREATE_SCHEMA_SQL——最新脚本里的 `idx_activities_fingerprint`
  * 与 `activity_uuid` 索引会在 v3 列创建前直接报 no such column。这里只按 v2 形状
- * 补建缺失的表（IF NOT EXISTS，已存在的表不受影响），交给随后的步进迁移统一升到 v3。
+ * 补建缺失的表（IF NOT EXISTS，已存在的表不受影响），交给随后的步进迁移统一升到
+ * 最新版本（v4 的 superseded_at 列也由迁移补上）。
  * 仅使用于 user_version=0 且 activities 已存在、但结构仍是 v1 的残留库。
  */
 export const CREATE_V2_COMPAT_SQL = `

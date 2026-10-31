@@ -14,7 +14,7 @@ import {
   buildDossier,
   DOSSIER_WINDOW_DAYS,
 } from '../src/core/dossier.ts';
-import { isShortMemoryExpired } from '../src/core/memory.ts';
+import { isShortMemoryExpired, memoryInvalidatedAtMs, shouldPurgeMemory } from '../src/core/memory.ts';
 
 // ---------------- 夹具 ----------------
 
@@ -345,4 +345,56 @@ test('短期：时长与训练数任一先到即过期', () => {
     '2026-10-12 03:00:00',
   ];
   assert.equal(isShortMemoryExpired(fresh, nowMs + day, acts), true);
+});
+
+// ---------------- 失效记忆物理删除（v4：过期/被取代满宽限期清除） ----------------
+
+test('memoryInvalidatedAtMs：被取代看 superseded_at，短期看 14 天线与第 5 次训练先到者', () => {
+  // 被取代：取代时刻即失效时刻（与 scope 无关）
+  assert.equal(
+    memoryInvalidatedAtMs({ scope: 'long', created_at: '2020-01-01 00:00:00', superseded_at: '2026-10-01 00:00:00' }, []),
+    Date.UTC(2026, 9, 1, 0, 0, 0),
+  );
+  // 短期未失效：失效时刻 = created + 14 天（未来，调度上不该删）
+  assert.equal(memoryInvalidatedAtMs({ scope: 'short', created_at: memAt }, []), nowMs);
+  // 训练数分支：第 5 条更晚入库活动的 created_at 即失效时刻
+  const five = [
+    '2026-10-06 00:00:00',
+    '2026-10-07 00:00:00',
+    '2026-10-08 00:00:00',
+    '2026-10-09 00:00:00',
+    '2026-10-10 12:00:00',
+  ];
+  assert.equal(memoryInvalidatedAtMs({ scope: 'short', created_at: memAt }, five), Date.UTC(2026, 9, 10, 12, 0, 0));
+  // 并存取更早者：被取代（10-01）早于 14 天线（10-12 08:00）
+  assert.equal(
+    memoryInvalidatedAtMs({ scope: 'short', created_at: memAt, superseded_at: '2026-10-01 00:00:00' }, []),
+    Date.UTC(2026, 9, 1, 0, 0, 0),
+  );
+  // 无法判定 → null（保守不删）：缺 superseded_at 的被取代行 / 缺 created_at / 格式异常
+  assert.equal(memoryInvalidatedAtMs({ scope: 'long', created_at: '2020-01-01 00:00:00' }, []), null);
+  assert.equal(memoryInvalidatedAtMs({ scope: 'short', created_at: null }, []), null);
+  assert.equal(memoryInvalidatedAtMs({ scope: 'short', created_at: memAt, superseded_at: 'not-a-date' }, []), nowMs);
+});
+
+test('shouldPurgeMemory：失效满 5 天宽限期（严格大于）即删；未失效/无法判定不删', () => {
+  // 被取代 2026-10-01 → 清除线 2026-10-06
+  const superseded = { scope: 'long', created_at: '2020-01-01 00:00:00', superseded_at: '2026-10-01 00:00:00' };
+  const purgeAt = Date.UTC(2026, 9, 6, 0, 0, 0);
+  assert.equal(shouldPurgeMemory(superseded, purgeAt - day, []), false);
+  assert.equal(shouldPurgeMemory(superseded, purgeAt, []), false); // 恰满 5 天：不删（严格大于）
+  assert.equal(shouldPurgeMemory(superseded, purgeAt + 1000, []), true);
+  // 短期 19 天线：created 09-28 → 失效 10-12 08:00 → 清除线 10-17 08:00
+  const shortOld = { scope: 'short', created_at: memAt };
+  assert.equal(shouldPurgeMemory(shortOld, nowMs + 4 * day, []), false);
+  assert.equal(shouldPurgeMemory(shortOld, nowMs + 5 * day, []), false);
+  assert.equal(shouldPurgeMemory(shortOld, nowMs + 5 * day + 1000, []), true);
+  // 训练数分支：第 5 次训练（10-10 12:00）起算，+5 天后删
+  const five = ['2026-10-06 00:00:00', '2026-10-07 00:00:00', '2026-10-08 00:00:00', '2026-10-09 00:00:00', '2026-10-10 12:00:00'];
+  assert.equal(shouldPurgeMemory(shortOld, Date.UTC(2026, 9, 15, 12, 0, 0), five), false);
+  assert.equal(shouldPurgeMemory(shortOld, Date.UTC(2026, 9, 15, 12, 0, 0) + 1000, five), true);
+  // 有效短期记忆（失效时刻在未来）/长期未取代/无法判定：一律不删
+  assert.equal(shouldPurgeMemory(shortOld, nowMs, []), false);
+  assert.equal(shouldPurgeMemory({ scope: 'long', created_at: '2020-01-01 00:00:00' }, nowMs, []), false);
+  assert.equal(shouldPurgeMemory({ scope: 'long', created_at: '2020-01-01 00:00:00', superseded_at: 'bogus' }, nowMs, []), false);
 });

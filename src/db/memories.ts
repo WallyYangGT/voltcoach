@@ -1,24 +1,36 @@
 /**
  * memories.ts — AI 记忆域（ai_memories 表，带时间戳与取代链，M3）
  *
- * 记忆保存/注入集合/管理列表/删除。短期记忆失效判定单一事实源在 core/memory
- * （不在 SQL 里复制失效天数/次数规则），本层取全量后 JS 侧过滤；表受
- * MEMORY_KEEP=100 约束，全量取回后过滤的代价可忽略。
+ * 记忆保存/注入集合/管理列表/删除/失效清除。短期记忆失效判定与失效记忆的
+ * 物理删除判定单一事实源在 core/memory（不在 SQL 里复制失效天数/次数/宽限期
+ * 规则），本层取全量后 JS 侧过滤；表受 MEMORY_KEEP=100 约束，全量取回后过滤
+ * 的代价可忽略。
+ *
+ * 失效记忆生命周期（v4 起）：过期（short）或被取代（superseded_by）即退出
+ * 注入集合 + 管理页灰标，失效满 core/memory 的 MEMORY_PURGE_GRACE_DAYS（5 天）
+ * 后物理删除——清除触发点：saveMemory 写入时顺带 + App 冷启动/回前台的
+ * purgeInvalidatedMemoriesQuietly（节流）。
  */
 
 import { getDb } from './client';
 import { invalidateDb } from './notify';
 import { t, type Lang } from '@/core/i18n';
-import { isShortMemoryExpired, type MemoryScope } from '@/core/memory';
+import {
+  isShortMemoryExpired,
+  memoryInvalidatedAtMs,
+  shouldPurgeMemory,
+  MEMORY_PURGE_GRACE_DAYS,
+  type MemoryScope,
+} from '@/core/memory';
 
 // 记忆分类白名单（非法值归入 general）；strategy = 与教练商定的训练策略（权威段，见 prompts）
 const MEMORY_CATEGORIES = new Set(['general', 'injury', 'schedule', 'goal', 'preference', 'strategy']);
 // 单条记忆长度上限（AI 用中文概括的完整陈述）
 const MEMORY_MAX_LEN = 500;
-// 库中最多保留条数：超出先删最旧的已被取代记忆，不足再删最旧有效记忆
+// 库中最多保留条数：超出先删「被取代最早」的记忆（失效时刻序），不足再删最旧有效记忆
 const MEMORY_KEEP = 100;
 
-/** 记忆行（listAll 附 active/expired 标记） */
+/** 记忆行（listAll 附 active/expired/purge_in_days 标记） */
 export interface AiMemoryRow {
   id: number;
   content: string;
@@ -28,17 +40,28 @@ export interface AiMemoryRow {
   scope: string;
   created_at: string;
   superseded_by: number | null;
+  /**
+   * 被取代时刻（v4 起落库；取代动作发生的那一刻，物理删除宽限期的计时起点）。
+   * 可选：listMemories 的注入集合查询不取该列（只含未取代行），只有
+   * listAllMemories / purgeInvalidatedMemories 的全量查询会带出。
+   */
+  superseded_at?: string | null;
   active?: boolean;
   /** 仅短期记忆可能为 true：已过失效线（注入时被过滤、管理页灰显） */
   expired?: boolean;
+  /**
+   * 距自动清除的天数（向上取整）：仅已失效条目非空（宽限期内 1..N，管理页
+   * 倒计时徽标用）；有效条目/无法确定失效时刻的条目为 null（不清除）。
+   */
+  purge_in_days?: number | null;
 }
 
 /**
  * 保存一条 AI 记忆（用户个人事实：伤病/日程约束/目标变化/明确偏好/训练策略等），返回 id。
  * content 必填且 ≤500 字；category 非法归 general；scope 非法归 long；
- * supersedes_id 存在时校验目标记忆存在，并把其 superseded_by 置为新 id
- * （被取代的记忆不再注入但保留可追溯）。非法输入抛 Error（双语 message，
- * 工具层转为 {error} JSON 反馈给 AI）。
+ * supersedes_id 存在时校验目标记忆存在，并把其 superseded_by/superseded_at 置为
+ * 新 id/当前时刻（被取代的记忆退出注入集合，失效满宽限期后被 purgeInvalidatedMemories
+ * 物理删除）。非法输入抛 Error（双语 message，工具层转为 {error} JSON 反馈给 AI）。
  */
 export async function saveMemory(
   input: {
@@ -78,15 +101,25 @@ export async function saveMemory(
   );
   const id = Number(info.lastInsertRowId);
   if (supersedeId != null) {
-    await db.runAsync(`UPDATE ai_memories SET superseded_by = ? WHERE id = ?`, id, supersedeId);
+    // superseded_at 是宽限期的计时起点（取代时刻）；重复取代同一目标时两列一并覆盖，以最新为准
+    await db.runAsync(
+      `UPDATE ai_memories SET superseded_by = ?, superseded_at = datetime('now') WHERE id = ?`,
+      id,
+      supersedeId,
+    );
   }
-  // 滚动清理：最多保留 100 条，先删最旧的已被取代记忆，不足再删最旧有效记忆
+  // 失效清除：过期/被取代满宽限期的行先出局（core 判定），再按 MEMORY_KEEP 条数兜底
+  await purgeInvalidatedMemories();
+  // 滚动清理：最多保留 100 条，先删「被取代最早」的（按失效时刻序，非创建顺序——
+  // 刚被取代的行还在宽限期内，条数兜底不抢在宽限期承诺前面挤掉最新失效的行；
+  // superseded_at 缺失的历史行以 created_at 兜底），不足再删最旧有效记忆
   const totalRow = await db.getFirstAsync<{ c: number }>(`SELECT COUNT(*) AS c FROM ai_memories`);
   let excess = (totalRow?.c ?? 0) - MEMORY_KEEP;
   if (excess > 0) {
     const del = await db.runAsync(
       `DELETE FROM ai_memories WHERE id IN (
-         SELECT id FROM ai_memories WHERE superseded_by IS NOT NULL ORDER BY id LIMIT ?
+         SELECT id FROM ai_memories WHERE superseded_by IS NOT NULL
+         ORDER BY COALESCE(superseded_at, created_at) LIMIT ?
        )`,
       excess,
     );
@@ -123,11 +156,11 @@ export async function listMemories(n = MEMORY_KEEP): Promise<AiMemoryRow[]> {
   return rows.filter((m) => !isShortMemoryExpired(m, nowMs, activityTimes)).slice(0, n);
 }
 
-/** 全部记忆（含已被取代与已过期的，管理界面用；id DESC，附 active/expired 标记） */
+/** 全部记忆（含已被取代与已过期的，管理界面用；id DESC，附 active/expired/purge_in_days 标记） */
 export async function listAllMemories(): Promise<AiMemoryRow[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<AiMemoryRow>(
-    `SELECT id, content, category, source, scope, created_at, superseded_by
+    `SELECT id, content, category, source, scope, created_at, superseded_by, superseded_at
      FROM ai_memories ORDER BY id DESC`,
   );
   const activityTimes = await listActivityCreatedAts();
@@ -136,7 +169,69 @@ export async function listAllMemories(): Promise<AiMemoryRow[]> {
     ...r,
     active: r.superseded_by == null,
     expired: isShortMemoryExpired(r, nowMs, activityTimes),
+    purge_in_days: purgeInDays(r, nowMs, activityTimes),
   }));
+}
+
+/**
+ * 距自动清除的天数（向上取整）：仅对「已失效」条目给值——失效时刻（core 单源）
+ * 已过当前时刻；宽限期内显示 1..N 的倒计时，满宽限期后被 purgeInvalidatedMemories
+ * 删除。有效条目/失效时刻落在未来（如第 5 次训练时刻晚于现在）/无法判定 → null。
+ */
+function purgeInDays(
+  row: AiMemoryRow,
+  nowMs: number,
+  activityCreatedAts: string[],
+): number | null {
+  const invalidatedAt = memoryInvalidatedAtMs(row, activityCreatedAts);
+  if (invalidatedAt == null || invalidatedAt > nowMs) return null;
+  const remainingMs = invalidatedAt + MEMORY_PURGE_GRACE_DAYS * 86400000 - nowMs;
+  return Math.max(1, Math.ceil(remainingMs / 86400000));
+}
+
+/**
+ * 物理删除「失效满宽限期」的记忆，返回删除条数。判定调 core/memory 的
+ * shouldPurgeMemory（单一事实源），被取代看 superseded_at、短期过期看 14 天线/
+ * 第 5 次训练时刻，先失效者起算。删除后发 memories 域事件（正开着的记忆页即时重取）。
+ */
+export async function purgeInvalidatedMemories(): Promise<number> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<AiMemoryRow>(
+    `SELECT id, scope, created_at, superseded_by, superseded_at FROM ai_memories`,
+  );
+  if (rows.length === 0) return 0;
+  const activityTimes = await listActivityCreatedAts();
+  const nowMs = Date.now();
+  const ids = rows
+    .filter((r) => shouldPurgeMemory(r, nowMs, activityTimes))
+    .map((r) => r.id);
+  if (ids.length === 0) return 0;
+  const info = await db.runAsync(
+    `DELETE FROM ai_memories WHERE id IN (${ids.map(() => '?').join(',')})`,
+    ...ids,
+  );
+  if (info.changes > 0) invalidateDb('memories');
+  return info.changes;
+}
+
+// 静默清理节流：App 冷启动/回前台的 Dispatcher 触发，成功后 1 小时内不重跑；
+// 失败不推进节流（下个触发点立即重试）。saveMemory 内部走无节流的原函数，
+// 不经过也不更新这里的节流值。
+const PURGE_THROTTLE_MS = 3_600_000;
+let lastPurgeAttempt = 0;
+
+/**
+ * purgeInvalidatedMemories 的静默壳：节流 + 自吞异常（失败只告警，下个触发点重试）。
+ * 供 _layout 的 MemoryPurgeDispatcher 调用——清理失败不能打扰启动/回前台路径。
+ */
+export async function purgeInvalidatedMemoriesQuietly(): Promise<void> {
+  if (Date.now() - lastPurgeAttempt < PURGE_THROTTLE_MS) return;
+  try {
+    await purgeInvalidatedMemories();
+    lastPurgeAttempt = Date.now();
+  } catch (e) {
+    console.warn('失效记忆清理失败（下个触发点重试）:', e);
+  }
 }
 
 /** 全部活动的入库时刻（短期记忆失效判定的「新增训练数」依据；≤数百行） */
