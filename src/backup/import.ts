@@ -16,7 +16,7 @@ import * as SQLite from 'expo-sqlite';
 import { closeDb, countActivities, getDbKey, SCHEMA_VERSION } from '@/db';
 import { invalidateAllDb } from '@/db/notify';
 import { runMigrations } from '@/db/migrations';
-import { CREATE_V2_COMPAT_SQL } from '@/db/schema';
+import { CREATE_SCHEMA_SQL, CREATE_V2_COMPAT_SQL } from '@/db/schema';
 import { recordBaseFromFileName } from '@/core/records';
 import { clearStoredRecords, writeStoredRecordGz } from '@/records-store';
 import { unpackBackup } from './archive';
@@ -212,15 +212,19 @@ async function openStagedVerified(
       if (from === 0) {
         // v1/v3 建库中途崩溃的残留：uuid 列已在说明结构至少是 v3——从 3 起跑剩余
         // 迁移补齐加列型新列（v4 起不能把 uuid 形状当「最新」，CREATE_SCHEMA_SQL
-        // 的 IF NOT EXISTS 不会给已存在的表补列）；否则按 v2 形状补齐后从 1 起跑
+        // 的 IF NOT EXISTS 不会给已存在的表补列）；否则按 v2 形状补齐后从 1 起跑。
+        // ⚠️ 「有无 uuid 列」是二值形状标记，不是版本探针——未来再加加列型版本时，
+        // 本分支与 migrate.ts 的同类分支要一起改成按列探测最高已知形状版本。
         const cols = await conn.getAllAsync<{ name: string }>('PRAGMA table_info(activities);');
         from = cols.some((c) => c.name === 'uuid') ? 3 : 1;
       }
       if (from < SCHEMA_VERSION) {
         try {
-          // v1 包可能缺 ai_memories/ai_reports 等表（旧导出中途残留）：按 v2 形状
-          // 补建缺失空表（IF NOT EXISTS），与开库迁移的自愈口径一致
-          await conn.execAsync(CREATE_V2_COMPAT_SQL);
+          // 补缺失表与 migrate.ts 同口径分流：v3 形状残留用最新脚本（缺失表按最新
+          // 形状建——若用 v2 形状补，ai_reports/ai_chats 会停在 file_name 时代，
+          // 开库路径的最新索引直接 no such column 整库打不开）；v1 残留必须用 v2
+          // 形状（最新脚本的索引会引用尚未创建的 v3 列）。已存在的表两者都不受影响
+          await conn.execAsync(from === 3 ? CREATE_SCHEMA_SQL : CREATE_V2_COMPAT_SQL);
           await runMigrations(conn, from, SCHEMA_VERSION);
         } catch (e) {
           throw new BackupError('migration_failed', String(e));

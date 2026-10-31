@@ -292,9 +292,10 @@ test('v3→v4 重入：加列 duplicate column 容错跳过，回填幂等（NUL
   // 'old'（id 2）被 V2_DATA 的 memory-1（id 1）取代
   raw.exec(`INSERT INTO ai_memories (content, created_at, superseded_by) VALUES ('old', '2026-09-01 08:00:00', 1)`);
   const port = portOf(raw);
+  await runMigrations(port, 2, 3); // 先走真实链路到 v3（重建不触及 ai_memories）
   await runMigrations(port, 3, 4);
   const first = raw.prepare('SELECT id, content, superseded_at FROM ai_memories ORDER BY id').all();
-  await runMigrations(port, 3, 4); // 第二趟：加列报 duplicate column 被容错，回填无 NULL 行可补
+  await runMigrations(port, 3, 4); // 重入：加列报 duplicate column 被容错，回填无 NULL 行可补
   const second = raw.prepare('SELECT id, content, superseded_at FROM ai_memories ORDER BY id').all();
   assert.deepEqual(second, first); // 行集与回填值完全不变
   assert.match(second.find((r) => r.content === 'old').superseded_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
