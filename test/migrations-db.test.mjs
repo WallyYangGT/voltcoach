@@ -287,6 +287,42 @@ test('v3→v4：ai_memories 加 superseded_at 并回填（取代者时刻；悬�
   assert.equal(byId.get(2).superseded_at, null);
 });
 
+test('v3→v4 重入：加列 duplicate column 容错跳过，回填幂等（NULL 守卫）', async () => {
+  const raw = freshDb();
+  // 'old'（id 2）被 V2_DATA 的 memory-1（id 1）取代
+  raw.exec(`INSERT INTO ai_memories (content, created_at, superseded_by) VALUES ('old', '2026-09-01 08:00:00', 1)`);
+  const port = portOf(raw);
+  await runMigrations(port, 3, 4);
+  const first = raw.prepare('SELECT id, content, superseded_at FROM ai_memories ORDER BY id').all();
+  await runMigrations(port, 3, 4); // 第二趟：加列报 duplicate column 被容错，回填无 NULL 行可补
+  const second = raw.prepare('SELECT id, content, superseded_at FROM ai_memories ORDER BY id').all();
+  assert.deepEqual(second, first); // 行集与回填值完全不变
+  assert.match(second.find((r) => r.content === 'old').superseded_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+  assert.equal(second.find((r) => r.content === 'memory-1').superseded_at, null);
+});
+
+test('migrateSchema：v3 形状残留库（uuid 在、user_version=0、缺 v4 列）从 v3 起跑补列', async () => {
+  // v3 时代「建库脚本跑完、版本戳未写」的残留库在 v4 App 打开：不能直接盖最新戳
+  // （IF NOT EXISTS 不给已存在的表补列，会把缺 superseded_at 的库永久标成 v4），
+  // 必须从 v3 起跑剩余迁移补齐——P1 回归（code-review 2026-10-31）
+  const raw = freshDb();
+  await runMigrations(portOf(raw), 2, 3); // 先得到纯 v3 形状（ai_memories 无 superseded_at）
+  raw.exec('PRAGMA user_version = 0;');
+  // 残留库里的被取代行：#2（residue）被 #1（V2_DATA 的 memory-1）取代
+  raw.exec(`INSERT INTO ai_memories (content, created_at, superseded_by) VALUES ('residue', '2026-09-01 08:00:00', 1)`);
+  await migrateSchema(portOf(raw));
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 4);
+  const memCols = raw.prepare('PRAGMA table_info(ai_memories)').all().map((c) => c.name);
+  assert.ok(memCols.includes('superseded_at'), 'v3 形状残留库必须补上 superseded_at 列');
+  // 数据保留且回填就位（正常行回填为取代者 created_at，未取代行保持 NULL）
+  const rows = raw.prepare('SELECT id, content, created_at, superseded_at FROM ai_memories ORDER BY id').all();
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].content, 'memory-1');
+  assert.equal(rows[0].superseded_at, null);
+  assert.equal(rows[1].content, 'residue');
+  assert.equal(rows[1].superseded_at, rows[0].created_at);
+});
+
 test('新建库脚本即最新形状（uuid/外键/同名可插）', async () => {
   const raw = new DatabaseSync(':memory:');
   raw.exec(CREATE_SCHEMA_SQL);

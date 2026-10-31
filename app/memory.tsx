@@ -15,7 +15,7 @@ import React, { useCallback, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Appbar } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { deleteMemory, listAllMemories, type AiMemoryRow } from '@/db';
+import { deleteMemory, listAllMemories, purgeInvalidatedMemories, type AiMemoryRow } from '@/db';
 import { localDayFromUtc } from '@/core/local-day';
 import { useI18n } from '@/i18n';
 import { useDbInvalidation } from '@/components/useDbInvalidation';
@@ -28,6 +28,11 @@ export default function MemoryScreen() {
   const [memories, setMemories] = useState<AiMemoryRow[] | null>(null);
 
   const load = useCallback(async () => {
+    // 打开页面时顺带清一次到期失效记忆（fire-and-forget）：调度只在冷启动/回前台
+    // 跑、且静默壳带 1h 节流，可能错过本会话内的到期点——不补这一刀，页面会一直
+    // 展示过期行与失真的倒计时；清理成功发 memories 域事件触发二次重取，失败只
+    // 告警不阻塞渲染
+    void purgeInvalidatedMemories().catch((e) => console.warn('记忆页顺带清理失败:', e));
     try {
       setMemories(await listAllMemories());
     } catch (e) {
@@ -166,7 +171,8 @@ const styles = StyleSheet.create({
     padding: 12,
     gap: 6,
   },
-  head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // 徽标多（日期/分类/短期/来源/状态/过期/倒计时/#id/删除），窄屏允许换行防删除按钮被挤出
+  head: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
   date: { color: palette.faint, fontSize: 11, fontVariant: ['tabular-nums'] },
   cat: { color: palette.cyan, fontSize: 11 },
   strategyCat: { color: palette.volt, fontWeight: '700' },

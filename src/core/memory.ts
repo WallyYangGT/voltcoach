@@ -74,7 +74,9 @@ export function isShortMemoryExpired(
  *    created_at，先到即失效——取两者更早者；
  *  - 两种状态并存（short 且被取代）取全部候选中最早者。
  * 无法确定失效时刻（superseded_at 缺失/格式异常、缺 created_at 等）返回 null，
- * 调用方按保守处理：不过滤、不删除。
+ * 调用方按保守处理：不删除（注入过滤走 isShortMemoryExpired，其对缺 created_at
+ * 同样保守不过滤）。注意：对**尚未失效**的短期记忆，本函数返回的是未来的失效
+ * 时刻（14 天线/第 5 次训练时刻），是否已失效由调用方比对当前时刻判定。
  *
  * @param mem                 记忆行（至少 scope + created_at；被取代行带 superseded_at）
  * @param activityCreatedAts  全部活动的入库时刻列表（SQLite UTC 文本）

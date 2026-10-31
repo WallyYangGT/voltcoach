@@ -180,6 +180,32 @@ describe('失效记忆宽限期清除（v4：过期/被取代满 5 天物理删�
     expect(all.find((m) => m.id === 999)).toBeUndefined();
     expect(all.find((m) => m.id === oldestValidId)).toBeUndefined();
   });
+  test('MEMORY_KEEP 兜底按失效时刻淘汰被取代行，不抢删宽限期内的最新失效行', async () => {
+    // 99 条有效 + 两条被取代：id 99「3 天前被取代」（宽限期内）、id 1「刚被取代」，
+    // 直插绕过 saveMemory 的顺带清理/裁剪以构造「同一次写入同时面临两条被取代行」
+    for (let i = 0; i < 99; i += 1) {
+      await saveMemory({ content: `有效记忆 ${i}` });
+    }
+    getRawDb()
+      .prepare(
+        `UPDATE ai_memories SET superseded_by = 98, superseded_at = datetime('now', '-3 days')
+         WHERE id = 99`,
+      )
+      .run();
+    getRawDb()
+      .prepare(`UPDATE ai_memories SET superseded_by = 2, superseded_at = datetime('now') WHERE id = 1`)
+      .run();
+    getRawDb()
+      .prepare(`INSERT INTO ai_memories (id, content) VALUES (100, '补位有效行')`)
+      .run();
+    await saveMemory({ content: '触发条数兜底的新记忆' });
+    const all = await listAllMemories();
+    expect(all).toHaveLength(100);
+    // 裁掉的是「被取代最早」的 id 99（3 天前），刚被取代的 id 1 保留——
+    // 旧口径（按 id 排序）会删 id 1 留 id 99，与宽限期承诺相反
+    expect(all.find((m) => m.id === 99)).toBeUndefined();
+    expect(all.find((m) => m.id === 1)).toBeDefined();
+  });
   test('listAllMemories 附 purge_in_days 倒计时：宽限期内给天数、有效条目为 null', async () => {
     const shortId = await saveMemory({ content: '近期短期事实', scope: 'short' });
     const longId = await saveMemory({ content: '长期偏好' });
@@ -187,8 +213,15 @@ describe('失效记忆宽限期清除（v4：过期/被取代满 5 天物理删�
     getRawDb()
       .prepare(`UPDATE ai_memories SET created_at = datetime('now', '-16 days') WHERE id = ?`)
       .run(shortId);
+    // 被取代行同样有倒计时（宽限期按被取代时刻起算）
+    const supersededId = await saveMemory({ content: '旧目标' });
+    await saveMemory({ content: '新目标', supersedes_id: supersededId });
     const all = await listAllMemories();
     expect(all.find((m) => m.id === shortId)?.purge_in_days).toBe(3);
     expect(all.find((m) => m.id === longId)?.purge_in_days).toBeNull();
+    const supersededRow = all.find((m) => m.id === supersededId);
+    expect(supersededRow?.purge_in_days).toBeGreaterThanOrEqual(1);
+    expect(supersededRow?.purge_in_days).toBeLessThanOrEqual(5);
+    expect(all.find((m) => m.content === '新目标')?.purge_in_days).toBeNull();
   });
 });

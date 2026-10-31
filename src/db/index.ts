@@ -7,7 +7,8 @@
  *    存 expo-secure-store（Android Keystore），密钥不落盘；
  *  - 从零建库按最新 schema 整体创建（src/db/schema.ts），存量库由
  *    src/db/migrate.ts 按 PRAGMA user_version 走编号迁移链（v3 = 活动 uuid 身份、
- *    AI 报告/对话外键与指纹，decisions §34）；
+ *    AI 报告/对话外键与指纹，decisions §34；v4 = ai_memories.superseded_at
+ *    记忆清除宽限期锚点）；
  *  - 骑手参数不再用"全局可变对象原地合并"（旧版 syncAthleteFromDb 模式），
  *    改 getEffectiveAthlete() 显式返回合并值，由调用方（导入服务）注入 analyzeFile；
  *  - CTL/ATL/TSB 递推在 src/core/form.ts（纯函数），本层只做查询。

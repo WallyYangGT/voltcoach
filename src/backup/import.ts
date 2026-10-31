@@ -210,9 +210,11 @@ async function openStagedVerified(
     let from = dbVersion;
     if (from < SCHEMA_VERSION) {
       if (from === 0) {
-        // v1/v3 建库中途崩溃的残留：uuid 列已在说明结构是 v3，让开库流程盖戳即可
+        // v1/v3 建库中途崩溃的残留：uuid 列已在说明结构至少是 v3——从 3 起跑剩余
+        // 迁移补齐加列型新列（v4 起不能把 uuid 形状当「最新」，CREATE_SCHEMA_SQL
+        // 的 IF NOT EXISTS 不会给已存在的表补列）；否则按 v2 形状补齐后从 1 起跑
         const cols = await conn.getAllAsync<{ name: string }>('PRAGMA table_info(activities);');
-        from = cols.some((c) => c.name === 'uuid') ? SCHEMA_VERSION : 1;
+        from = cols.some((c) => c.name === 'uuid') ? 3 : 1;
       }
       if (from < SCHEMA_VERSION) {
         try {

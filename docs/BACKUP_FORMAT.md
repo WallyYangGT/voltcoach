@@ -37,8 +37,8 @@ records/<base>.records.csv.gz       逐活动逐秒数据（v3+ <base> = 活动 
 ## schema 版本闸门
 
 - 包内 `schema_version` **高于**本机 App → 拒绝导入（错误码 `unsupported_version`，提示升级 App）。
-- 低于或等于 → 允许；v3 起在 **staged 库上先跑迁移链**（v1→2 加记忆分层/功率标记，v2→3 表重建：活动 uuid 身份、file_name 去唯一、AI 报告/对话外键与指纹），迁移失败以 `migration_failed` 中止，当前库与 records 完全未动。迁移成功后才替换本机库并按 `file_name → uuid` 映射恢复 records。
-- **v3 包不能由 v2 App 导入**（manifest 闸门拒绝）；v3 App 可导入 v1/v2 包（staged 预迁移）。新库（user_version 0）直接按最新 schema 整体创建。
+- 低于或等于 → 允许；v3 起在 **staged 库上先跑迁移链**（v1→2 加记忆分层/功率标记，v2→3 表重建：活动 uuid 身份、file_name 去唯一、AI 报告/对话外键与指纹，v3→4 加 `ai_memories.superseded_at` 记忆清除锚点并回填存量被取代行），迁移失败以 `migration_failed` 中止，当前库与 records 完全未动。迁移成功后才替换本机库并按 `file_name → uuid` 映射恢复 records。
+- **高于本机 App 版本的包不能导入**（如 v3 包遇 v2 App，manifest 闸门拒绝）；新版 App 可导入旧版包（staged 预迁移）。新库（user_version 0）直接按最新 schema 整体创建。
 - **第三方只读消费无需关心迁移**——只在高版本拒绝边界上需要 schema_version 判断；v3 起活动身份是 32 位 hex uuid，`file_name` 只是来源元数据。
 
 ## 导入错误码

@@ -3,7 +3,7 @@
  *
  * 新库（PRAGMA user_version = 0 且无表）直接按本脚本一次建齐；存量库走
  * ./migrations 的编号步进迁移。两者必须保持同源口径：本文件的列定义就是
- * 当前 SCHEMA_VERSION（v3）的权威形状。
+ * 当前 SCHEMA_VERSION（v4）的权威形状。
  *
  * v3（2026-10-19，decisions §34）：活动身份改为 `uuid`（对外唯一身份），
  * `file_name` 降级为来源元数据（不再唯一）；AI 报告/对话改 uuid 外键

@@ -27,7 +27,7 @@ import {
 const MEMORY_CATEGORIES = new Set(['general', 'injury', 'schedule', 'goal', 'preference', 'strategy']);
 // 单条记忆长度上限（AI 用中文概括的完整陈述）
 const MEMORY_MAX_LEN = 500;
-// 库中最多保留条数：超出先删最旧的已被取代记忆，不足再删最旧有效记忆
+// 库中最多保留条数：超出先删「被取代最早」的记忆（失效时刻序），不足再删最旧有效记忆
 const MEMORY_KEEP = 100;
 
 /** 记忆行（listAll 附 active/expired/purge_in_days 标记） */
@@ -40,8 +40,12 @@ export interface AiMemoryRow {
   scope: string;
   created_at: string;
   superseded_by: number | null;
-  /** 被取代时刻（v4 起落库；取代动作发生的那一刻，物理删除宽限期的计时起点） */
-  superseded_at: string | null;
+  /**
+   * 被取代时刻（v4 起落库；取代动作发生的那一刻，物理删除宽限期的计时起点）。
+   * 可选：listMemories 的注入集合查询不取该列（只含未取代行），只有
+   * listAllMemories / purgeInvalidatedMemories 的全量查询会带出。
+   */
+  superseded_at?: string | null;
   active?: boolean;
   /** 仅短期记忆可能为 true：已过失效线（注入时被过滤、管理页灰显） */
   expired?: boolean;
@@ -106,13 +110,16 @@ export async function saveMemory(
   }
   // 失效清除：过期/被取代满宽限期的行先出局（core 判定），再按 MEMORY_KEEP 条数兜底
   await purgeInvalidatedMemories();
-  // 滚动清理：最多保留 100 条，先删最旧的已被取代记忆，不足再删最旧有效记忆
+  // 滚动清理：最多保留 100 条，先删「被取代最早」的（按失效时刻序，非创建顺序——
+  // 刚被取代的行还在宽限期内，条数兜底不抢在宽限期承诺前面挤掉最新失效的行；
+  // superseded_at 缺失的历史行以 created_at 兜底），不足再删最旧有效记忆
   const totalRow = await db.getFirstAsync<{ c: number }>(`SELECT COUNT(*) AS c FROM ai_memories`);
   let excess = (totalRow?.c ?? 0) - MEMORY_KEEP;
   if (excess > 0) {
     const del = await db.runAsync(
       `DELETE FROM ai_memories WHERE id IN (
-         SELECT id FROM ai_memories WHERE superseded_by IS NOT NULL ORDER BY id LIMIT ?
+         SELECT id FROM ai_memories WHERE superseded_by IS NOT NULL
+         ORDER BY COALESCE(superseded_at, created_at) LIMIT ?
        )`,
       excess,
     );
@@ -207,20 +214,21 @@ export async function purgeInvalidatedMemories(): Promise<number> {
   return info.changes;
 }
 
-// 静默清理节流：App 冷启动/回前台的 Dispatcher 触发，1 小时内最多实跑一次
+// 静默清理节流：App 冷启动/回前台的 Dispatcher 触发，成功后 1 小时内不重跑；
+// 失败不推进节流（下个触发点立即重试）。saveMemory 内部走无节流的原函数，
+// 不经过也不更新这里的节流值。
 const PURGE_THROTTLE_MS = 3_600_000;
 let lastPurgeAttempt = 0;
 
 /**
  * purgeInvalidatedMemories 的静默壳：节流 + 自吞异常（失败只告警，下个触发点重试）。
- * 供 _layout 的 MemoryPurgeDispatcher 调用——清理失败不能打扰启动/回前台路径；
- * saveMemory 内部走无节流的原函数，保证每次写记忆都顺带清一次。
+ * 供 _layout 的 MemoryPurgeDispatcher 调用——清理失败不能打扰启动/回前台路径。
  */
 export async function purgeInvalidatedMemoriesQuietly(): Promise<void> {
   if (Date.now() - lastPurgeAttempt < PURGE_THROTTLE_MS) return;
-  lastPurgeAttempt = Date.now();
   try {
     await purgeInvalidatedMemories();
+    lastPurgeAttempt = Date.now();
   } catch (e) {
     console.warn('失效记忆清理失败（下个触发点重试）:', e);
   }
