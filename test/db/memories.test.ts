@@ -2,12 +2,19 @@
 /**
  * memories.test.ts — AI 记忆域真 SQL 回归（node:sqlite 假库，helpers/sqlite-port）
  *
- * 钉 mock 测不到的 SQL 行为：supersede 链、MEMORY_KEEP=100 滚动清理
- * （先删已被取代、不足再删最旧有效）、短期记忆失效过滤（14 天线）。
+ * 钉 mock 测不到的 SQL 行为：supersede 链（含 superseded_at 落库）、MEMORY_KEEP=100
+ * 滚动清理（先删已被取代、不足再删最旧有效）、短期记忆失效过滤（14 天线）、
+ * 失效记忆宽限期物理清除（purgeInvalidatedMemories，判定单源 core/memory）。
  */
 import { randomUUID as mockRandomUUID } from 'node:crypto';
 import * as mockSqlite from '../helpers/sqlite-port';
-import { deleteMemory, listAllMemories, listMemories, saveMemory } from '@/db/memories';
+import {
+  deleteMemory,
+  listAllMemories,
+  listMemories,
+  purgeInvalidatedMemories,
+  saveMemory,
+} from '@/db/memories';
 import { getRawDb, resetTestDb, seedActivityRow } from '../helpers/sqlite-port';
 
 jest.mock('@/db/client', () => ({ getDb: () => mockSqlite.getTestDb() }));
@@ -36,6 +43,8 @@ describe('保存校验', () => {
     const oldRow = all.find((m) => m.id === old);
     expect(oldRow?.superseded_by).toBe(newer);
     expect(oldRow?.active).toBe(false);
+    // v4：取代同时落 superseded_at（宽限期计时起点），格式为 SQLite UTC 文本
+    expect(oldRow?.superseded_at).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
     expect((await listMemories()).map((m) => m.id)).toEqual([newer]);
   });
 });
@@ -101,5 +110,85 @@ describe('删除与跨域依赖', () => {
       seedActivityRow({ created_at: '2030-01-01T00:00:00', date: '2026-10-01' });
     }
     expect((await listMemories()).map((m) => m.content)).toEqual(['刚记的短期事实']);
+  });
+});
+describe('失效记忆宽限期清除（v4：过期/被取代满 5 天物理删除）', () => {
+  test('被取代 6 天后清除、宽限期内保留；重复清除幂等', async () => {
+    const old = await saveMemory({ content: '旧目标' });
+    await saveMemory({ content: '新目标', supersedes_id: old });
+    // 刚被取代：宽限期内保留（灰标 + 倒计时）
+    expect(await purgeInvalidatedMemories()).toBe(0);
+    expect((await listAllMemories()).find((m) => m.id === old)?.superseded_at).toBeTruthy();
+    // 回拨 superseded_at 到 6 天前 → 满宽限期，清除
+    getRawDb()
+      .prepare(`UPDATE ai_memories SET superseded_at = datetime('now', '-6 days') WHERE id = ?`)
+      .run(old);
+    expect(await purgeInvalidatedMemories()).toBe(1);
+    expect((await listAllMemories()).find((m) => m.id === old)).toBeUndefined();
+    // 再跑一次：无可清，幂等
+    expect(await purgeInvalidatedMemories()).toBe(0);
+  });
+  test('短期过期按失效线起算：18 天留（宽限期内）、25 天删', async () => {
+    const id = await saveMemory({ content: '本周右膝不适', scope: 'short' });
+    // 回拨 18 天：失效于 4 天前（14 天线），宽限期未满 → 保留
+    getRawDb()
+      .prepare(`UPDATE ai_memories SET created_at = datetime('now', '-18 days') WHERE id = ?`)
+      .run(id);
+    expect(await purgeInvalidatedMemories()).toBe(0);
+    expect(await listMemories()).toEqual([]); // 注入集合已排除（失效）
+    expect((await listAllMemories())[0]?.expired).toBe(true);
+    // 回拨 25 天：失效于 11 天前 → 清除
+    getRawDb()
+      .prepare(`UPDATE ai_memories SET created_at = datetime('now', '-25 days') WHERE id = ?`)
+      .run(id);
+    expect(await purgeInvalidatedMemories()).toBe(1);
+    expect(await listAllMemories()).toEqual([]);
+  });
+  test('长期记忆未取代不清除；悬空取代指针（缺 superseded_at）保守不删', async () => {
+    await saveMemory({ content: '十年前的长期偏好', scope: 'long' });
+    getRawDb()
+      .prepare(`UPDATE ai_memories SET created_at = datetime('now', '-3650 days')`)
+      .run();
+    expect(await purgeInvalidatedMemories()).toBe(0);
+    expect(await listAllMemories()).toHaveLength(1);
+    // 悬空：superseded_by 指向已不存在的 id 且无 superseded_at（v4 之前的历史形态）
+    getRawDb().prepare(`UPDATE ai_memories SET superseded_by = 9999, superseded_at = NULL`).run();
+    expect(await purgeInvalidatedMemories()).toBe(0);
+    expect(await listAllMemories()).toHaveLength(1);
+  });
+  test('saveMemory 写入时顺带清除；清除先于 MEMORY_KEEP 条数清理', async () => {
+    for (let i = 0; i < 100; i += 1) {
+      await saveMemory({ content: `有效记忆 ${i}` });
+    }
+    // 绕过 saveMemory 直插一条已满宽限期的过期短期记忆（id 999，晚于全部有效行），
+    // 使下一条 saveMemory 同时面临「1 条待清除」与「超 KEEP 上限 1 条」
+    getRawDb()
+      .prepare(
+        `INSERT INTO ai_memories (id, content, scope, created_at)
+         VALUES (999, '早已过期的短期记忆', 'short', datetime('now', '-30 days'))`,
+      )
+      .run();
+    expect((await listAllMemories()).length).toBe(101);
+    const oldestValidId = (await listAllMemories())
+      .map((m) => m.id)
+      .sort((a, b) => a - b)[0];
+    await saveMemory({ content: '触发写入的新记忆' });
+    const all = await listAllMemories();
+    // purge 先删过期行（102 → 101），KEEP 裁 1 条最旧有效（→ 100）；
+    // 若顺序颠倒（KEEP 先跑），会裁掉 2 条最旧有效（99 条）——条数即顺序的证词
+    expect(all).toHaveLength(100);
+    expect(all.find((m) => m.id === 999)).toBeUndefined();
+    expect(all.find((m) => m.id === oldestValidId)).toBeUndefined();
+  });
+  test('listAllMemories 附 purge_in_days 倒计时：宽限期内给天数、有效条目为 null', async () => {
+    const shortId = await saveMemory({ content: '近期短期事实', scope: 'short' });
+    const longId = await saveMemory({ content: '长期偏好' });
+    // 短期回拨 16 天：失效于 2 天前 → 宽限期剩 3 天
+    getRawDb()
+      .prepare(`UPDATE ai_memories SET created_at = datetime('now', '-16 days') WHERE id = ?`)
+      .run(shortId);
+    const all = await listAllMemories();
+    expect(all.find((m) => m.id === shortId)?.purge_in_days).toBe(3);
+    expect(all.find((m) => m.id === longId)?.purge_in_days).toBeNull();
   });
 });
